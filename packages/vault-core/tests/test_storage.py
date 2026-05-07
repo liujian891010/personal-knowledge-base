@@ -19,6 +19,7 @@ from vault_core import (
     SubmittedConfirmationExecutionResult,
     SubmittedRecoveryResult,
     SubmittedConfirmationPlan,
+    SubmittedConfirmationRemoteState,
     SubmittedConfirmationResolution,
     add_file,
     apply_commit_success_state,
@@ -45,6 +46,7 @@ from vault_core import (
     CommitRecoveryPlan,
     execute_pull_reconcile,
     execute_submitted_commit_confirmation,
+    execute_submitted_commit_confirmation_remote_state,
     find_matching_revision_metadata,
     finalize_commit_submission,
     finalize_commit_manifest,
@@ -2236,6 +2238,141 @@ class VaultCoreStorageTests(unittest.TestCase):
                 self.assertEqual(executed.recovery.state.remote_head_revision, 10)
                 self.assertFalse(executed.recovery.requires_full_pull)
 
+    def test_execute_submitted_commit_confirmation_rejects_manifest_with_wrong_revision(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=10,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000020150,
+            summary_hash="placeholder",
+            files=[],
+            tombstones=[],
+        )
+        revisions = [
+            RevisionMetadata(
+                revision=9,
+                commit_intent_id="intent_1",
+                intent_manifest_hash="sha256:intent_1",
+                created_by_device="desktop-shanghai",
+                created_at=1770000020140,
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "tombstone-ledger.jsonl"
+            db_path = Path(tmpdir) / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=1770000020139,
+                        updated_at=1770000020139,
+                    ),
+                )
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "matched_manifest revision does not match submitted confirmation target",
+                ):
+                    execute_submitted_commit_confirmation(
+                        connection,
+                        ledger_path=ledger_path,
+                        vault_id="vault_pkb_001",
+                        local_tombstones=[],
+                        observed_head_revision=10,
+                        head_commit_intent_id="intent_other",
+                        normalized_at=1770000020151,
+                        revisions=revisions,
+                        matched_manifest=manifest,
+                    )
+
+    def test_execute_submitted_commit_confirmation_remote_state_rejects_scan_revision_outside_range(self) -> None:
+        remote_state = SubmittedConfirmationRemoteState(
+            observed_head_revision=10,
+            head_commit_intent_id="intent_other",
+            revisions=(
+                RevisionMetadata(
+                    revision=11,
+                    commit_intent_id="intent_1",
+                    intent_manifest_hash="sha256:intent_1",
+                    created_by_device="desktop-shanghai",
+                    created_at=1770000020170,
+                ),
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "tombstone-ledger.jsonl"
+            db_path = Path(tmpdir) / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=1770000020169,
+                        updated_at=1770000020169,
+                    ),
+                )
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "revision metadata falls outside submitted confirmation scan range",
+                ):
+                    execute_submitted_commit_confirmation_remote_state(
+                        connection,
+                        ledger_path=ledger_path,
+                        vault_id="vault_pkb_001",
+                        local_tombstones=[],
+                        normalized_at=1770000020171,
+                        remote_state=remote_state,
+                    )
+
     def test_execute_submitted_commit_confirmation_scan_miss_cleans_up_without_rewriting_tombstones(self) -> None:
         tombstones = [
             TombstoneRecord(
@@ -2407,6 +2544,75 @@ class VaultCoreStorageTests(unittest.TestCase):
 
                 self.assertEqual(resumed.mode, "submitted_confirmation")
                 self.assertIsNone(resumed.local)
+                self.assertIsNotNone(resumed.submitted)
+                self.assertEqual(resumed.submitted.plan.mode, "head_match")
+                self.assertEqual(resumed.submitted.recovery.state.last_applied_revision, 8)
+
+    def test_resume_commit_recovery_accepts_structured_remote_state(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=8,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000020450,
+            summary_hash="placeholder",
+            files=[],
+            tombstones=[],
+        )
+        remote_state = SubmittedConfirmationRemoteState(
+            observed_head_revision=8,
+            head_commit_intent_id="intent_1",
+            matched_manifest=manifest,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "vault"
+            initialize_vault(root, vault_id="vault_pkb_001", now_ms=1770000020440)
+            ledger_path = root / ".noteapp" / "tombstone-ledger.jsonl"
+            db_path = root / ".noteapp" / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=1770000020445,
+                        updated_at=1770000020445,
+                    ),
+                )
+
+                resumed = resume_commit_recovery(
+                    connection,
+                    vault_root=root,
+                    vault_id="vault_pkb_001",
+                    normalized_at=1770000020451,
+                    ledger_path=ledger_path,
+                    local_tombstones=[],
+                    remote_state=remote_state,
+                )
+
+                self.assertEqual(resumed.mode, "submitted_confirmation")
                 self.assertIsNotNone(resumed.submitted)
                 self.assertEqual(resumed.submitted.plan.mode, "head_match")
                 self.assertEqual(resumed.submitted.recovery.state.last_applied_revision, 8)
