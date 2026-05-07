@@ -1,8 +1,24 @@
+from .convergence import (
+    ManifestConvergenceResult,
+    converge_manifest_state,
+    merge_manifest_tombstones,
+    rebuild_filemap_from_manifest,
+    select_reclaimable_tombstones,
+)
 from .filemap import load_filemap, recover_filemap, write_filemap_atomic
 from .initializer import initialize_vault
 from .ledger import append_tombstone, load_tombstone_ledger
-from .models import FileMapDocument, FileRecord, TombstoneRecord, VaultStateRecord, WikiTaskRecord
-from .models import CommitIntentJournalRecord, SyncApplyJournalRecord
+from .models import (
+    CommitIntentJournalRecord,
+    FileMapDocument,
+    FileRecord,
+    ManifestFileEntry,
+    ManifestRecord,
+    SyncApplyJournalRecord,
+    TombstoneRecord,
+    VaultStateRecord,
+    WikiTaskRecord,
+)
 from .operations import add_file, mark_deleted, register_conflict_copy, rename_file
 from .paths import allocate_conflict_copy_path, move_conflict_orphan, move_staging_orphan, sanitize_device_name
 from .recovery import (
@@ -43,6 +59,9 @@ __all__ = [
     "SyncApplyJournalRecord",
     "VaultStateRecord",
     "WikiTaskRecord",
+    "ManifestConvergenceResult",
+    "ManifestFileEntry",
+    "ManifestRecord",
     "add_file",
     "allocate_conflict_copy_path",
     "apply_prepared_commit_recovery",
@@ -53,6 +72,7 @@ __all__ = [
     "bootstrap_database",
     "clear_commit_intent_journal",
     "clear_sync_apply_journal",
+    "converge_manifest_state",
     "initialize_vault",
     "list_file_index",
     "load_commit_intent_journal",
@@ -63,6 +83,7 @@ __all__ = [
     "mark_deleted",
     "move_conflict_orphan",
     "move_staging_orphan",
+    "merge_manifest_tombstones",
     "normalize_legacy_acknowledged_commit_intent",
     "normalize_commit_journal_for_recovery",
     "open_database",
@@ -72,9 +93,11 @@ __all__ = [
     "recover_submitted_commit_miss",
     "recover_sync_apply_finalizing_state",
     "replace_active_wiki_task",
+    "rebuild_filemap_from_manifest",
     "register_conflict_copy",
     "rename_file",
     "sanitize_device_name",
+    "select_reclaimable_tombstones",
     "select_pending_tombstones_for_commit",
     "should_block_new_commit",
     "upsert_commit_intent_journal",
