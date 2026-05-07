@@ -212,6 +212,12 @@ class SubmittedConfirmationPlan:
     scan_to_revision: Optional[int]
 
 
+@dataclass(frozen=True)
+class SubmittedConfirmationResolution:
+    plan: SubmittedConfirmationPlan
+    matched_metadata: Optional[RevisionMetadata]
+
+
 def prepare_commit_intent(
     connection: sqlite3.Connection,
     *,
@@ -533,3 +539,32 @@ def find_matching_revision_metadata(
         if record.commit_intent_id == commit_intent_id:
             return record
     return None
+
+
+def resolve_submitted_confirmation(
+    plan: SubmittedConfirmationPlan,
+    *,
+    commit_intent_id: str,
+    revisions: Iterable[RevisionMetadata] = (),
+) -> SubmittedConfirmationResolution:
+    if plan.mode == "head_match":
+        return SubmittedConfirmationResolution(
+            plan=plan,
+            matched_metadata=None,
+        )
+    if plan.mode == "miss":
+        return SubmittedConfirmationResolution(
+            plan=plan,
+            matched_metadata=None,
+        )
+    if plan.mode != "scan_range":
+        raise ValueError(f"unsupported submitted confirmation plan mode: {plan.mode}")
+
+    matched_metadata = find_matching_revision_metadata(
+        revisions,
+        commit_intent_id=commit_intent_id,
+    )
+    return SubmittedConfirmationResolution(
+        plan=plan,
+        matched_metadata=matched_metadata,
+    )

@@ -17,6 +17,7 @@ from vault_core import (
     RevisionMetadata,
     SubmittedRecoveryResult,
     SubmittedConfirmationPlan,
+    SubmittedConfirmationResolution,
     add_file,
     apply_commit_success_state,
     apply_committed_tombstones,
@@ -72,6 +73,7 @@ from vault_core import (
     recover_filemap,
     recover_filemap_rewrite_convergence,
     recover_local_commit_state,
+    resolve_submitted_confirmation,
     persist_manifest_convergence,
     plan_pull_reconcile,
     prepare_commit_submission,
@@ -1992,6 +1994,82 @@ class VaultCoreStorageTests(unittest.TestCase):
                 revisions,
                 commit_intent_id="intent_missing",
             )
+        )
+
+    def test_resolve_submitted_confirmation_uses_scan_match_when_present(self) -> None:
+        plan = SubmittedConfirmationPlan(
+            mode="scan_range",
+            observed_head_revision=10,
+            matched_revision=None,
+            scan_from_revision=8,
+            scan_to_revision=10,
+        )
+        revisions = [
+            RevisionMetadata(
+                revision=8,
+                commit_intent_id="intent_other",
+                intent_manifest_hash="sha256:other",
+                created_by_device="mobile-hangzhou",
+                created_at=1770000019905,
+            ),
+            RevisionMetadata(
+                revision=9,
+                commit_intent_id="intent_1",
+                intent_manifest_hash="sha256:intent_1",
+                created_by_device="desktop-shanghai",
+                created_at=1770000019906,
+            ),
+        ]
+
+        resolved = resolve_submitted_confirmation(
+            plan,
+            commit_intent_id="intent_1",
+            revisions=revisions,
+        )
+
+        self.assertEqual(
+            resolved,
+            SubmittedConfirmationResolution(
+                plan=plan,
+                matched_metadata=revisions[1],
+            ),
+        )
+
+    def test_resolve_submitted_confirmation_returns_none_for_head_match_and_miss(self) -> None:
+        head_match = SubmittedConfirmationPlan(
+            mode="head_match",
+            observed_head_revision=10,
+            matched_revision=10,
+            scan_from_revision=None,
+            scan_to_revision=None,
+        )
+        miss = SubmittedConfirmationPlan(
+            mode="miss",
+            observed_head_revision=7,
+            matched_revision=None,
+            scan_from_revision=None,
+            scan_to_revision=None,
+        )
+
+        self.assertEqual(
+            resolve_submitted_confirmation(
+                head_match,
+                commit_intent_id="intent_1",
+            ),
+            SubmittedConfirmationResolution(
+                plan=head_match,
+                matched_metadata=None,
+            ),
+        )
+        self.assertEqual(
+            resolve_submitted_confirmation(
+                miss,
+                commit_intent_id="intent_1",
+            ),
+            SubmittedConfirmationResolution(
+                plan=miss,
+                matched_metadata=None,
+            ),
         )
 
     def test_recover_submitted_commit_match_with_manifest_404_marks_summary_stale(self) -> None:
