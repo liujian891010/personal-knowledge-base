@@ -32,11 +32,13 @@ from .models import (
 from .operations import add_file, mark_deleted, register_conflict_copy, rename_file
 from .paths import allocate_conflict_copy_path, move_conflict_orphan, move_staging_orphan, sanitize_device_name
 from .recovery import (
+    apply_manifest_summary_stale,
     apply_prepared_commit_recovery,
     apply_submitted_commit_match_recovery,
     apply_submitted_commit_miss_recovery,
     apply_sync_finalizing_recovery,
     normalize_commit_journal_for_recovery,
+    requires_full_pull,
     select_pending_tombstones_for_commit,
     should_block_new_commit,
 )
@@ -77,6 +79,7 @@ __all__ = [
     "ManifestRecord",
     "add_file",
     "allocate_conflict_copy_path",
+    "apply_manifest_summary_stale",
     "apply_prepared_commit_recovery",
     "apply_submitted_commit_match_recovery",
     "apply_submitted_commit_miss_recovery",
@@ -118,6 +121,7 @@ __all__ = [
     "rebuild_filemap_from_manifest",
     "register_conflict_copy",
     "rename_file",
+    "requires_full_pull",
     "sanitize_device_name",
     "select_reclaimable_tombstones",
     "select_pending_tombstones_for_commit",

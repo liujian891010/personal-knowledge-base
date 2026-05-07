@@ -12,6 +12,7 @@ from vault_core import (
     ManifestFileEntry,
     ManifestRecord,
     add_file,
+    apply_manifest_summary_stale,
     allocate_conflict_copy_path,
     build_initial_vault_state,
     bootstrap_database,
@@ -47,6 +48,7 @@ from vault_core import (
     recover_filemap,
     recover_filemap_rewrite_convergence,
     persist_manifest_convergence,
+    requires_full_pull,
     replace_active_wiki_task,
     register_conflict_copy,
     rename_file,
@@ -536,6 +538,9 @@ class VaultCoreStorageTests(unittest.TestCase):
         self.assertEqual(record.acked_revision, 0)
         self.assertEqual(record.last_manifest_summary, EMPTY_VAULT_FINAL_MANIFEST_SUMMARY)
         self.assertFalse(should_block_new_commit(record))
+        self.assertFalse(requires_full_pull(record))
+        self.assertFalse(requires_full_pull(record, observed_head_revision=0))
+        self.assertTrue(requires_full_pull(record, observed_head_revision=1))
 
     def test_initialize_vault_state_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -937,6 +942,27 @@ class VaultCoreStorageTests(unittest.TestCase):
 
         self.assertTrue(should_block_new_commit(state))
         self.assertTrue(should_block_new_commit(state, has_active_commit_journal=True))
+
+    def test_apply_manifest_summary_stale_marks_state_for_full_pull(self) -> None:
+        state = VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=8,
+            remote_head_revision=10,
+            acked_revision=8,
+            pending_ack_to_server=[8],
+            commit_in_progress=False,
+            last_manifest_summary="sha256:head8",
+            last_manifest_summary_status="valid",
+            local_delete_sequence=19,
+        )
+
+        stale = apply_manifest_summary_stale(state)
+
+        self.assertIsNone(stale.last_manifest_summary)
+        self.assertEqual(stale.last_manifest_summary_status, "stale")
+        self.assertTrue(should_block_new_commit(stale))
+        self.assertTrue(requires_full_pull(stale))
+        self.assertTrue(requires_full_pull(stale, observed_head_revision=8))
 
     def test_select_pending_tombstones_supports_seq_and_legacy_time_modes(self) -> None:
         tombstones = [

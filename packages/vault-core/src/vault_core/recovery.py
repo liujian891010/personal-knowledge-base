@@ -25,6 +25,37 @@ def should_block_new_commit(
     return state.last_manifest_summary is None
 
 
+def requires_full_pull(
+    state: VaultStateRecord,
+    *,
+    observed_head_revision: Optional[int] = None,
+) -> bool:
+    if state.last_manifest_summary_status != "valid":
+        return True
+    if state.last_manifest_summary is None:
+        return True
+    if observed_head_revision is None:
+        return False
+    return observed_head_revision > state.last_applied_revision
+
+
+def apply_manifest_summary_stale(state: VaultStateRecord) -> VaultStateRecord:
+    return VaultStateRecord(
+        vault_id=state.vault_id,
+        last_applied_revision=state.last_applied_revision,
+        remote_head_revision=state.remote_head_revision,
+        acked_revision=state.acked_revision,
+        pending_ack_to_server=list(state.pending_ack_to_server),
+        commit_in_progress=state.commit_in_progress,
+        last_manifest_summary=None,
+        last_manifest_summary_status="stale",
+        local_delete_sequence=state.local_delete_sequence,
+        has_unresolved_conflicts=state.has_unresolved_conflicts,
+        schema_version=state.schema_version,
+        meta=state.meta,
+    )
+
+
 def apply_sync_finalizing_recovery(
     state: VaultStateRecord,
     journal: SyncApplyJournalRecord,
