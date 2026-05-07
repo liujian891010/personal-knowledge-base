@@ -177,7 +177,7 @@ class TombstoneRecord:
     def __post_init__(self) -> None:
         if not self.file_id:
             raise ValueError("file_id must be non-empty")
-        _require_positive_int("local_delete_seq", self.local_delete_seq)
+        _require_non_negative_int("local_delete_seq", self.local_delete_seq)
         _require_non_negative_int("deleted_at", self.deleted_at)
         _require_positive_int("deleted_revision", self.deleted_revision, allow_none=True)
 
