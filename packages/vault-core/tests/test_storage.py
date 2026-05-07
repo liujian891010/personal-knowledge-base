@@ -35,6 +35,7 @@ from vault_core import (
     TombstoneRecord,
     append_tombstone,
     build_commit_manifest,
+    cleanup_failed_commit_submission,
     execute_pull_reconcile,
     finalize_commit_submission,
     finalize_commit_manifest,
@@ -963,6 +964,95 @@ class VaultCoreStorageTests(unittest.TestCase):
                         local_tombstones=[],
                         committed_revision=8,
                     )
+
+    def test_cleanup_failed_commit_submission_clears_prepared_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_prepared",
+                        intent_manifest_hash="sha256:intent_prepared",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="prepared",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=1770000018800,
+                        updated_at=1770000018800,
+                    ),
+                )
+
+                recovered = cleanup_failed_commit_submission(
+                    connection,
+                    "vault_pkb_001",
+                    normalized_at=1770000018801,
+                )
+
+                self.assertFalse(recovered.commit_in_progress)
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_cleanup_failed_commit_submission_clears_submitted_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[4],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=2,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_submitted",
+                        intent_manifest_hash="sha256:intent_submitted",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=2,
+                        created_at=1770000018900,
+                        updated_at=1770000018900,
+                    ),
+                )
+
+                recovered = cleanup_failed_commit_submission(
+                    connection,
+                    "vault_pkb_001",
+                    normalized_at=1770000018901,
+                )
+
+                self.assertFalse(recovered.commit_in_progress)
+                self.assertEqual(recovered.pending_ack_to_server, [4])
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
 
     def test_allocate_conflict_copy_path_sanitizes_device_and_avoids_collision(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
