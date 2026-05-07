@@ -12,6 +12,7 @@ from vault_core import (
     FileRecord,
     ManifestFileEntry,
     ManifestRecord,
+    ReconcileResult,
     ReconcilePlan,
     SubmittedRecoveryResult,
     add_file,
@@ -31,6 +32,7 @@ from vault_core import (
     converge_manifest_state,
     TombstoneRecord,
     append_tombstone,
+    execute_pull_reconcile,
     initialize_vault,
     initialize_vault_state,
     load_commit_intent_journal,
@@ -1834,6 +1836,190 @@ class VaultCoreStorageTests(unittest.TestCase):
                     [("file_legacy_hit", 8), ("file_skip", None)],
                 )
                 self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_execute_pull_reconcile_noop_when_head_not_advanced_and_summary_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "state.sqlite3"
+            current = FileMapDocument(vault_id="vault_pkb_001", updated_at=90, files=[])
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                state = initialize_vault_state(connection, "vault_pkb_001")
+
+                reconciled = execute_pull_reconcile(
+                    connection,
+                    filemap_path=root / "filemap.json",
+                    ledger_path=root / "tombstone-ledger.jsonl",
+                    current_document=current,
+                    current_state=state,
+                    local_tombstones=[],
+                    observed_head_revision=0,
+                    rewritten_at=100,
+                    manifest=None,
+                )
+
+                self.assertIsInstance(reconciled, ReconcileResult)
+                self.assertIsNone(reconciled.applied)
+                self.assertFalse(reconciled.plan.should_download_manifest)
+                self.assertEqual(reconciled.state, state)
+
+    def test_execute_pull_reconcile_stale_state_requires_manifest_even_when_revision_same(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            filemap_path = root / "filemap.json"
+            ledger_path = root / "tombstone-ledger.jsonl"
+            db_path = root / "state.sqlite3"
+            current = FileMapDocument(
+                vault_id="vault_pkb_001",
+                updated_at=90,
+                files=[
+                    FileRecord(
+                        file_id="file_live",
+                        path="Notes/Live Old.md",
+                        type="note",
+                        status="active",
+                        updated_at=80,
+                        content_hash="sha256:old",
+                        last_known_revision=7,
+                    )
+                ],
+            )
+            stale_state = apply_manifest_summary_stale(
+                VaultStateRecord(
+                    vault_id="vault_pkb_001",
+                    last_applied_revision=8,
+                    remote_head_revision=8,
+                    acked_revision=8,
+                    pending_ack_to_server=[],
+                    commit_in_progress=False,
+                    last_manifest_summary="sha256:head8",
+                    last_manifest_summary_status="valid",
+                    local_delete_sequence=19,
+                )
+            )
+            manifest = ManifestRecord(
+                vault_id="vault_pkb_001",
+                revision=8,
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                created_at=200,
+                summary_hash="placeholder",
+                files=[
+                    ManifestFileEntry(
+                        file_id="file_live",
+                        path="Notes/Live.md",
+                        type="note",
+                        content_hash="sha256:new",
+                        blob_id="blob_live",
+                        size=128,
+                        mtime=180,
+                    )
+                ],
+                tombstones=[],
+            )
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(connection, stale_state)
+
+                with self.assertRaises(ValueError):
+                    execute_pull_reconcile(
+                        connection,
+                        filemap_path=filemap_path,
+                        ledger_path=ledger_path,
+                        current_document=current,
+                        current_state=stale_state,
+                        local_tombstones=[],
+                        observed_head_revision=8,
+                        rewritten_at=220,
+                        manifest=None,
+                    )
+
+                reconciled = execute_pull_reconcile(
+                    connection,
+                    filemap_path=filemap_path,
+                    ledger_path=ledger_path,
+                    current_document=current,
+                    current_state=stale_state,
+                    local_tombstones=[],
+                    observed_head_revision=8,
+                    rewritten_at=220,
+                    manifest=manifest,
+                )
+
+                self.assertTrue(reconciled.plan.should_download_manifest)
+                self.assertTrue(reconciled.plan.requires_full_pull)
+                self.assertFalse(reconciled.plan.can_use_summary_shortcut)
+                self.assertIsNotNone(reconciled.applied)
+                self.assertFalse(should_block_new_commit(reconciled.state))
+                self.assertFalse(requires_full_pull(reconciled.state, observed_head_revision=8))
+                self.assertEqual(
+                    reconciled.state.last_manifest_summary,
+                    compute_manifest_summary_hash(manifest),
+                )
+                self.assertEqual(
+                    [item.file_id for item in load_filemap(filemap_path).sorted_files()],
+                    ["file_live"],
+                )
+
+    def test_execute_pull_reconcile_advanced_head_can_use_summary_shortcut_but_still_applies_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            filemap_path = root / "filemap.json"
+            ledger_path = root / "tombstone-ledger.jsonl"
+            db_path = root / "state.sqlite3"
+            current = FileMapDocument(
+                vault_id="vault_pkb_001",
+                updated_at=90,
+                files=[],
+            )
+            state = VaultStateRecord(
+                vault_id="vault_pkb_001",
+                last_applied_revision=8,
+                remote_head_revision=8,
+                acked_revision=8,
+                pending_ack_to_server=[],
+                commit_in_progress=False,
+                last_manifest_summary="sha256:head8",
+                last_manifest_summary_status="valid",
+                local_delete_sequence=19,
+            )
+            manifest = ManifestRecord(
+                vault_id="vault_pkb_001",
+                revision=10,
+                base_revision=8,
+                created_by_device="desktop-shanghai",
+                created_at=200,
+                summary_hash="placeholder",
+                files=[],
+                tombstones=[],
+            )
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(connection, state)
+
+                reconciled = execute_pull_reconcile(
+                    connection,
+                    filemap_path=filemap_path,
+                    ledger_path=ledger_path,
+                    current_document=current,
+                    current_state=state,
+                    local_tombstones=[],
+                    observed_head_revision=10,
+                    rewritten_at=220,
+                    manifest=manifest,
+                )
+
+                self.assertTrue(reconciled.plan.should_download_manifest)
+                self.assertFalse(reconciled.plan.requires_full_pull)
+                self.assertTrue(reconciled.plan.can_use_summary_shortcut)
+                self.assertIsNotNone(reconciled.applied)
+                self.assertEqual(reconciled.state.last_applied_revision, 10)
+                self.assertEqual(reconciled.state.remote_head_revision, 10)
+                self.assertEqual(reconciled.state.acked_revision, 10)
+                self.assertEqual(reconciled.state.pending_ack_to_server, [10])
 
 
 if __name__ == "__main__":

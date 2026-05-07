@@ -46,6 +46,7 @@ from .recovery import (
 )
 from .sync_apply import AppliedManifestResult, SubmittedRecoveryResult, apply_pulled_manifest, recover_submitted_commit_flow
 from .sync_plan import ReconcilePlan, plan_pull_reconcile
+from .sync_reconcile import ReconcileResult, execute_pull_reconcile
 from .sqlite_store import (
     build_initial_vault_state,
     bootstrap_database,
@@ -82,6 +83,7 @@ __all__ = [
     "ManifestFileEntry",
     "ManifestRecord",
     "AppliedManifestResult",
+    "ReconcileResult",
     "ReconcilePlan",
     "SubmittedRecoveryResult",
     "add_file",
@@ -104,6 +106,7 @@ __all__ = [
     "compute_intent_manifest_hash",
     "compute_manifest_summary_hash",
     "EMPTY_VAULT_FINAL_MANIFEST_SUMMARY",
+    "execute_pull_reconcile",
     "initialize_vault",
     "initialize_vault_state",
     "list_file_index",
