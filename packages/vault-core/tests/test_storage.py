@@ -14,7 +14,9 @@ from vault_core import (
     ManifestRecord,
     ReconcileResult,
     ReconcilePlan,
+    RevisionMetadata,
     SubmittedRecoveryResult,
+    SubmittedConfirmationPlan,
     add_file,
     apply_commit_success_state,
     apply_committed_tombstones,
@@ -39,6 +41,7 @@ from vault_core import (
     cleanup_failed_commit_submission,
     CommitRecoveryPlan,
     execute_pull_reconcile,
+    find_matching_revision_metadata,
     finalize_commit_submission,
     finalize_commit_manifest,
     finalize_manifest_revision,
@@ -59,6 +62,7 @@ from vault_core import (
     open_database,
     normalize_legacy_acknowledged_commit_intent,
     plan_commit_recovery,
+    plan_submitted_confirmation,
     recover_prepared_commit_cleanup,
     recover_submitted_commit_flow,
     recover_submitted_commit_from_manifest,
@@ -1867,6 +1871,128 @@ class VaultCoreStorageTests(unittest.TestCase):
                         vault_id="vault_pkb_001",
                         vault_root=root,
                     )
+
+    def test_plan_submitted_confirmation_prefers_head_match_before_scan(self) -> None:
+        journal = CommitIntentJournalRecord(
+            vault_id="vault_pkb_001",
+            commit_intent_id="intent_1",
+            intent_manifest_hash="sha256:intent_1",
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            status="submitted",
+            intent_delete_seq_upper_bound=2,
+            created_at=1770000019900,
+            updated_at=1770000019900,
+        )
+
+        plan = plan_submitted_confirmation(
+            journal,
+            observed_head_revision=9,
+            head_commit_intent_id="intent_1",
+        )
+
+        self.assertEqual(
+            plan,
+            SubmittedConfirmationPlan(
+                mode="head_match",
+                observed_head_revision=9,
+                matched_revision=9,
+                scan_from_revision=None,
+                scan_to_revision=None,
+            ),
+        )
+
+    def test_plan_submitted_confirmation_scans_when_head_intent_differs(self) -> None:
+        journal = CommitIntentJournalRecord(
+            vault_id="vault_pkb_001",
+            commit_intent_id="intent_1",
+            intent_manifest_hash="sha256:intent_1",
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            status="submitted",
+            intent_delete_seq_upper_bound=2,
+            created_at=1770000019901,
+            updated_at=1770000019901,
+        )
+
+        plan = plan_submitted_confirmation(
+            journal,
+            observed_head_revision=10,
+            head_commit_intent_id="intent_other",
+        )
+
+        self.assertEqual(
+            plan,
+            SubmittedConfirmationPlan(
+                mode="scan_range",
+                observed_head_revision=10,
+                matched_revision=None,
+                scan_from_revision=8,
+                scan_to_revision=10,
+            ),
+        )
+
+    def test_plan_submitted_confirmation_returns_miss_when_head_not_advanced(self) -> None:
+        journal = CommitIntentJournalRecord(
+            vault_id="vault_pkb_001",
+            commit_intent_id="intent_1",
+            intent_manifest_hash="sha256:intent_1",
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            status="submitted",
+            intent_delete_seq_upper_bound=2,
+            created_at=1770000019902,
+            updated_at=1770000019902,
+        )
+
+        plan = plan_submitted_confirmation(
+            journal,
+            observed_head_revision=7,
+            head_commit_intent_id="intent_other",
+        )
+
+        self.assertEqual(
+            plan,
+            SubmittedConfirmationPlan(
+                mode="miss",
+                observed_head_revision=7,
+                matched_revision=None,
+                scan_from_revision=None,
+                scan_to_revision=None,
+            ),
+        )
+
+    def test_find_matching_revision_metadata_returns_first_matching_intent(self) -> None:
+        revisions = [
+            RevisionMetadata(
+                revision=8,
+                commit_intent_id="intent_other",
+                intent_manifest_hash="sha256:other",
+                created_by_device="mobile-hangzhou",
+                created_at=1770000019903,
+            ),
+            RevisionMetadata(
+                revision=9,
+                commit_intent_id="intent_1",
+                intent_manifest_hash="sha256:intent_1",
+                created_by_device="desktop-shanghai",
+                created_at=1770000019904,
+            ),
+        ]
+
+        matched = find_matching_revision_metadata(
+            revisions,
+            commit_intent_id="intent_1",
+        )
+
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched.revision, 9)
+        self.assertIsNone(
+            find_matching_revision_metadata(
+                revisions,
+                commit_intent_id="intent_missing",
+            )
+        )
 
     def test_recover_submitted_commit_match_with_manifest_404_marks_summary_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
