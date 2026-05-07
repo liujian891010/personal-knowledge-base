@@ -12,6 +12,7 @@ from vault_core import (
     FileRecord,
     ManifestFileEntry,
     ManifestRecord,
+    ReconcilePlan,
     SubmittedRecoveryResult,
     add_file,
     apply_committed_tombstones,
@@ -54,6 +55,7 @@ from vault_core import (
     recover_filemap,
     recover_filemap_rewrite_convergence,
     persist_manifest_convergence,
+    plan_pull_reconcile,
     requires_full_pull,
     replace_active_wiki_task,
     register_conflict_copy,
@@ -546,7 +548,7 @@ class VaultCoreStorageTests(unittest.TestCase):
         self.assertFalse(should_block_new_commit(record))
         self.assertFalse(requires_full_pull(record))
         self.assertFalse(requires_full_pull(record, observed_head_revision=0))
-        self.assertTrue(requires_full_pull(record, observed_head_revision=1))
+        self.assertFalse(requires_full_pull(record, observed_head_revision=1))
 
     def test_initialize_vault_state_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -969,6 +971,52 @@ class VaultCoreStorageTests(unittest.TestCase):
         self.assertTrue(should_block_new_commit(stale))
         self.assertTrue(requires_full_pull(stale))
         self.assertTrue(requires_full_pull(stale, observed_head_revision=8))
+
+    def test_plan_pull_reconcile_respects_full_pull_and_summary_shortcut_rules(self) -> None:
+        fresh = build_initial_vault_state("vault_pkb_001")
+        stale = apply_manifest_summary_stale(
+            VaultStateRecord(
+                vault_id="vault_pkb_001",
+                last_applied_revision=8,
+                remote_head_revision=8,
+                acked_revision=8,
+                pending_ack_to_server=[],
+                commit_in_progress=False,
+                last_manifest_summary="sha256:head8",
+                last_manifest_summary_status="valid",
+                local_delete_sequence=19,
+            )
+        )
+        advanced = VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=8,
+            remote_head_revision=8,
+            acked_revision=8,
+            pending_ack_to_server=[],
+            commit_in_progress=False,
+            last_manifest_summary="sha256:head8",
+            last_manifest_summary_status="valid",
+            local_delete_sequence=19,
+        )
+
+        fresh_plan = plan_pull_reconcile(fresh, observed_head_revision=0)
+        stale_plan = plan_pull_reconcile(stale, observed_head_revision=8)
+        advanced_plan = plan_pull_reconcile(advanced, observed_head_revision=10)
+
+        self.assertIsInstance(fresh_plan, ReconcilePlan)
+        self.assertFalse(fresh_plan.should_download_manifest)
+        self.assertFalse(fresh_plan.requires_full_pull)
+        self.assertFalse(fresh_plan.can_use_summary_shortcut)
+
+        self.assertTrue(stale_plan.should_download_manifest)
+        self.assertTrue(stale_plan.requires_full_pull)
+        self.assertFalse(stale_plan.can_use_summary_shortcut)
+        self.assertEqual(stale_plan.target_revision, 8)
+
+        self.assertTrue(advanced_plan.should_download_manifest)
+        self.assertFalse(advanced_plan.requires_full_pull)
+        self.assertTrue(advanced_plan.can_use_summary_shortcut)
+        self.assertEqual(advanced_plan.target_revision, 10)
 
     def test_apply_manifest_reconciled_state_updates_summary_and_ack_idempotently(self) -> None:
         state = VaultStateRecord(
