@@ -49,9 +49,11 @@ from .recovery import (
 )
 from .sync_apply import AppliedManifestResult, SubmittedRecoveryResult, apply_pulled_manifest, recover_submitted_commit_flow
 from .sync_commit import (
+    CommitRecoveryPlan,
     CommitFinalizeResult,
     CommitPreparationBundle,
     CommitSubmissionBundle,
+    LocalCommitRecoveryResult,
     OrphanedCommitRecoveryResult,
     cleanup_failed_commit_submission,
     finalize_commit_submission,
@@ -59,8 +61,10 @@ from .sync_commit import (
     build_commit_manifest,
     finalize_commit_manifest,
     isolate_staging_orphans,
+    plan_commit_recovery,
     prepare_commit_intent,
     prepare_commit_submission,
+    recover_local_commit_state,
     recover_orphaned_commit_session,
     submit_prepared_commit,
 )
@@ -105,7 +109,9 @@ __all__ = [
     "AppliedManifestResult",
     "CommitFinalizeResult",
     "CommitPreparationBundle",
+    "CommitRecoveryPlan",
     "CommitSubmissionBundle",
+    "LocalCommitRecoveryResult",
     "OrphanedCommitRecoveryResult",
     "ReconcileResult",
     "ReconcilePlan",
@@ -155,6 +161,7 @@ __all__ = [
     "normalize_legacy_acknowledged_commit_intent",
     "normalize_commit_journal_for_recovery",
     "open_database",
+    "plan_commit_recovery",
     "persist_manifest_convergence",
     "plan_pull_reconcile",
     "prepare_commit_submission",
@@ -164,6 +171,7 @@ __all__ = [
     "recover_prepared_commit_cleanup",
     "recover_filemap",
     "recover_filemap_rewrite_convergence",
+    "recover_local_commit_state",
     "recover_submitted_commit_from_manifest",
     "recover_submitted_commit_match",
     "recover_submitted_commit_miss",
