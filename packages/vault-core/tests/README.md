@@ -13,3 +13,5 @@
 9. SQLite schema bootstrap
 10. `vault_state` round-trip
 11. `wiki_tasks` 活跃路径唯一约束
+12. `sync_apply_journal` round-trip
+13. `commit_intent_journal` round-trip 与 legacy 规范化
