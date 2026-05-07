@@ -196,6 +196,19 @@ class FrozenCommitPreparationBundle:
 
 
 @dataclass(frozen=True)
+class SnapshotDriftAbortResult:
+    state: VaultStateRecord
+    drifted_file_ids: list[str]
+    removed_staging_paths: list[Path]
+
+
+@dataclass(frozen=True)
+class CommitFinalizeCleanupResult:
+    finalized: CommitFinalizeResult
+    removed_staging_paths: list[Path]
+
+
+@dataclass(frozen=True)
 class CommitFinalizeResult:
     manifest: ManifestRecord
     tombstones: list[TombstoneRecord]
@@ -252,6 +265,10 @@ def _snapshot_plain_path(file_id: str) -> str:
 
 def _blob_staging_path(blob_id: str) -> str:
     return f"{STAGING_DIRNAME}/{blob_id}.blob.staging"
+
+
+def _is_commit_staging_artifact(path: Path) -> bool:
+    return path.name.endswith(".snapshot.plain") or path.name.endswith(".blob.staging")
 
 
 def _derive_snapshot_source_version(record: FileRecord) -> str:
@@ -336,6 +353,47 @@ def assert_content_snapshot_plan_matches(
         raise ValueError(
             "content snapshot drift detected: " + ", ".join(sorted(drifted_file_ids))
         )
+
+
+def cleanup_commit_staging_artifacts(vault_root: Path) -> list[Path]:
+    staging_root = vault_root / STAGING_DIRNAME
+    if not staging_root.exists():
+        return []
+
+    removed_paths: list[Path] = []
+    for staging_path in sorted(
+        (path for path in staging_root.rglob("*") if path.is_file() and _is_commit_staging_artifact(path)),
+        key=lambda item: str(item.relative_to(staging_root)),
+    ):
+        staging_path.unlink(missing_ok=True)
+        removed_paths.append(staging_path)
+    return removed_paths
+
+
+def abort_drifted_commit_snapshot(
+    connection: sqlite3.Connection,
+    *,
+    vault_id: str,
+    vault_root: Path,
+    snapshot_plan: ContentSnapshotPlan,
+    document: FileMapDocument,
+) -> SnapshotDriftAbortResult:
+    if snapshot_plan.vault_id != vault_id:
+        raise ValueError("snapshot_plan vault_id does not match aborted commit vault")
+    if document.vault_id != vault_id:
+        raise ValueError("document vault_id does not match aborted commit vault")
+
+    drifted_file_ids = detect_content_snapshot_drift(snapshot_plan, document)
+    if not drifted_file_ids:
+        raise ValueError("content snapshot plan still matches current document")
+
+    recovered_state = recover_prepared_commit_cleanup(connection, vault_id)
+    removed_staging_paths = cleanup_commit_staging_artifacts(vault_root)
+    return SnapshotDriftAbortResult(
+        state=recovered_state,
+        drifted_file_ids=sorted(drifted_file_ids),
+        removed_staging_paths=removed_staging_paths,
+    )
 
 
 def prepare_commit_intent(
@@ -520,6 +578,29 @@ def finalize_commit_submission(
         manifest=finalized_manifest,
         tombstones=updated_tombstones,
         state=updated_state,
+    )
+
+
+def finalize_commit_submission_cleanup(
+    connection: sqlite3.Connection,
+    *,
+    vault_root: Path,
+    ledger_path: Path,
+    manifest: ManifestRecord,
+    local_tombstones: Iterable[TombstoneRecord],
+    committed_revision: int,
+) -> CommitFinalizeCleanupResult:
+    finalized = finalize_commit_submission(
+        connection,
+        ledger_path=ledger_path,
+        manifest=manifest,
+        local_tombstones=local_tombstones,
+        committed_revision=committed_revision,
+    )
+    removed_staging_paths = cleanup_commit_staging_artifacts(vault_root)
+    return CommitFinalizeCleanupResult(
+        finalized=finalized,
+        removed_staging_paths=removed_staging_paths,
     )
 
 
