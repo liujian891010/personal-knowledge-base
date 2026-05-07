@@ -8,12 +8,15 @@ from pathlib import Path
 from vault_core import (
     FileMapDocument,
     FileRecord,
+    ManifestFileEntry,
+    ManifestRecord,
     add_file,
     allocate_conflict_copy_path,
     bootstrap_database,
     clear_commit_intent_journal,
     clear_sync_apply_journal,
     CommitIntentJournalRecord,
+    converge_manifest_state,
     TombstoneRecord,
     append_tombstone,
     initialize_vault,
@@ -27,6 +30,7 @@ from vault_core import (
     mark_deleted,
     move_conflict_orphan,
     move_staging_orphan,
+    merge_manifest_tombstones,
     open_database,
     normalize_legacy_acknowledged_commit_intent,
     recover_prepared_commit_cleanup,
@@ -37,6 +41,7 @@ from vault_core import (
     replace_active_wiki_task,
     register_conflict_copy,
     rename_file,
+    select_reclaimable_tombstones,
     select_pending_tombstones_for_commit,
     sanitize_device_name,
     should_block_new_commit,
@@ -196,6 +201,28 @@ class VaultCoreStorageTests(unittest.TestCase):
             self.assertEqual([item.local_delete_seq for item in loaded], [1, 8])
             repaired = ledger_path.read_text(encoding="utf-8")
             self.assertIn('"local_delete_seq": 1', repaired)
+
+    def test_load_tombstone_ledger_accepts_remote_seq_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "tombstone-ledger.jsonl"
+            ledger_path.write_text(
+                json.dumps(
+                    {
+                        "file_id": "file_remote",
+                        "last_known_path": "Notes/Remote.md",
+                        "deleted_revision": 8,
+                        "deleted_at": 1770000007000,
+                        "local_delete_seq": 0,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            loaded = load_tombstone_ledger(ledger_path)
+
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0].local_delete_seq, 0)
 
     def test_mark_deleted_updates_filemap_and_returns_tombstone(self) -> None:
         document = FileMapDocument(
@@ -725,6 +752,200 @@ class VaultCoreStorageTests(unittest.TestCase):
         )
         normalized = normalize_commit_journal_for_recovery(legacy_journal, normalized_at=260)
         self.assertEqual(normalized.status, "submitted")
+
+    def test_merge_manifest_tombstones_preserves_local_seq_and_adds_remote_seq_zero(self) -> None:
+        local = [
+            TombstoneRecord(
+                file_id="file_local_delete",
+                deleted_revision=None,
+                deleted_at=100,
+                local_delete_seq=9,
+                last_known_path="Notes/Local Delete.md",
+                deleted_by_device="desktop-shanghai",
+            )
+        ]
+        remote = [
+            TombstoneRecord(
+                file_id="file_local_delete",
+                deleted_revision=12,
+                deleted_at=120,
+                local_delete_seq=0,
+                last_known_path="Notes/Local Delete.md",
+                deleted_by_device="desktop-shanghai",
+            ),
+            TombstoneRecord(
+                file_id="file_remote_delete",
+                deleted_revision=11,
+                deleted_at=110,
+                local_delete_seq=0,
+                last_known_path="Notes/Remote Delete.md",
+                deleted_by_device="laptop-beijing",
+            ),
+        ]
+
+        merged = {item.file_id: item for item in merge_manifest_tombstones(local, remote)}
+
+        self.assertEqual(merged["file_local_delete"].deleted_revision, 12)
+        self.assertEqual(merged["file_local_delete"].local_delete_seq, 9)
+        self.assertEqual(merged["file_remote_delete"].local_delete_seq, 0)
+
+    def test_select_reclaimable_tombstones_only_collects_committed_missing_entries(self) -> None:
+        local_tombstones = [
+            TombstoneRecord(
+                file_id="file_collect",
+                deleted_revision=7,
+                deleted_at=100,
+                local_delete_seq=1,
+            ),
+            TombstoneRecord(
+                file_id="file_pending_local",
+                deleted_revision=None,
+                deleted_at=101,
+                local_delete_seq=2,
+            ),
+            TombstoneRecord(
+                file_id="file_future_revision",
+                deleted_revision=12,
+                deleted_at=102,
+                local_delete_seq=3,
+            ),
+        ]
+        manifest_tombstones = [
+            TombstoneRecord(
+                file_id="file_still_remote",
+                deleted_revision=8,
+                deleted_at=103,
+                local_delete_seq=0,
+            )
+        ]
+
+        reclaimable = select_reclaimable_tombstones(
+            local_tombstones,
+            manifest_tombstones,
+            target_revision=8,
+        )
+
+        self.assertEqual([item.file_id for item in reclaimable], ["file_collect"])
+
+    def test_converge_manifest_state_rebuilds_filemap_and_preserves_conflict_copy(self) -> None:
+        current = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=90,
+            files=[
+                FileRecord(
+                    file_id="file_note_architecture",
+                    path="Notes/Old Sync Design.md",
+                    type="note",
+                    status="active",
+                    updated_at=80,
+                    content_hash="sha256:old",
+                    last_known_revision=6,
+                ),
+                FileRecord(
+                    file_id="file_conflict_copy",
+                    path="Notes/Architecture/Sync Design (conflict 2026-04-29 Desktop-Win).md",
+                    type="note",
+                    status="conflict_copy",
+                    updated_at=85,
+                    content_hash="sha256:conflict",
+                    conflict_source_file_id="file_note_architecture",
+                ),
+            ],
+        )
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=8,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=200,
+            summary_hash="sha256:manifest8",
+            files=[
+                ManifestFileEntry(
+                    file_id="file_note_architecture",
+                    path="Notes/Architecture/Sync Design.md",
+                    type="note",
+                    content_hash="sha256:new",
+                    blob_id="blob_sync_design",
+                    size=1024,
+                    mtime=180,
+                )
+            ],
+            tombstones=[
+                TombstoneRecord(
+                    file_id="file_remote_deleted",
+                    deleted_revision=8,
+                    deleted_at=150,
+                    local_delete_seq=0,
+                    last_known_path="Notes/Archive/Legacy Plan.md",
+                    deleted_by_device="laptop-beijing",
+                )
+            ],
+        )
+
+        converged = converge_manifest_state(
+            current,
+            manifest,
+            local_tombstones=[],
+            rewritten_at=220,
+        )
+
+        records = {item.file_id: item for item in converged.filemap.files}
+        self.assertEqual(records["file_note_architecture"].path, "Notes/Architecture/Sync Design.md")
+        self.assertEqual(records["file_note_architecture"].last_known_revision, 8)
+        self.assertEqual(records["file_remote_deleted"].status, "deleted")
+        self.assertEqual(records["file_remote_deleted"].last_known_revision, 8)
+        self.assertEqual(records["file_conflict_copy"].status, "conflict_copy")
+        self.assertEqual(converged.tombstones[0].local_delete_seq, 0)
+
+    def test_converge_manifest_state_keeps_null_revision_tombstones_until_commit_ack(self) -> None:
+        current = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=90,
+            files=[
+                FileRecord(
+                    file_id="file_pending_delete",
+                    path="Notes/Pending Delete.md",
+                    type="note",
+                    status="deleted",
+                    updated_at=89,
+                    last_known_revision=None,
+                )
+            ],
+        )
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=8,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=200,
+            summary_hash="sha256:manifest8",
+            files=[],
+            tombstones=[],
+        )
+        local_tombstones = [
+            TombstoneRecord(
+                file_id="file_pending_delete",
+                deleted_revision=None,
+                deleted_at=150,
+                local_delete_seq=12,
+                last_known_path="Notes/Pending Delete.md",
+                deleted_by_device="desktop-shanghai",
+            )
+        ]
+
+        converged = converge_manifest_state(
+            current,
+            manifest,
+            local_tombstones=local_tombstones,
+            rewritten_at=220,
+        )
+
+        self.assertEqual([item.file_id for item in converged.reclaimed_tombstones], [])
+        self.assertEqual([item.file_id for item in converged.tombstones], ["file_pending_delete"])
+        self.assertEqual(
+            [item.file_id for item in converged.filemap.files if item.status == "deleted"],
+            ["file_pending_delete"],
+        )
 
 
 if __name__ == "__main__":

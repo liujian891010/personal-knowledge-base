@@ -55,8 +55,8 @@ def load_tombstone_ledger(ledger_path: Path, rewrite_legacy: bool = True) -> Lis
             payload["local_delete_seq"] = max_seq
             needs_rewrite = True
         else:
-            if not isinstance(local_delete_seq, int) or local_delete_seq <= 0:
-                raise ValueError("local_delete_seq must be a positive integer when present")
+            if not isinstance(local_delete_seq, int) or local_delete_seq < 0:
+                raise ValueError("local_delete_seq must be a non-negative integer when present")
             max_seq = max(max_seq, local_delete_seq)
 
         records.append(TombstoneRecord.from_dict(payload))

@@ -210,6 +210,127 @@ class TombstoneRecord:
 
 
 @dataclass(frozen=True)
+class ManifestFileEntry:
+    file_id: str
+    path: str
+    type: str
+    content_hash: str
+    blob_id: str
+    size: int
+    mtime: int
+    mime_type: Optional[str] = None
+    meta: Optional[Dict[str, Any]] = None
+
+    def __post_init__(self) -> None:
+        if not self.file_id:
+            raise ValueError("file_id must be non-empty")
+        if not self.path:
+            raise ValueError("path must be non-empty")
+        if self.type not in VALID_FILE_TYPES:
+            raise ValueError(f"unsupported file type: {self.type}")
+        if not self.content_hash:
+            raise ValueError("content_hash must be non-empty")
+        if not self.blob_id:
+            raise ValueError("blob_id must be non-empty")
+        _require_non_negative_int("size", self.size)
+        _require_non_negative_int("mtime", self.mtime)
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "file_id": self.file_id,
+            "path": self.path,
+            "type": self.type,
+            "content_hash": self.content_hash,
+            "blob_id": self.blob_id,
+            "size": self.size,
+            "mtime": self.mtime,
+        }
+        if self.mime_type is not None:
+            payload["mime_type"] = self.mime_type
+        if self.meta is not None:
+            payload["meta"] = self.meta
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "ManifestFileEntry":
+        return cls(
+            file_id=payload["file_id"],
+            path=payload["path"],
+            type=payload["type"],
+            content_hash=payload["content_hash"],
+            blob_id=payload["blob_id"],
+            size=payload["size"],
+            mtime=payload["mtime"],
+            mime_type=payload.get("mime_type"),
+            meta=payload.get("meta"),
+        )
+
+
+@dataclass(frozen=True)
+class ManifestRecord:
+    vault_id: str
+    revision: int
+    base_revision: int
+    created_by_device: str
+    created_at: int
+    files: List[ManifestFileEntry] = field(default_factory=list)
+    tombstones: List[TombstoneRecord] = field(default_factory=list)
+    summary_hash: str = ""
+    schema_version: str = "v1"
+    meta: Optional[Dict[str, Any]] = None
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "v1":
+            raise ValueError("unsupported schema_version")
+        if not self.vault_id:
+            raise ValueError("vault_id must be non-empty")
+        if not self.created_by_device:
+            raise ValueError("created_by_device must be non-empty")
+        if not self.summary_hash:
+            raise ValueError("summary_hash must be non-empty")
+        _require_non_negative_int("revision", self.revision)
+        _require_non_negative_int("base_revision", self.base_revision)
+        _require_non_negative_int("created_at", self.created_at)
+
+    def sorted_files(self) -> List[ManifestFileEntry]:
+        return sorted(self.files, key=lambda item: (item.path, item.file_id))
+
+    def sorted_tombstones(self) -> List[TombstoneRecord]:
+        return sorted(self.tombstones, key=lambda item: item.file_id)
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "schema_version": self.schema_version,
+            "vault_id": self.vault_id,
+            "revision": self.revision,
+            "base_revision": self.base_revision,
+            "created_by_device": self.created_by_device,
+            "created_at": self.created_at,
+            "files": [record.to_dict() for record in self.sorted_files()],
+            "tombstones": [record.to_dict() for record in self.sorted_tombstones()],
+            "summary_hash": self.summary_hash,
+        }
+        if self.meta is not None:
+            payload["meta"] = self.meta
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "ManifestRecord":
+        return cls(
+            schema_version=payload.get("schema_version", "v1"),
+            vault_id=payload["vault_id"],
+            revision=payload["revision"],
+            base_revision=payload["base_revision"],
+            created_by_device=payload["created_by_device"],
+            created_at=payload["created_at"],
+            files=[ManifestFileEntry.from_dict(item) for item in payload.get("files", [])],
+            tombstones=[TombstoneRecord.from_dict(item) for item in payload.get("tombstones", [])],
+            summary_hash=payload["summary_hash"],
+            meta=payload.get("meta"),
+        )
+
+
+@dataclass(frozen=True)
 class VaultStateRecord:
     vault_id: str
     last_applied_revision: int
