@@ -281,6 +281,30 @@ class BlobUploadPlan:
 
 
 @dataclass(frozen=True)
+class CreateCommitBlobRef:
+    blob_id: str
+    file_id: str
+
+
+@dataclass(frozen=True)
+class CreateCommitRequestPayload:
+    commit_intent_id: str
+    base_revision: int
+    created_by_device: str
+    intent_manifest_hash: str
+    intent_delete_seq_upper_bound: Optional[int]
+    manifest: ManifestRecord
+    blob_refs: list[CreateCommitBlobRef]
+
+
+@dataclass(frozen=True)
+class CommitNetworkPlan:
+    request: CreateCommitRequestPayload
+    blob_check: BlobCheckResult
+    blob_uploads: BlobUploadPlan
+
+
+@dataclass(frozen=True)
 class SnapshotDriftAbortResult:
     state: VaultStateRecord
     drifted_file_ids: list[str]
@@ -870,6 +894,87 @@ def build_blob_upload_plan(
     return BlobUploadPlan(
         vault_id=snapshot_table.vault_id,
         entries=[entries_by_blob_id[blob_id] for blob_id in sorted(entries_by_blob_id)],
+    )
+
+
+def build_create_commit_request_payload(
+    submission: CommitSubmissionBundle,
+    *,
+    snapshot_table: CommitSnapshotTable,
+) -> CreateCommitRequestPayload:
+    if submission.manifest.vault_id != snapshot_table.vault_id:
+        raise ValueError("snapshot table vault_id does not match commit submission manifest")
+    if submission.journal.base_revision != snapshot_table.base_revision:
+        raise ValueError("snapshot table base_revision does not match commit journal")
+    if submission.journal.created_at != snapshot_table.created_at:
+        raise ValueError("snapshot table created_at does not match commit journal")
+    if submission.manifest.base_revision != submission.journal.base_revision:
+        raise ValueError("commit manifest base_revision does not match commit journal")
+
+    manifest_files_by_file_id = {
+        item.file_id: item
+        for item in submission.manifest.files
+    }
+    snapshot_entries_by_file_id = {
+        item.file_id: item
+        for item in snapshot_table.entries
+    }
+    if set(manifest_files_by_file_id) != set(snapshot_entries_by_file_id):
+        raise ValueError("commit submission manifest files do not match snapshot table entries")
+
+    for file_id, manifest_file in manifest_files_by_file_id.items():
+        snapshot_entry = snapshot_entries_by_file_id[file_id]
+        if manifest_file.path != snapshot_entry.path or manifest_file.type != snapshot_entry.type:
+            raise ValueError(f"commit submission manifest structure mismatch for file_id {file_id}")
+        if manifest_file.content_hash != snapshot_entry.content_hash:
+            raise ValueError(f"commit submission manifest content hash mismatch for file_id {file_id}")
+        if manifest_file.blob_id != snapshot_entry.blob_id:
+            raise ValueError(f"commit submission manifest blob id mismatch for file_id {file_id}")
+        if manifest_file.size != snapshot_entry.plaintext_size:
+            raise ValueError(f"commit submission manifest size mismatch for file_id {file_id}")
+        if manifest_file.mtime != snapshot_entry.mtime:
+            raise ValueError(f"commit submission manifest mtime mismatch for file_id {file_id}")
+        if manifest_file.mime_type != snapshot_entry.mime_type:
+            raise ValueError(f"commit submission manifest mime_type mismatch for file_id {file_id}")
+
+    blob_refs = [
+        CreateCommitBlobRef(
+            blob_id=entry.blob_id,
+            file_id=entry.file_id,
+        )
+        for entry in sorted(snapshot_table.entries, key=lambda item: (item.file_id, item.blob_id))
+    ]
+    return CreateCommitRequestPayload(
+        commit_intent_id=submission.journal.commit_intent_id,
+        base_revision=submission.journal.base_revision,
+        created_by_device=submission.journal.created_by_device,
+        intent_manifest_hash=submission.intent_manifest_hash,
+        intent_delete_seq_upper_bound=submission.journal.intent_delete_seq_upper_bound,
+        manifest=submission.manifest,
+        blob_refs=blob_refs,
+    )
+
+
+def build_commit_network_plan(
+    submission: CommitSubmissionBundle,
+    *,
+    snapshot_table: CommitSnapshotTable,
+    blob_check: BlobCheckResult,
+) -> CommitNetworkPlan:
+    requested_blob_ids = sorted({entry.blob_id for entry in snapshot_table.entries})
+    if blob_check.requested_blob_ids != requested_blob_ids:
+        raise ValueError("blob check result does not match snapshot table blob_ids")
+
+    return CommitNetworkPlan(
+        request=build_create_commit_request_payload(
+            submission,
+            snapshot_table=snapshot_table,
+        ),
+        blob_check=blob_check,
+        blob_uploads=build_blob_upload_plan(
+            snapshot_table,
+            missing_blob_ids=blob_check.missing_blob_ids,
+        ),
     )
 
 
