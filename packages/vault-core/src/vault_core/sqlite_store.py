@@ -12,6 +12,13 @@ from .models import (
     VaultStateRecord,
     WikiTaskRecord,
 )
+from .recovery import (
+    apply_prepared_commit_recovery,
+    apply_submitted_commit_match_recovery,
+    apply_submitted_commit_miss_recovery,
+    apply_sync_finalizing_recovery,
+    normalize_commit_journal_for_recovery,
+)
 
 SCHEMA_VERSION = 1
 
@@ -134,6 +141,11 @@ def bootstrap_database(connection: sqlite3.Connection) -> None:
 
 
 def upsert_vault_state(connection: sqlite3.Connection, record: VaultStateRecord) -> None:
+    _upsert_vault_state(connection, record)
+    connection.commit()
+
+
+def _upsert_vault_state(connection: sqlite3.Connection, record: VaultStateRecord) -> None:
     payload = record.to_dict()
     connection.execute(
         """
@@ -179,7 +191,6 @@ def upsert_vault_state(connection: sqlite3.Connection, record: VaultStateRecord)
             json.dumps(payload["meta"]) if payload.get("meta") is not None else None,
         ),
     )
-    connection.commit()
 
 
 def load_vault_state(connection: sqlite3.Connection, vault_id: str) -> Optional[VaultStateRecord]:
@@ -440,3 +451,101 @@ def normalize_legacy_acknowledged_commit_intent(
 def clear_commit_intent_journal(connection: sqlite3.Connection, vault_id: str) -> None:
     connection.execute("DELETE FROM commit_intent_journal WHERE vault_id = ?", (vault_id,))
     connection.commit()
+
+
+def recover_sync_apply_finalizing_state(
+    connection: sqlite3.Connection,
+    vault_id: str,
+) -> VaultStateRecord:
+    state = load_vault_state(connection, vault_id)
+    journal = load_sync_apply_journal(connection, vault_id)
+    if state is None or journal is None:
+        raise KeyError("vault_state and sync_apply_journal must both exist")
+
+    recovered = apply_sync_finalizing_recovery(state, journal)
+    with connection:
+        _upsert_vault_state(connection, recovered)
+        connection.execute("DELETE FROM sync_apply_journal WHERE vault_id = ?", (vault_id,))
+    return recovered
+
+
+def recover_prepared_commit_cleanup(
+    connection: sqlite3.Connection,
+    vault_id: str,
+) -> VaultStateRecord:
+    state = load_vault_state(connection, vault_id)
+    journal = load_commit_intent_journal(connection, vault_id)
+    if state is None or journal is None:
+        raise KeyError("vault_state and commit_intent_journal must both exist")
+    if journal.status != "prepared":
+        raise ValueError("prepared recovery requires a prepared journal")
+
+    recovered = apply_prepared_commit_recovery(state)
+    with connection:
+        _upsert_vault_state(connection, recovered)
+        connection.execute("DELETE FROM commit_intent_journal WHERE vault_id = ?", (vault_id,))
+    return recovered
+
+
+def recover_submitted_commit_match(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    *,
+    matched_revision: int,
+    observed_head_revision: int,
+    matched_manifest_summary: Optional[str],
+    normalized_at: int,
+) -> VaultStateRecord:
+    state = load_vault_state(connection, vault_id)
+    journal = load_commit_intent_journal(connection, vault_id)
+    if state is None or journal is None:
+        raise KeyError("vault_state and commit_intent_journal must both exist")
+
+    normalized = normalize_commit_journal_for_recovery(journal, normalized_at=normalized_at)
+    recovered = apply_submitted_commit_match_recovery(
+        state,
+        matched_revision=matched_revision,
+        observed_head_revision=observed_head_revision,
+        matched_manifest_summary=matched_manifest_summary,
+    )
+    with connection:
+        if normalized != journal:
+            connection.execute(
+                """
+                UPDATE commit_intent_journal
+                SET status = ?, updated_at = ?
+                WHERE vault_id = ?
+                """,
+                (normalized.status, normalized.updated_at, vault_id),
+            )
+        _upsert_vault_state(connection, recovered)
+        connection.execute("DELETE FROM commit_intent_journal WHERE vault_id = ?", (vault_id,))
+    return recovered
+
+
+def recover_submitted_commit_miss(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    *,
+    normalized_at: int,
+) -> VaultStateRecord:
+    state = load_vault_state(connection, vault_id)
+    journal = load_commit_intent_journal(connection, vault_id)
+    if state is None or journal is None:
+        raise KeyError("vault_state and commit_intent_journal must both exist")
+
+    normalized = normalize_commit_journal_for_recovery(journal, normalized_at=normalized_at)
+    recovered = apply_submitted_commit_miss_recovery(state)
+    with connection:
+        if normalized != journal:
+            connection.execute(
+                """
+                UPDATE commit_intent_journal
+                SET status = ?, updated_at = ?
+                WHERE vault_id = ?
+                """,
+                (normalized.status, normalized.updated_at, vault_id),
+            )
+        _upsert_vault_state(connection, recovered)
+        connection.execute("DELETE FROM commit_intent_journal WHERE vault_id = ?", (vault_id,))
+    return recovered

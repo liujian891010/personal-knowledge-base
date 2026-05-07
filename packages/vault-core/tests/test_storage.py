@@ -23,16 +23,23 @@ from vault_core import (
     load_sync_apply_journal,
     load_tombstone_ledger,
     load_vault_state,
+    normalize_commit_journal_for_recovery,
     mark_deleted,
     move_conflict_orphan,
     move_staging_orphan,
     open_database,
     normalize_legacy_acknowledged_commit_intent,
+    recover_prepared_commit_cleanup,
+    recover_submitted_commit_match,
+    recover_submitted_commit_miss,
+    recover_sync_apply_finalizing_state,
     recover_filemap,
     replace_active_wiki_task,
     register_conflict_copy,
     rename_file,
+    select_pending_tombstones_for_commit,
     sanitize_device_name,
+    should_block_new_commit,
     SyncApplyJournalRecord,
     upsert_commit_intent_journal,
     upsert_file_index_entry,
@@ -474,6 +481,250 @@ class VaultCoreStorageTests(unittest.TestCase):
 
                 clear_commit_intent_journal(connection, "vault_pkb_001")
                 self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_recover_sync_apply_finalizing_state_repairs_ack_and_clears_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=8,
+                        acked_revision=6,
+                        pending_ack_to_server=[5, 7],
+                        commit_in_progress=False,
+                        last_manifest_summary="sha256:old",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=19,
+                    ),
+                )
+                upsert_sync_apply_journal(
+                    connection,
+                    SyncApplyJournalRecord(
+                        vault_id="vault_pkb_001",
+                        journal_id="journal_1",
+                        target_revision=8,
+                        target_manifest_hash="sha256:new",
+                        phase="finalizing",
+                        created_at=1770000050000,
+                        updated_at=1770000051000,
+                    ),
+                )
+
+                recovered = recover_sync_apply_finalizing_state(connection, "vault_pkb_001")
+
+                self.assertEqual(recovered.last_applied_revision, 8)
+                self.assertEqual(recovered.acked_revision, 8)
+                self.assertEqual(recovered.pending_ack_to_server, [5, 7, 8])
+                self.assertEqual(recovered.last_manifest_summary, "sha256:new")
+                self.assertIsNone(load_sync_apply_journal(connection, "vault_pkb_001"))
+
+    def test_recover_prepared_commit_cleanup_releases_commit_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=19,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="prepared",
+                        intent_delete_seq_upper_bound=19,
+                        created_at=1770000052000,
+                        updated_at=1770000052000,
+                    ),
+                )
+
+                recovered = recover_prepared_commit_cleanup(connection, "vault_pkb_001")
+
+                self.assertFalse(recovered.commit_in_progress)
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_recover_submitted_commit_match_with_manifest_404_marks_summary_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[4, 6],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=19,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="acknowledged",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=1770000053000,
+                        updated_at=1770000053000,
+                    ),
+                )
+
+                recovered = recover_submitted_commit_match(
+                    connection,
+                    "vault_pkb_001",
+                    matched_revision=8,
+                    observed_head_revision=10,
+                    matched_manifest_summary=None,
+                    normalized_at=1770000054000,
+                )
+
+                self.assertEqual(recovered.last_applied_revision, 8)
+                self.assertEqual(recovered.remote_head_revision, 10)
+                self.assertEqual(recovered.acked_revision, 8)
+                self.assertEqual(recovered.pending_ack_to_server, [4, 6])
+                self.assertEqual(recovered.last_manifest_summary_status, "stale")
+                self.assertIsNone(recovered.last_manifest_summary)
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_recover_submitted_commit_miss_only_releases_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                initial = VaultStateRecord(
+                    vault_id="vault_pkb_001",
+                    last_applied_revision=7,
+                    remote_head_revision=8,
+                    acked_revision=7,
+                    pending_ack_to_server=[7],
+                    commit_in_progress=True,
+                    last_manifest_summary="sha256:head7",
+                    last_manifest_summary_status="valid",
+                    local_delete_sequence=19,
+                )
+                upsert_vault_state(connection, initial)
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=19,
+                        created_at=1770000055000,
+                        updated_at=1770000055000,
+                    ),
+                )
+
+                recovered = recover_submitted_commit_miss(
+                    connection,
+                    "vault_pkb_001",
+                    normalized_at=1770000056000,
+                )
+
+                self.assertFalse(recovered.commit_in_progress)
+                self.assertEqual(recovered.pending_ack_to_server, [7])
+                self.assertEqual(recovered.last_manifest_summary, "sha256:head7")
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_recovery_helpers_block_commit_on_stale_summary_and_active_journal(self) -> None:
+        state = VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=8,
+            remote_head_revision=10,
+            acked_revision=8,
+            pending_ack_to_server=[],
+            commit_in_progress=False,
+            last_manifest_summary=None,
+            last_manifest_summary_status="stale",
+            local_delete_sequence=19,
+        )
+
+        self.assertTrue(should_block_new_commit(state))
+        self.assertTrue(should_block_new_commit(state, has_active_commit_journal=True))
+
+    def test_select_pending_tombstones_supports_seq_and_legacy_time_modes(self) -> None:
+        tombstones = [
+            TombstoneRecord(
+                file_id="file_a",
+                deleted_revision=None,
+                deleted_at=100,
+                local_delete_seq=1,
+            ),
+            TombstoneRecord(
+                file_id="file_b",
+                deleted_revision=None,
+                deleted_at=300,
+                local_delete_seq=5,
+            ),
+            TombstoneRecord(
+                file_id="file_remote",
+                deleted_revision=8,
+                deleted_at=200,
+                local_delete_seq=0,
+            ),
+        ]
+        seq_journal = CommitIntentJournalRecord(
+            vault_id="vault_pkb_001",
+            commit_intent_id="intent_seq",
+            intent_manifest_hash="sha256:intent_seq",
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            status="submitted",
+            intent_delete_seq_upper_bound=2,
+            created_at=250,
+            updated_at=250,
+        )
+        legacy_journal = CommitIntentJournalRecord(
+            vault_id="vault_pkb_001",
+            commit_intent_id="intent_legacy",
+            intent_manifest_hash="sha256:intent_legacy",
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            status="acknowledged",
+            intent_delete_seq_upper_bound=None,
+            created_at=250,
+            updated_at=250,
+        )
+
+        self.assertEqual(
+            [item.file_id for item in select_pending_tombstones_for_commit(tombstones, seq_journal)],
+            ["file_a"],
+        )
+        self.assertEqual(
+            [item.file_id for item in select_pending_tombstones_for_commit(tombstones, legacy_journal)],
+            ["file_a"],
+        )
+        normalized = normalize_commit_journal_for_recovery(legacy_journal, normalized_at=260)
+        self.assertEqual(normalized.status, "submitted")
 
 
 if __name__ == "__main__":
