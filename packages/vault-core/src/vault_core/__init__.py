@@ -3,6 +3,7 @@ from .convergence import (
     converge_manifest_state,
     merge_manifest_tombstones,
     persist_manifest_convergence,
+    recover_filemap_rewrite_convergence,
     rebuild_filemap_from_manifest,
     select_reclaimable_tombstones,
 )
@@ -91,6 +92,7 @@ __all__ = [
     "persist_manifest_convergence",
     "recover_prepared_commit_cleanup",
     "recover_filemap",
+    "recover_filemap_rewrite_convergence",
     "recover_submitted_commit_match",
     "recover_submitted_commit_miss",
     "recover_sync_apply_finalizing_state",

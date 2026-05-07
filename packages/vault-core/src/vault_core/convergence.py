@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List
 
-from .filemap import write_filemap_atomic
+from .filemap import load_filemap, recover_filemap, write_filemap_atomic
 from .ledger import rewrite_tombstone_ledger
 from .models import FileMapDocument, FileRecord, ManifestRecord, TombstoneRecord
 
@@ -196,3 +197,37 @@ def persist_manifest_convergence(
     write_filemap_atomic(filemap_path, result.filemap)
     rewrite_tombstone_ledger(ledger_path, result.tombstones)
     return result
+
+
+def recover_filemap_rewrite_convergence(
+    filemap_path: Path,
+    ledger_path: Path,
+    current_document: FileMapDocument,
+    manifest: ManifestRecord,
+    *,
+    local_tombstones: Iterable[TombstoneRecord],
+    rewritten_at: int,
+) -> ManifestConvergenceResult:
+    converged = converge_manifest_state(
+        current_document,
+        manifest,
+        local_tombstones=local_tombstones,
+        rewritten_at=rewritten_at,
+    )
+
+    try:
+        recovered = recover_filemap(filemap_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        recovered = False
+
+    if recovered:
+        rewrite_tombstone_ledger(ledger_path, converged.tombstones)
+        return ManifestConvergenceResult(
+            filemap=load_filemap(filemap_path),
+            tombstones=converged.tombstones,
+            reclaimed_tombstones=converged.reclaimed_tombstones,
+        )
+
+    write_filemap_atomic(filemap_path, converged.filemap)
+    rewrite_tombstone_ledger(ledger_path, converged.tombstones)
+    return converged
