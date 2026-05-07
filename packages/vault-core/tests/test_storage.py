@@ -7,12 +7,15 @@ from pathlib import Path
 
 from vault_core import (
     EMPTY_VAULT_FINAL_MANIFEST_SUMMARY,
+    AppliedManifestResult,
     FileMapDocument,
     FileRecord,
     ManifestFileEntry,
     ManifestRecord,
     add_file,
+    apply_manifest_reconciled_state,
     apply_manifest_summary_stale,
+    apply_pulled_manifest,
     allocate_conflict_copy_path,
     build_initial_vault_state,
     bootstrap_database,
@@ -964,6 +967,32 @@ class VaultCoreStorageTests(unittest.TestCase):
         self.assertTrue(requires_full_pull(stale))
         self.assertTrue(requires_full_pull(stale, observed_head_revision=8))
 
+    def test_apply_manifest_reconciled_state_updates_summary_and_ack_idempotently(self) -> None:
+        state = VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=7,
+            remote_head_revision=8,
+            acked_revision=6,
+            pending_ack_to_server=[5, 7],
+            commit_in_progress=False,
+            last_manifest_summary="sha256:head7",
+            last_manifest_summary_status="valid",
+            local_delete_sequence=19,
+        )
+
+        updated = apply_manifest_reconciled_state(
+            state,
+            target_revision=8,
+            manifest_summary="sha256:head8",
+        )
+
+        self.assertEqual(updated.last_applied_revision, 8)
+        self.assertEqual(updated.remote_head_revision, 8)
+        self.assertEqual(updated.acked_revision, 8)
+        self.assertEqual(updated.pending_ack_to_server, [5, 7, 8])
+        self.assertEqual(updated.last_manifest_summary, "sha256:head8")
+        self.assertEqual(updated.last_manifest_summary_status, "valid")
+
     def test_select_pending_tombstones_supports_seq_and_legacy_time_modes(self) -> None:
         tombstones = [
             TombstoneRecord(
@@ -1438,6 +1467,106 @@ class VaultCoreStorageTests(unittest.TestCase):
                 [item.file_id for item in load_tombstone_ledger(ledger_path)],
                 ["file_remote_deleted"],
             )
+
+    def test_apply_pulled_manifest_persists_convergence_and_updates_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            filemap_path = root / "filemap.json"
+            ledger_path = root / "tombstone-ledger.jsonl"
+            db_path = root / "state.sqlite3"
+            current = FileMapDocument(
+                vault_id="vault_pkb_001",
+                updated_at=90,
+                files=[
+                    FileRecord(
+                        file_id="file_live",
+                        path="Notes/Live Old.md",
+                        type="note",
+                        status="active",
+                        updated_at=80,
+                        content_hash="sha256:old",
+                        last_known_revision=6,
+                    ),
+                    FileRecord(
+                        file_id="file_conflict_copy",
+                        path="Notes/Live (conflict 2026-04-29 Desktop-Win).md",
+                        type="note",
+                        status="conflict_copy",
+                        updated_at=81,
+                        content_hash="sha256:conflict",
+                        conflict_source_file_id="file_live",
+                    ),
+                ],
+            )
+            manifest = ManifestRecord(
+                vault_id="vault_pkb_001",
+                revision=8,
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                created_at=200,
+                summary_hash="placeholder",
+                files=[
+                    ManifestFileEntry(
+                        file_id="file_live",
+                        path="Notes/Live.md",
+                        type="note",
+                        content_hash="sha256:new",
+                        blob_id="blob_live",
+                        size=128,
+                        mtime=180,
+                    )
+                ],
+                tombstones=[
+                    TombstoneRecord(
+                        file_id="file_remote_deleted",
+                        deleted_revision=8,
+                        deleted_at=150,
+                        local_delete_seq=0,
+                        last_known_path="Notes/Remote Deleted.md",
+                    )
+                ],
+            )
+            local_tombstones = [
+                TombstoneRecord(
+                    file_id="file_pending_delete",
+                    deleted_revision=None,
+                    deleted_at=121,
+                    local_delete_seq=5,
+                    last_known_path="Notes/Pending Delete.md",
+                )
+            ]
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                initialize_vault_state(connection, "vault_pkb_001")
+
+                applied = apply_pulled_manifest(
+                    connection,
+                    filemap_path=filemap_path,
+                    ledger_path=ledger_path,
+                    current_document=current,
+                    manifest=manifest,
+                    local_tombstones=local_tombstones,
+                    rewritten_at=220,
+                )
+
+                self.assertIsInstance(applied, AppliedManifestResult)
+                self.assertEqual(applied.state.last_applied_revision, 8)
+                self.assertEqual(applied.state.remote_head_revision, 8)
+                self.assertEqual(applied.state.acked_revision, 8)
+                self.assertEqual(applied.state.pending_ack_to_server, [8])
+                self.assertEqual(
+                    applied.state.last_manifest_summary,
+                    compute_manifest_summary_hash(manifest),
+                )
+                self.assertEqual(
+                    [item.file_id for item in load_filemap(filemap_path).sorted_files()],
+                    ["file_conflict_copy", "file_live", "file_pending_delete", "file_remote_deleted"],
+                )
+                self.assertEqual(
+                    [item.file_id for item in load_tombstone_ledger(ledger_path)],
+                    ["file_remote_deleted", "file_pending_delete"],
+                )
 
 
 if __name__ == "__main__":

@@ -33,6 +33,7 @@ from .operations import add_file, mark_deleted, register_conflict_copy, rename_f
 from .paths import allocate_conflict_copy_path, move_conflict_orphan, move_staging_orphan, sanitize_device_name
 from .recovery import (
     apply_manifest_summary_stale,
+    apply_manifest_reconciled_state,
     apply_prepared_commit_recovery,
     apply_submitted_commit_match_recovery,
     apply_submitted_commit_miss_recovery,
@@ -42,6 +43,7 @@ from .recovery import (
     select_pending_tombstones_for_commit,
     should_block_new_commit,
 )
+from .sync_apply import AppliedManifestResult, apply_pulled_manifest
 from .sqlite_store import (
     build_initial_vault_state,
     bootstrap_database,
@@ -77,12 +79,15 @@ __all__ = [
     "ManifestConvergenceResult",
     "ManifestFileEntry",
     "ManifestRecord",
+    "AppliedManifestResult",
     "add_file",
     "allocate_conflict_copy_path",
     "apply_manifest_summary_stale",
+    "apply_manifest_reconciled_state",
     "apply_prepared_commit_recovery",
     "apply_submitted_commit_match_recovery",
     "apply_submitted_commit_miss_recovery",
+    "apply_pulled_manifest",
     "apply_sync_finalizing_recovery",
     "append_tombstone",
     "bootstrap_database",

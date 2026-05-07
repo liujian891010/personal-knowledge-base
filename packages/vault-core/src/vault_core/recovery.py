@@ -56,24 +56,37 @@ def apply_manifest_summary_stale(state: VaultStateRecord) -> VaultStateRecord:
     )
 
 
-def apply_sync_finalizing_recovery(
+def apply_manifest_reconciled_state(
     state: VaultStateRecord,
-    journal: SyncApplyJournalRecord,
+    *,
+    target_revision: int,
+    manifest_summary: str,
 ) -> VaultStateRecord:
-    pending_ack = _sorted_unique_revisions([*state.pending_ack_to_server, journal.target_revision])
+    pending_ack = _sorted_unique_revisions([*state.pending_ack_to_server, target_revision])
     return VaultStateRecord(
         vault_id=state.vault_id,
-        last_applied_revision=max(state.last_applied_revision, journal.target_revision),
-        remote_head_revision=max(state.remote_head_revision, journal.target_revision),
-        acked_revision=max(state.acked_revision, journal.target_revision),
+        last_applied_revision=max(state.last_applied_revision, target_revision),
+        remote_head_revision=max(state.remote_head_revision, target_revision),
+        acked_revision=max(state.acked_revision, target_revision),
         pending_ack_to_server=pending_ack,
         commit_in_progress=state.commit_in_progress,
-        last_manifest_summary=journal.target_manifest_hash,
+        last_manifest_summary=manifest_summary,
         last_manifest_summary_status="valid",
         local_delete_sequence=state.local_delete_sequence,
         has_unresolved_conflicts=state.has_unresolved_conflicts,
         schema_version=state.schema_version,
         meta=state.meta,
+    )
+
+
+def apply_sync_finalizing_recovery(
+    state: VaultStateRecord,
+    journal: SyncApplyJournalRecord,
+) -> VaultStateRecord:
+    return apply_manifest_reconciled_state(
+        state,
+        target_revision=journal.target_revision,
+        manifest_summary=journal.target_manifest_hash,
     )
 
 
