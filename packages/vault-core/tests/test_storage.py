@@ -66,6 +66,7 @@ from vault_core import (
     persist_manifest_convergence,
     plan_pull_reconcile,
     prepare_commit_submission,
+    prepare_commit_intent,
     requires_full_pull,
     replace_active_wiki_task,
     register_conflict_copy,
@@ -75,6 +76,7 @@ from vault_core import (
     sanitize_device_name,
     serialize_manifest_canonical,
     should_block_new_commit,
+    submit_prepared_commit,
     SyncApplyJournalRecord,
     upsert_commit_intent_journal,
     upsert_file_index_entry,
@@ -730,6 +732,106 @@ class VaultCoreStorageTests(unittest.TestCase):
         self.assertEqual(updated.pending_ack_to_server, [4, 6])
         self.assertFalse(updated.commit_in_progress)
         self.assertEqual(updated.last_manifest_summary, "sha256:head8")
+
+    def test_prepare_commit_intent_persists_prepared_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with closing(open_database(Path(tmpdir) / "state.sqlite3")) as connection:
+                bootstrap_database(connection)
+                state = VaultStateRecord(
+                    vault_id="vault_pkb_001",
+                    last_applied_revision=7,
+                    remote_head_revision=7,
+                    acked_revision=7,
+                    pending_ack_to_server=[],
+                    commit_in_progress=False,
+                    last_manifest_summary="sha256:head7",
+                    last_manifest_summary_status="valid",
+                    local_delete_sequence=2,
+                )
+                upsert_vault_state(connection, state)
+
+                bundle = prepare_commit_intent(
+                    connection,
+                    state=state,
+                    commit_intent_id="intent_prepared",
+                    created_by_device="desktop-shanghai",
+                    created_at=1770000018300,
+                )
+
+                stored_journal = load_commit_intent_journal(connection, "vault_pkb_001")
+                self.assertEqual(bundle.journal.status, "prepared")
+                self.assertEqual(bundle.journal.intent_manifest_hash, "pending")
+                self.assertTrue(bundle.state.commit_in_progress)
+                self.assertIsNotNone(stored_journal)
+                self.assertEqual(stored_journal, bundle.journal)
+
+    def test_submit_prepared_commit_promotes_journal_to_submitted(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018310,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018309,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 128,
+                        "mtime": 1770000018308,
+                    },
+                )
+            ],
+        )
+        tombstones = [
+            TombstoneRecord(
+                file_id="file_deleted",
+                deleted_revision=None,
+                deleted_at=1770000018307,
+                local_delete_seq=2,
+                last_known_path="Notes/Deleted.md",
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with closing(open_database(Path(tmpdir) / "state.sqlite3")) as connection:
+                bootstrap_database(connection)
+                state = VaultStateRecord(
+                    vault_id="vault_pkb_001",
+                    last_applied_revision=7,
+                    remote_head_revision=7,
+                    acked_revision=7,
+                    pending_ack_to_server=[],
+                    commit_in_progress=False,
+                    last_manifest_summary="sha256:head7",
+                    last_manifest_summary_status="valid",
+                    local_delete_sequence=2,
+                )
+                upsert_vault_state(connection, state)
+                prepare_commit_intent(
+                    connection,
+                    state=state,
+                    commit_intent_id="intent_prepared",
+                    created_by_device="desktop-shanghai",
+                    created_at=1770000018300,
+                )
+
+                bundle = submit_prepared_commit(
+                    connection,
+                    vault_id="vault_pkb_001",
+                    document=document,
+                    tombstones=tombstones,
+                    submitted_at=1770000018311,
+                )
+
+                stored_journal = load_commit_intent_journal(connection, "vault_pkb_001")
+                self.assertEqual(bundle.journal.status, "submitted")
+                self.assertEqual(bundle.intent_manifest_hash, compute_intent_manifest_hash(bundle.manifest))
+                self.assertEqual(bundle.manifest.base_revision, 7)
+                self.assertIsNotNone(stored_journal)
+                self.assertEqual(stored_journal, bundle.journal)
 
     def test_prepare_commit_submission_persists_submitted_journal_and_state(self) -> None:
         document = FileMapDocument(
