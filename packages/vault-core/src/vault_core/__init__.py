@@ -45,6 +45,7 @@ from .recovery import (
     should_block_new_commit,
 )
 from .sync_apply import AppliedManifestResult, SubmittedRecoveryResult, apply_pulled_manifest, recover_submitted_commit_flow
+from .sync_plan import ReconcilePlan, plan_pull_reconcile
 from .sqlite_store import (
     build_initial_vault_state,
     bootstrap_database,
@@ -81,6 +82,7 @@ __all__ = [
     "ManifestFileEntry",
     "ManifestRecord",
     "AppliedManifestResult",
+    "ReconcilePlan",
     "SubmittedRecoveryResult",
     "add_file",
     "allocate_conflict_copy_path",
@@ -118,6 +120,7 @@ __all__ = [
     "normalize_commit_journal_for_recovery",
     "open_database",
     "persist_manifest_convergence",
+    "plan_pull_reconcile",
     "recover_prepared_commit_cleanup",
     "recover_filemap",
     "recover_filemap_rewrite_convergence",

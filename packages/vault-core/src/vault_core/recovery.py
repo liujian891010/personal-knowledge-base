@@ -34,9 +34,7 @@ def requires_full_pull(
         return True
     if state.last_manifest_summary is None:
         return True
-    if observed_head_revision is None:
-        return False
-    return observed_head_revision > state.last_applied_revision
+    return False
 
 
 def apply_manifest_summary_stale(state: VaultStateRecord) -> VaultStateRecord:
