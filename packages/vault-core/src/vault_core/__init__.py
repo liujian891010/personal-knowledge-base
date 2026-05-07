@@ -10,6 +10,14 @@ from .convergence import (
 from .filemap import load_filemap, recover_filemap, write_filemap_atomic
 from .initializer import initialize_vault
 from .ledger import append_tombstone, load_tombstone_ledger
+from .manifest import (
+    EMPTY_VAULT_FINAL_MANIFEST_SUMMARY,
+    canonical_manifest_payload,
+    compute_intent_manifest_hash,
+    compute_manifest_summary_hash,
+    serialize_manifest_canonical,
+    with_computed_manifest_summary,
+)
 from .models import (
     CommitIntentJournalRecord,
     FileMapDocument,
@@ -33,9 +41,11 @@ from .recovery import (
     should_block_new_commit,
 )
 from .sqlite_store import (
+    build_initial_vault_state,
     bootstrap_database,
     clear_commit_intent_journal,
     clear_sync_apply_journal,
+    initialize_vault_state,
     list_file_index,
     load_commit_intent_journal,
     load_sync_apply_journal,
@@ -72,10 +82,16 @@ __all__ = [
     "apply_sync_finalizing_recovery",
     "append_tombstone",
     "bootstrap_database",
+    "build_initial_vault_state",
     "clear_commit_intent_journal",
     "clear_sync_apply_journal",
     "converge_manifest_state",
+    "canonical_manifest_payload",
+    "compute_intent_manifest_hash",
+    "compute_manifest_summary_hash",
+    "EMPTY_VAULT_FINAL_MANIFEST_SUMMARY",
     "initialize_vault",
+    "initialize_vault_state",
     "list_file_index",
     "load_commit_intent_journal",
     "load_sync_apply_journal",
@@ -103,10 +119,12 @@ __all__ = [
     "sanitize_device_name",
     "select_reclaimable_tombstones",
     "select_pending_tombstones_for_commit",
+    "serialize_manifest_canonical",
     "should_block_new_commit",
     "upsert_commit_intent_journal",
     "upsert_file_index_entry",
     "upsert_sync_apply_journal",
     "upsert_vault_state",
+    "with_computed_manifest_summary",
     "write_filemap_atomic",
 ]
