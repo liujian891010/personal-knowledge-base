@@ -15,6 +15,7 @@ from .manifest import (
     canonical_manifest_payload,
     compute_intent_manifest_hash,
     compute_manifest_summary_hash,
+    finalize_manifest_revision,
     serialize_manifest_canonical,
     with_computed_manifest_summary,
 )
@@ -45,6 +46,13 @@ from .recovery import (
     should_block_new_commit,
 )
 from .sync_apply import AppliedManifestResult, SubmittedRecoveryResult, apply_pulled_manifest, recover_submitted_commit_flow
+from .sync_commit import (
+    CommitSubmissionBundle,
+    apply_commit_submitted_state,
+    build_commit_manifest,
+    finalize_commit_manifest,
+    prepare_commit_submission,
+)
 from .sync_plan import ReconcilePlan, plan_pull_reconcile
 from .sync_reconcile import ReconcileResult, execute_pull_reconcile
 from .sqlite_store import (
@@ -83,11 +91,13 @@ __all__ = [
     "ManifestFileEntry",
     "ManifestRecord",
     "AppliedManifestResult",
+    "CommitSubmissionBundle",
     "ReconcileResult",
     "ReconcilePlan",
     "SubmittedRecoveryResult",
     "add_file",
     "allocate_conflict_copy_path",
+    "apply_commit_submitted_state",
     "apply_committed_tombstones",
     "apply_manifest_summary_stale",
     "apply_manifest_reconciled_state",
@@ -105,8 +115,11 @@ __all__ = [
     "canonical_manifest_payload",
     "compute_intent_manifest_hash",
     "compute_manifest_summary_hash",
+    "build_commit_manifest",
     "EMPTY_VAULT_FINAL_MANIFEST_SUMMARY",
     "execute_pull_reconcile",
+    "finalize_commit_manifest",
+    "finalize_manifest_revision",
     "initialize_vault",
     "initialize_vault_state",
     "list_file_index",
@@ -124,6 +137,7 @@ __all__ = [
     "open_database",
     "persist_manifest_convergence",
     "plan_pull_reconcile",
+    "prepare_commit_submission",
     "recover_prepared_commit_cleanup",
     "recover_filemap",
     "recover_filemap_rewrite_convergence",
