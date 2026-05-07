@@ -47,7 +47,14 @@ from .recovery import (
     select_pending_tombstones_for_commit,
     should_block_new_commit,
 )
-from .sync_apply import AppliedManifestResult, SubmittedRecoveryResult, apply_pulled_manifest, recover_submitted_commit_flow
+from .sync_apply import (
+    AppliedManifestResult,
+    SubmittedConfirmationExecutionResult,
+    SubmittedRecoveryResult,
+    apply_pulled_manifest,
+    execute_submitted_commit_confirmation,
+    recover_submitted_commit_flow,
+)
 from .sync_commit import (
     CommitRecoveryPlan,
     CommitFinalizeResult,
@@ -123,6 +130,7 @@ __all__ = [
     "ReconcileResult",
     "ReconcilePlan",
     "SubmittedConfirmationPlan",
+    "SubmittedConfirmationExecutionResult",
     "SubmittedConfirmationResolution",
     "SubmittedRecoveryResult",
     "add_file",
@@ -151,6 +159,7 @@ __all__ = [
     "cleanup_failed_commit_submission",
     "EMPTY_VAULT_FINAL_MANIFEST_SUMMARY",
     "execute_pull_reconcile",
+    "execute_submitted_commit_confirmation",
     "finalize_commit_manifest",
     "finalize_commit_submission",
     "finalize_manifest_revision",
