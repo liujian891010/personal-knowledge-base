@@ -15,6 +15,7 @@ from vault_core import (
     ReconcileResult,
     ReconcilePlan,
     RevisionMetadata,
+    SubmittedConfirmationExecutionResult,
     SubmittedRecoveryResult,
     SubmittedConfirmationPlan,
     SubmittedConfirmationResolution,
@@ -42,6 +43,7 @@ from vault_core import (
     cleanup_failed_commit_submission,
     CommitRecoveryPlan,
     execute_pull_reconcile,
+    execute_submitted_commit_confirmation,
     find_matching_revision_metadata,
     finalize_commit_submission,
     finalize_commit_manifest,
@@ -2071,6 +2073,232 @@ class VaultCoreStorageTests(unittest.TestCase):
                 matched_metadata=None,
             ),
         )
+
+    def test_execute_submitted_commit_confirmation_head_match_recovers_with_manifest(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=8,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000020000,
+            summary_hash="placeholder",
+            files=[],
+            tombstones=[],
+        )
+        tombstones = [
+            TombstoneRecord(
+                file_id="file_hit",
+                deleted_revision=None,
+                deleted_at=1770000019990,
+                local_delete_seq=2,
+                last_known_path="Notes/Hit.md",
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "tombstone-ledger.jsonl"
+            db_path = Path(tmpdir) / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[4],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=2,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=2,
+                        created_at=1770000019995,
+                        updated_at=1770000019995,
+                    ),
+                )
+
+                executed = execute_submitted_commit_confirmation(
+                    connection,
+                    ledger_path=ledger_path,
+                    vault_id="vault_pkb_001",
+                    local_tombstones=tombstones,
+                    observed_head_revision=8,
+                    head_commit_intent_id="intent_1",
+                    normalized_at=1770000020001,
+                    matched_manifest=manifest,
+                )
+
+                self.assertEqual(executed.plan.mode, "head_match")
+                self.assertIsNone(executed.resolution.matched_metadata)
+                self.assertEqual(executed.recovery.state.last_applied_revision, 8)
+                self.assertEqual(executed.recovery.state.remote_head_revision, 8)
+                self.assertEqual(executed.recovery.state.last_manifest_summary, compute_manifest_summary_hash(manifest))
+                self.assertEqual(
+                    [(item.file_id, item.deleted_revision) for item in load_tombstone_ledger(ledger_path)],
+                    [("file_hit", 8)],
+                )
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_execute_submitted_commit_confirmation_scan_match_uses_matched_revision(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=9,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000020100,
+            summary_hash="placeholder",
+            files=[],
+            tombstones=[],
+        )
+        revisions = [
+            RevisionMetadata(
+                revision=8,
+                commit_intent_id="intent_other",
+                intent_manifest_hash="sha256:other",
+                created_by_device="mobile-hangzhou",
+                created_at=1770000020090,
+            ),
+            RevisionMetadata(
+                revision=9,
+                commit_intent_id="intent_1",
+                intent_manifest_hash="sha256:intent_1",
+                created_by_device="desktop-shanghai",
+                created_at=1770000020095,
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "tombstone-ledger.jsonl"
+            db_path = Path(tmpdir) / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=1770000020088,
+                        updated_at=1770000020088,
+                    ),
+                )
+
+                executed = execute_submitted_commit_confirmation(
+                    connection,
+                    ledger_path=ledger_path,
+                    vault_id="vault_pkb_001",
+                    local_tombstones=[],
+                    observed_head_revision=10,
+                    head_commit_intent_id="intent_other",
+                    normalized_at=1770000020101,
+                    revisions=revisions,
+                    matched_manifest=manifest,
+                )
+
+                self.assertEqual(executed.plan.mode, "scan_range")
+                self.assertIsNotNone(executed.resolution.matched_metadata)
+                self.assertEqual(executed.resolution.matched_metadata.revision, 9)
+                self.assertEqual(executed.recovery.state.last_applied_revision, 9)
+                self.assertEqual(executed.recovery.state.remote_head_revision, 10)
+                self.assertFalse(executed.recovery.requires_full_pull)
+
+    def test_execute_submitted_commit_confirmation_scan_miss_cleans_up_without_rewriting_tombstones(self) -> None:
+        tombstones = [
+            TombstoneRecord(
+                file_id="file_pending",
+                deleted_revision=None,
+                deleted_at=1770000020190,
+                local_delete_seq=2,
+                last_known_path="Notes/Pending.md",
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "tombstone-ledger.jsonl"
+            db_path = Path(tmpdir) / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=2,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=2,
+                        created_at=1770000020195,
+                        updated_at=1770000020195,
+                    ),
+                )
+
+                executed = execute_submitted_commit_confirmation(
+                    connection,
+                    ledger_path=ledger_path,
+                    vault_id="vault_pkb_001",
+                    local_tombstones=tombstones,
+                    observed_head_revision=10,
+                    head_commit_intent_id="intent_other",
+                    normalized_at=1770000020200,
+                    revisions=[],
+                )
+
+                self.assertEqual(executed.plan.mode, "scan_range")
+                self.assertIsNone(executed.resolution.matched_metadata)
+                self.assertFalse(executed.recovery.state.commit_in_progress)
+                self.assertEqual(
+                    [(item.file_id, item.deleted_revision) for item in executed.recovery.tombstones],
+                    [("file_pending", None)],
+                )
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
 
     def test_recover_submitted_commit_match_with_manifest_404_marks_summary_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

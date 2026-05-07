@@ -13,9 +13,17 @@ from .recovery import apply_committed_tombstones, apply_manifest_reconciled_stat
 from .sqlite_store import (
     load_commit_intent_journal,
     load_vault_state,
+    recover_submitted_commit_miss,
     recover_submitted_commit_from_manifest,
     recover_submitted_commit_match,
     upsert_vault_state,
+)
+from .sync_commit import (
+    RevisionMetadata,
+    SubmittedConfirmationPlan,
+    SubmittedConfirmationResolution,
+    plan_submitted_confirmation,
+    resolve_submitted_confirmation,
 )
 
 
@@ -30,6 +38,13 @@ class SubmittedRecoveryResult:
     state: VaultStateRecord
     tombstones: List[TombstoneRecord]
     requires_full_pull: bool
+
+
+@dataclass(frozen=True)
+class SubmittedConfirmationExecutionResult:
+    plan: SubmittedConfirmationPlan
+    resolution: SubmittedConfirmationResolution
+    recovery: SubmittedRecoveryResult
 
 
 def apply_pulled_manifest(
@@ -110,4 +125,65 @@ def recover_submitted_commit_flow(
         state=state,
         tombstones=updated_tombstones,
         requires_full_pull=requires_full_pull(state, observed_head_revision=observed_head_revision),
+    )
+
+
+def execute_submitted_commit_confirmation(
+    connection: sqlite3.Connection,
+    *,
+    ledger_path: Path,
+    vault_id: str,
+    local_tombstones: Iterable[TombstoneRecord],
+    observed_head_revision: int,
+    head_commit_intent_id: str,
+    normalized_at: int,
+    revisions: Iterable[RevisionMetadata] = (),
+    matched_manifest: Optional[ManifestRecord] = None,
+) -> SubmittedConfirmationExecutionResult:
+    journal = load_commit_intent_journal(connection, vault_id)
+    if journal is None:
+        raise KeyError(f"commit_intent_journal not found: {vault_id}")
+
+    plan = plan_submitted_confirmation(
+        journal,
+        observed_head_revision=observed_head_revision,
+        head_commit_intent_id=head_commit_intent_id,
+    )
+    resolution = resolve_submitted_confirmation(
+        plan,
+        commit_intent_id=journal.commit_intent_id,
+        revisions=revisions,
+    )
+
+    if plan.mode == "miss" or (plan.mode == "scan_range" and resolution.matched_metadata is None):
+        recovery = SubmittedRecoveryResult(
+            state=recover_submitted_commit_miss(
+                connection,
+                vault_id,
+                normalized_at=normalized_at,
+            ),
+            tombstones=list(local_tombstones),
+            requires_full_pull=False,
+        )
+        return SubmittedConfirmationExecutionResult(
+            plan=plan,
+            resolution=resolution,
+            recovery=recovery,
+        )
+
+    matched_revision = observed_head_revision if plan.mode == "head_match" else resolution.matched_metadata.revision
+    recovery = recover_submitted_commit_flow(
+        connection,
+        ledger_path=ledger_path,
+        vault_id=vault_id,
+        local_tombstones=local_tombstones,
+        matched_revision=matched_revision,
+        observed_head_revision=observed_head_revision,
+        normalized_at=normalized_at,
+        matched_manifest=matched_manifest,
+    )
+    return SubmittedConfirmationExecutionResult(
+        plan=plan,
+        resolution=resolution,
+        recovery=recovery,
     )
