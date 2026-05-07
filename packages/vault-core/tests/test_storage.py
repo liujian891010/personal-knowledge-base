@@ -38,6 +38,7 @@ from vault_core import (
     recover_submitted_commit_miss,
     recover_sync_apply_finalizing_state,
     recover_filemap,
+    recover_filemap_rewrite_convergence,
     persist_manifest_convergence,
     replace_active_wiki_task,
     register_conflict_copy,
@@ -1039,6 +1040,139 @@ class VaultCoreStorageTests(unittest.TestCase):
             self.assertEqual(
                 [item.file_id for item in loaded_filemap.sorted_files()],
                 ["file_live", "file_pending_delete", "file_remote_deleted"],
+            )
+
+    def test_recover_filemap_rewrite_convergence_promotes_valid_tmp_before_rewriting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            filemap_path = root / "filemap.json"
+            ledger_path = root / "tombstone-ledger.jsonl"
+            stale = FileMapDocument(vault_id="vault_pkb_001", updated_at=100, files=[])
+            write_filemap_atomic(filemap_path, stale)
+            promoted = FileMapDocument(
+                vault_id="vault_pkb_001",
+                updated_at=220,
+                files=[
+                    FileRecord(
+                        file_id="file_live",
+                        path="Notes/Live.md",
+                        type="note",
+                        status="active",
+                        updated_at=220,
+                        content_hash="sha256:new",
+                        last_known_revision=8,
+                    )
+                ],
+            )
+            (root / "filemap.json.tmp").write_text(
+                json.dumps(promoted.to_dict(), ensure_ascii=False),
+                encoding="utf-8",
+            )
+            manifest = ManifestRecord(
+                vault_id="vault_pkb_001",
+                revision=8,
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                created_at=200,
+                summary_hash="sha256:manifest8",
+                files=[
+                    ManifestFileEntry(
+                        file_id="file_live",
+                        path="Notes/Live.md",
+                        type="note",
+                        content_hash="sha256:new",
+                        blob_id="blob_live",
+                        size=128,
+                        mtime=180,
+                    )
+                ],
+                tombstones=[],
+            )
+
+            recovered = recover_filemap_rewrite_convergence(
+                filemap_path,
+                ledger_path,
+                stale,
+                manifest,
+                local_tombstones=[],
+                rewritten_at=220,
+            )
+
+            self.assertEqual(recovered.filemap, promoted)
+            self.assertFalse((root / "filemap.json.tmp").exists())
+            self.assertEqual(load_tombstone_ledger(ledger_path), [])
+
+    def test_recover_filemap_rewrite_convergence_rebuilds_when_tmp_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            filemap_path = root / "filemap.json"
+            ledger_path = root / "tombstone-ledger.jsonl"
+            current = FileMapDocument(
+                vault_id="vault_pkb_001",
+                updated_at=90,
+                files=[
+                    FileRecord(
+                        file_id="file_live",
+                        path="Notes/Live Old.md",
+                        type="note",
+                        status="active",
+                        updated_at=80,
+                        content_hash="sha256:old",
+                        last_known_revision=6,
+                    )
+                ],
+            )
+            write_filemap_atomic(filemap_path, current)
+            (root / "filemap.json.tmp").write_text("{broken", encoding="utf-8")
+            manifest = ManifestRecord(
+                vault_id="vault_pkb_001",
+                revision=8,
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                created_at=200,
+                summary_hash="sha256:manifest8",
+                files=[
+                    ManifestFileEntry(
+                        file_id="file_live",
+                        path="Notes/Live.md",
+                        type="note",
+                        content_hash="sha256:new",
+                        blob_id="blob_live",
+                        size=128,
+                        mtime=180,
+                    )
+                ],
+                tombstones=[
+                    TombstoneRecord(
+                        file_id="file_remote_deleted",
+                        deleted_revision=8,
+                        deleted_at=150,
+                        local_delete_seq=0,
+                        last_known_path="Notes/Remote Deleted.md",
+                    )
+                ],
+            )
+
+            recovered = recover_filemap_rewrite_convergence(
+                filemap_path,
+                ledger_path,
+                current,
+                manifest,
+                local_tombstones=[],
+                rewritten_at=220,
+            )
+
+            self.assertEqual(
+                [item.file_id for item in recovered.filemap.sorted_files()],
+                ["file_live", "file_remote_deleted"],
+            )
+            self.assertEqual(
+                [item.file_id for item in load_filemap(filemap_path).sorted_files()],
+                ["file_live", "file_remote_deleted"],
+            )
+            self.assertEqual(
+                [item.file_id for item in load_tombstone_ledger(ledger_path)],
+                ["file_remote_deleted"],
             )
 
 
