@@ -194,6 +194,24 @@ class LocalCommitRecoveryResult:
     moved_staging_paths: list[Path]
 
 
+@dataclass(frozen=True)
+class RevisionMetadata:
+    revision: int
+    commit_intent_id: str
+    intent_manifest_hash: str
+    created_by_device: str
+    created_at: int
+
+
+@dataclass(frozen=True)
+class SubmittedConfirmationPlan:
+    mode: str
+    observed_head_revision: int
+    matched_revision: Optional[int]
+    scan_from_revision: Optional[int]
+    scan_to_revision: Optional[int]
+
+
 def prepare_commit_intent(
     connection: sqlite3.Connection,
     *,
@@ -467,3 +485,51 @@ def recover_local_commit_state(
         )
 
     raise ValueError("local commit recovery requires remote confirmation for submitted journal state")
+
+
+def plan_submitted_confirmation(
+    journal: CommitIntentJournalRecord,
+    *,
+    observed_head_revision: int,
+    head_commit_intent_id: str,
+) -> SubmittedConfirmationPlan:
+    if observed_head_revision < journal.base_revision:
+        raise ValueError("observed_head_revision cannot be older than journal.base_revision")
+
+    if head_commit_intent_id == journal.commit_intent_id:
+        return SubmittedConfirmationPlan(
+            mode="head_match",
+            observed_head_revision=observed_head_revision,
+            matched_revision=observed_head_revision,
+            scan_from_revision=None,
+            scan_to_revision=None,
+        )
+
+    scan_from_revision = journal.base_revision + 1
+    if scan_from_revision > observed_head_revision:
+        return SubmittedConfirmationPlan(
+            mode="miss",
+            observed_head_revision=observed_head_revision,
+            matched_revision=None,
+            scan_from_revision=None,
+            scan_to_revision=None,
+        )
+
+    return SubmittedConfirmationPlan(
+        mode="scan_range",
+        observed_head_revision=observed_head_revision,
+        matched_revision=None,
+        scan_from_revision=scan_from_revision,
+        scan_to_revision=observed_head_revision,
+    )
+
+
+def find_matching_revision_metadata(
+    revisions: Iterable[RevisionMetadata],
+    *,
+    commit_intent_id: str,
+) -> Optional[RevisionMetadata]:
+    for record in revisions:
+        if record.commit_intent_id == commit_intent_id:
+            return record
+    return None
