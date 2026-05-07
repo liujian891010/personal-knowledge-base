@@ -14,6 +14,7 @@ from .constants import (
     NOTEAPP_DIRNAME,
     NOTES_DIRNAME,
     SYNCED_DIRS,
+    TOMBSTONE_LEDGER_FILENAME,
     VAULTINFO_FILENAME,
 )
 from .filemap import write_filemap_atomic
@@ -66,4 +67,7 @@ def initialize_vault(root: Path, vault_id: Optional[str] = None, now_ms: Optiona
 
     filemap_path = root / NOTEAPP_DIRNAME / FILEMAP_FILENAME
     write_filemap_atomic(filemap_path, document)
+    tombstone_ledger_path = root / NOTEAPP_DIRNAME / TOMBSTONE_LEDGER_FILENAME
+    if not tombstone_ledger_path.exists():
+        tombstone_ledger_path.write_text("", encoding="utf-8")
     return document

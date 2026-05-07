@@ -26,6 +26,13 @@ def _require_non_negative_int(name: str, value: Optional[int], allow_none: bool 
         raise ValueError(f"{name} must be a non-negative integer")
 
 
+def _require_positive_int(name: str, value: Optional[int], allow_none: bool = False) -> None:
+    if value is None and allow_none:
+        return
+    if not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+
+
 @dataclass(frozen=True)
 class FileRecord:
     file_id: str
@@ -131,4 +138,49 @@ class FileMapDocument:
             updated_at=updated_at,
             files=list(files),
             meta=self.meta,
+        )
+
+
+@dataclass(frozen=True)
+class TombstoneRecord:
+    file_id: str
+    deleted_revision: Optional[int]
+    deleted_at: int
+    local_delete_seq: int
+    last_known_path: Optional[str] = None
+    deleted_by_device: Optional[str] = None
+    meta: Optional[Dict[str, Any]] = None
+
+    def __post_init__(self) -> None:
+        if not self.file_id:
+            raise ValueError("file_id must be non-empty")
+        _require_positive_int("local_delete_seq", self.local_delete_seq)
+        _require_non_negative_int("deleted_at", self.deleted_at)
+        _require_positive_int("deleted_revision", self.deleted_revision, allow_none=True)
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "file_id": self.file_id,
+            "deleted_revision": self.deleted_revision,
+            "deleted_at": self.deleted_at,
+            "local_delete_seq": self.local_delete_seq,
+        }
+        if self.last_known_path is not None:
+            payload["last_known_path"] = self.last_known_path
+        if self.deleted_by_device is not None:
+            payload["deleted_by_device"] = self.deleted_by_device
+        if self.meta is not None:
+            payload["meta"] = self.meta
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "TombstoneRecord":
+        return cls(
+            file_id=payload["file_id"],
+            deleted_revision=payload.get("deleted_revision"),
+            deleted_at=payload["deleted_at"],
+            local_delete_seq=payload["local_delete_seq"],
+            last_known_path=payload.get("last_known_path"),
+            deleted_by_device=payload.get("deleted_by_device"),
+            meta=payload.get("meta"),
         )
