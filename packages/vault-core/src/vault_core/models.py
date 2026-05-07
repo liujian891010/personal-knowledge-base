@@ -18,6 +18,15 @@ VALID_FILE_STATUSES = {
     "conflict_copy",
 }
 
+VALID_WIKI_TASK_STATUSES = {
+    "pending",
+    "running",
+    "done",
+    "failed",
+    "skipped",
+    "superseded",
+}
+
 
 def _require_non_negative_int(name: str, value: Optional[int], allow_none: bool = False) -> None:
     if value is None and allow_none:
@@ -184,3 +193,76 @@ class TombstoneRecord:
             deleted_by_device=payload.get("deleted_by_device"),
             meta=payload.get("meta"),
         )
+
+
+@dataclass(frozen=True)
+class VaultStateRecord:
+    vault_id: str
+    last_applied_revision: int
+    remote_head_revision: int
+    acked_revision: int
+    pending_ack_to_server: List[int]
+    commit_in_progress: bool
+    last_manifest_summary: Optional[str]
+    last_manifest_summary_status: str
+    local_delete_sequence: int
+    has_unresolved_conflicts: bool = False
+    schema_version: str = "v1"
+    meta: Optional[Dict[str, Any]] = None
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "v1":
+            raise ValueError("unsupported schema_version")
+        if not self.vault_id:
+            raise ValueError("vault_id must be non-empty")
+        _require_non_negative_int("last_applied_revision", self.last_applied_revision)
+        _require_non_negative_int("remote_head_revision", self.remote_head_revision)
+        _require_non_negative_int("acked_revision", self.acked_revision)
+        _require_non_negative_int("local_delete_sequence", self.local_delete_sequence)
+        if self.last_manifest_summary_status not in {"valid", "missing", "stale"}:
+            raise ValueError("unsupported last_manifest_summary_status")
+        for revision in self.pending_ack_to_server:
+            _require_positive_int("pending_ack_to_server revision", revision)
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "schema_version": self.schema_version,
+            "vault_id": self.vault_id,
+            "last_applied_revision": self.last_applied_revision,
+            "remote_head_revision": self.remote_head_revision,
+            "acked_revision": self.acked_revision,
+            "pending_ack_to_server": list(self.pending_ack_to_server),
+            "commit_in_progress": self.commit_in_progress,
+            "last_manifest_summary": self.last_manifest_summary,
+            "last_manifest_summary_status": self.last_manifest_summary_status,
+            "local_delete_sequence": self.local_delete_sequence,
+            "has_unresolved_conflicts": self.has_unresolved_conflicts,
+        }
+        if self.meta is not None:
+            payload["meta"] = self.meta
+        return payload
+
+
+@dataclass(frozen=True)
+class WikiTaskRecord:
+    task_id: str
+    target_wiki_path: str
+    task_base_page_hash: Optional[str]
+    task_base_revision: int
+    task_sources_hash: str
+    status: str
+    created_at: int
+    updated_at: int
+
+    def __post_init__(self) -> None:
+        if not self.task_id:
+            raise ValueError("task_id must be non-empty")
+        if not self.target_wiki_path:
+            raise ValueError("target_wiki_path must be non-empty")
+        if not self.task_sources_hash:
+            raise ValueError("task_sources_hash must be non-empty")
+        if self.status not in VALID_WIKI_TASK_STATUSES:
+            raise ValueError(f"unsupported wiki task status: {self.status}")
+        _require_non_negative_int("task_base_revision", self.task_base_revision)
+        _require_non_negative_int("created_at", self.created_at)
+        _require_non_negative_int("updated_at", self.updated_at)

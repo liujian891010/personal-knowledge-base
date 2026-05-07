@@ -10,3 +10,6 @@
 6. 删除操作对 `filemap` 和 tombstone 的联动
 7. 新建 / 改名 / 冲突副本登记
 8. 冲突副本命名和 orphan 隔离路径
+9. SQLite schema bootstrap
+10. `vault_state` round-trip
+11. `wiki_tasks` 活跃路径唯一约束
