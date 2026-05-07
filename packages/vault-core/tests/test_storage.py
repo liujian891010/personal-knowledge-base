@@ -38,6 +38,7 @@ from vault_core import (
     recover_submitted_commit_miss,
     recover_sync_apply_finalizing_state,
     recover_filemap,
+    persist_manifest_convergence,
     replace_active_wiki_task,
     register_conflict_copy,
     rename_file,
@@ -946,6 +947,99 @@ class VaultCoreStorageTests(unittest.TestCase):
             [item.file_id for item in converged.filemap.files if item.status == "deleted"],
             ["file_pending_delete"],
         )
+
+    def test_persist_manifest_convergence_writes_filemap_and_compacted_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            filemap_path = root / "filemap.json"
+            ledger_path = root / "tombstone-ledger.jsonl"
+            current = FileMapDocument(
+                vault_id="vault_pkb_001",
+                updated_at=90,
+                files=[
+                    FileRecord(
+                        file_id="file_live",
+                        path="Notes/Live Old.md",
+                        type="note",
+                        status="active",
+                        updated_at=80,
+                        content_hash="sha256:old",
+                        last_known_revision=6,
+                    ),
+                    FileRecord(
+                        file_id="file_pending_delete",
+                        path="Notes/Pending Delete.md",
+                        type="note",
+                        status="deleted",
+                        updated_at=79,
+                        last_known_revision=None,
+                    ),
+                ],
+            )
+            manifest = ManifestRecord(
+                vault_id="vault_pkb_001",
+                revision=8,
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                created_at=200,
+                summary_hash="sha256:manifest8",
+                files=[
+                    ManifestFileEntry(
+                        file_id="file_live",
+                        path="Notes/Live.md",
+                        type="note",
+                        content_hash="sha256:new",
+                        blob_id="blob_live",
+                        size=128,
+                        mtime=180,
+                    )
+                ],
+                tombstones=[
+                    TombstoneRecord(
+                        file_id="file_remote_deleted",
+                        deleted_revision=8,
+                        deleted_at=150,
+                        local_delete_seq=0,
+                        last_known_path="Notes/Remote Deleted.md",
+                    )
+                ],
+            )
+            local_tombstones = [
+                TombstoneRecord(
+                    file_id="file_gc_candidate",
+                    deleted_revision=7,
+                    deleted_at=120,
+                    local_delete_seq=4,
+                    last_known_path="Notes/GC Candidate.md",
+                ),
+                TombstoneRecord(
+                    file_id="file_pending_delete",
+                    deleted_revision=None,
+                    deleted_at=121,
+                    local_delete_seq=5,
+                    last_known_path="Notes/Pending Delete.md",
+                ),
+            ]
+
+            persisted = persist_manifest_convergence(
+                filemap_path,
+                ledger_path,
+                current,
+                manifest,
+                local_tombstones=local_tombstones,
+                rewritten_at=220,
+            )
+
+            self.assertEqual([item.file_id for item in persisted.reclaimed_tombstones], ["file_gc_candidate"])
+            self.assertEqual(
+                [item.file_id for item in load_tombstone_ledger(ledger_path)],
+                ["file_remote_deleted", "file_pending_delete"],
+            )
+            loaded_filemap = load_filemap(filemap_path)
+            self.assertEqual(
+                [item.file_id for item in loaded_filemap.sorted_files()],
+                ["file_live", "file_pending_delete", "file_remote_deleted"],
+            )
 
 
 if __name__ == "__main__":
