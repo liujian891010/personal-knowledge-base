@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
@@ -62,6 +63,35 @@ def _build_manifest_file_entry(record: FileRecord) -> ManifestFileEntry:
     )
 
 
+def _normalize_commit_path(path: str) -> str:
+    return unicodedata.normalize("NFC", path)
+
+
+def _validate_commit_document_paths(document: FileMapDocument) -> None:
+    active_paths: dict[str, str] = {}
+    for record in document.files:
+        if record.status != "active":
+            continue
+        normalized_path = _normalize_commit_path(record.path)
+        previous_file_id = active_paths.get(normalized_path)
+        if previous_file_id is not None:
+            raise ValueError(
+                "active file paths collide after NFC normalization: "
+                f"{previous_file_id}, {record.file_id}"
+            )
+        active_paths[normalized_path] = record.file_id
+
+    for record in document.files:
+        if record.status != "conflict_copy":
+            continue
+        normalized_path = _normalize_commit_path(record.path)
+        if normalized_path in active_paths:
+            raise ValueError(
+                "conflict copy path overlaps active file path after NFC normalization: "
+                f"{record.file_id}"
+            )
+
+
 def build_commit_manifest(
     document: FileMapDocument,
     *,
@@ -70,6 +100,7 @@ def build_commit_manifest(
     created_by_device: str,
     created_at: int,
 ) -> ManifestRecord:
+    _validate_commit_document_paths(document)
     tombstone_list = list(tombstones)
     tombstone_ids = {record.file_id for record in tombstone_list}
     deleted_ids = {
