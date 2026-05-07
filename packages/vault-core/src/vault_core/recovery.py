@@ -105,6 +105,10 @@ def apply_prepared_commit_recovery(state: VaultStateRecord) -> VaultStateRecord:
     )
 
 
+def apply_orphaned_commit_lock_recovery(state: VaultStateRecord) -> VaultStateRecord:
+    return apply_prepared_commit_recovery(state)
+
+
 def apply_commit_success_state(
     state: VaultStateRecord,
     *,
