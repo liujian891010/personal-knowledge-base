@@ -21,11 +21,15 @@ from .recovery import apply_committed_tombstones, should_block_new_commit
 from .sqlite_store import (
     finalize_committed_state,
     load_commit_intent_journal,
+    load_vault_state,
     recover_prepared_commit_cleanup,
     recover_submitted_commit_miss,
     upsert_commit_intent_journal,
     upsert_vault_state,
 )
+
+
+PENDING_INTENT_MANIFEST_HASH = "pending"
 
 
 def _manifest_file_meta(record: FileRecord) -> Mapping[str, object]:
@@ -155,10 +159,94 @@ class CommitSubmissionBundle:
 
 
 @dataclass(frozen=True)
+class CommitPreparationBundle:
+    journal: CommitIntentJournalRecord
+    state: VaultStateRecord
+
+
+@dataclass(frozen=True)
 class CommitFinalizeResult:
     manifest: ManifestRecord
     tombstones: list[TombstoneRecord]
     state: VaultStateRecord
+
+
+def prepare_commit_intent(
+    connection: sqlite3.Connection,
+    *,
+    state: VaultStateRecord,
+    commit_intent_id: str,
+    created_by_device: str,
+    created_at: int,
+) -> CommitPreparationBundle:
+    has_active_commit_journal = load_commit_intent_journal(connection, state.vault_id) is not None
+    if should_block_new_commit(state, has_active_commit_journal=has_active_commit_journal):
+        raise ValueError("vault_state is not eligible to start a new commit")
+
+    journal = CommitIntentJournalRecord(
+        vault_id=state.vault_id,
+        commit_intent_id=commit_intent_id,
+        intent_manifest_hash=PENDING_INTENT_MANIFEST_HASH,
+        base_revision=state.last_applied_revision,
+        created_by_device=created_by_device,
+        status="prepared",
+        created_at=created_at,
+        updated_at=created_at,
+        intent_delete_seq_upper_bound=state.local_delete_sequence,
+    )
+    updated_state = apply_commit_submitted_state(state)
+    upsert_commit_intent_journal(connection, journal)
+    upsert_vault_state(connection, updated_state)
+    return CommitPreparationBundle(
+        journal=journal,
+        state=updated_state,
+    )
+
+
+def submit_prepared_commit(
+    connection: sqlite3.Connection,
+    *,
+    vault_id: str,
+    document: FileMapDocument,
+    tombstones: Iterable[TombstoneRecord],
+    submitted_at: int,
+) -> CommitSubmissionBundle:
+    journal = load_commit_intent_journal(connection, vault_id)
+    if journal is None:
+        raise KeyError(f"commit_intent_journal not found: {vault_id}")
+    if journal.status != "prepared":
+        raise ValueError("prepared journal is required before submitting a commit")
+
+    state = load_vault_state(connection, vault_id)
+    if state is None:
+        raise KeyError(f"vault_state not found: {vault_id}")
+
+    manifest = build_commit_manifest(
+        document,
+        tombstones=tombstones,
+        base_revision=journal.base_revision,
+        created_by_device=journal.created_by_device,
+        created_at=journal.created_at,
+    )
+    intent_manifest_hash = compute_intent_manifest_hash(manifest)
+    submitted_journal = CommitIntentJournalRecord(
+        vault_id=journal.vault_id,
+        commit_intent_id=journal.commit_intent_id,
+        intent_manifest_hash=intent_manifest_hash,
+        base_revision=journal.base_revision,
+        created_by_device=journal.created_by_device,
+        status="submitted",
+        created_at=journal.created_at,
+        updated_at=submitted_at,
+        intent_delete_seq_upper_bound=journal.intent_delete_seq_upper_bound,
+    )
+    upsert_commit_intent_journal(connection, submitted_journal)
+    return CommitSubmissionBundle(
+        manifest=manifest,
+        intent_manifest_hash=intent_manifest_hash,
+        journal=submitted_journal,
+        state=state,
+    )
 
 
 def prepare_commit_submission(
@@ -171,37 +259,19 @@ def prepare_commit_submission(
     created_by_device: str,
     created_at: int,
 ) -> CommitSubmissionBundle:
-    has_active_commit_journal = load_commit_intent_journal(connection, state.vault_id) is not None
-    if should_block_new_commit(state, has_active_commit_journal=has_active_commit_journal):
-        raise ValueError("vault_state is not eligible to start a new commit")
-
-    manifest = build_commit_manifest(
-        document,
-        tombstones=tombstones,
-        base_revision=state.last_applied_revision,
-        created_by_device=created_by_device,
-        created_at=created_at,
-    )
-    intent_manifest_hash = compute_intent_manifest_hash(manifest)
-    journal = CommitIntentJournalRecord(
-        vault_id=state.vault_id,
+    prepare_commit_intent(
+        connection,
+        state=state,
         commit_intent_id=commit_intent_id,
-        intent_manifest_hash=intent_manifest_hash,
-        base_revision=state.last_applied_revision,
         created_by_device=created_by_device,
-        status="submitted",
         created_at=created_at,
-        updated_at=created_at,
-        intent_delete_seq_upper_bound=state.local_delete_sequence,
     )
-    updated_state = apply_commit_submitted_state(state)
-    upsert_commit_intent_journal(connection, journal)
-    upsert_vault_state(connection, updated_state)
-    return CommitSubmissionBundle(
-        manifest=manifest,
-        intent_manifest_hash=intent_manifest_hash,
-        journal=journal,
-        state=updated_state,
+    return submit_prepared_commit(
+        connection,
+        vault_id=state.vault_id,
+        document=document,
+        tombstones=tombstones,
+        submitted_at=created_at,
     )
 
 

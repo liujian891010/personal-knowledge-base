@@ -49,13 +49,16 @@ from .recovery import (
 from .sync_apply import AppliedManifestResult, SubmittedRecoveryResult, apply_pulled_manifest, recover_submitted_commit_flow
 from .sync_commit import (
     CommitFinalizeResult,
+    CommitPreparationBundle,
     CommitSubmissionBundle,
     cleanup_failed_commit_submission,
     finalize_commit_submission,
     apply_commit_submitted_state,
     build_commit_manifest,
     finalize_commit_manifest,
+    prepare_commit_intent,
     prepare_commit_submission,
+    submit_prepared_commit,
 )
 from .sync_plan import ReconcilePlan, plan_pull_reconcile
 from .sync_reconcile import ReconcileResult, execute_pull_reconcile
@@ -96,6 +99,7 @@ __all__ = [
     "ManifestRecord",
     "AppliedManifestResult",
     "CommitFinalizeResult",
+    "CommitPreparationBundle",
     "CommitSubmissionBundle",
     "ReconcileResult",
     "ReconcilePlan",
@@ -146,6 +150,7 @@ __all__ = [
     "persist_manifest_convergence",
     "plan_pull_reconcile",
     "prepare_commit_submission",
+    "prepare_commit_intent",
     "recover_prepared_commit_cleanup",
     "recover_filemap",
     "recover_filemap_rewrite_convergence",
@@ -164,6 +169,7 @@ __all__ = [
     "select_pending_tombstones_for_commit",
     "serialize_manifest_canonical",
     "should_block_new_commit",
+    "submit_prepared_commit",
     "upsert_commit_intent_journal",
     "upsert_file_index_entry",
     "upsert_sync_apply_journal",
