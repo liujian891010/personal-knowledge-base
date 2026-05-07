@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Iterable, List
 
+from .filemap import write_filemap_atomic
+from .ledger import rewrite_tombstone_ledger
 from .models import FileMapDocument, FileRecord, ManifestRecord, TombstoneRecord
 
 
@@ -158,7 +161,10 @@ def converge_manifest_state(
         target_revision=manifest.revision,
     )
     reclaimed_ids = {record.file_id for record in reclaimed}
-    retained = [record for record in merged_tombstones if record.file_id not in reclaimed_ids]
+    retained = sorted(
+        (record for record in merged_tombstones if record.file_id not in reclaimed_ids),
+        key=lambda item: (item.local_delete_seq, item.file_id),
+    )
     rebuilt = rebuild_filemap_from_manifest(
         current_document,
         manifest,
@@ -170,3 +176,23 @@ def converge_manifest_state(
         tombstones=retained,
         reclaimed_tombstones=reclaimed,
     )
+
+
+def persist_manifest_convergence(
+    filemap_path: Path,
+    ledger_path: Path,
+    current_document: FileMapDocument,
+    manifest: ManifestRecord,
+    *,
+    local_tombstones: Iterable[TombstoneRecord],
+    rewritten_at: int,
+) -> ManifestConvergenceResult:
+    result = converge_manifest_state(
+        current_document,
+        manifest,
+        local_tombstones=local_tombstones,
+        rewritten_at=rewritten_at,
+    )
+    write_filemap_atomic(filemap_path, result.filemap)
+    rewrite_tombstone_ledger(ledger_path, result.tombstones)
+    return result

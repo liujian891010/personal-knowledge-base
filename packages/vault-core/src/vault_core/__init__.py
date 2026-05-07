@@ -2,6 +2,7 @@ from .convergence import (
     ManifestConvergenceResult,
     converge_manifest_state,
     merge_manifest_tombstones,
+    persist_manifest_convergence,
     rebuild_filemap_from_manifest,
     select_reclaimable_tombstones,
 )
@@ -87,6 +88,7 @@ __all__ = [
     "normalize_legacy_acknowledged_commit_intent",
     "normalize_commit_journal_for_recovery",
     "open_database",
+    "persist_manifest_convergence",
     "recover_prepared_commit_cleanup",
     "recover_filemap",
     "recover_submitted_commit_match",
