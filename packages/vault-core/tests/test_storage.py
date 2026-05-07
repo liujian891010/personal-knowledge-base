@@ -10,6 +10,8 @@ from vault_core import (
     EMPTY_VAULT_FINAL_MANIFEST_SUMMARY,
     AppliedManifestResult,
     BlobStagingMaterializationResult,
+    CommitSnapshotEntry,
+    CommitSnapshotTable,
     CommitRecoveryExecutionResult,
     CommitFinalizeCleanupResult,
     ContentSnapshotMaterializationResult,
@@ -52,6 +54,7 @@ from vault_core import (
     abort_drifted_commit_snapshot,
     build_commit_manifest,
     build_commit_manifest_from_snapshot_plan,
+    build_commit_snapshot_table,
     build_content_snapshot_plan,
     cleanup_commit_staging_artifacts,
     cleanup_failed_commit_submission,
@@ -1462,6 +1465,147 @@ class VaultCoreStorageTests(unittest.TestCase):
 
             self.assertFalse((root / ".noteapp" / "staging" / "blob_first.blob.staging").exists())
             self.assertFalse((root / ".noteapp" / "staging" / "blob_second.blob.staging").exists())
+
+    def test_build_commit_snapshot_table_collects_frozen_staged_entries(self) -> None:
+        payload = b"# frozen snapshot\n"
+        encrypted_payload = b"x" * (len(payload) + 16)
+        content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018591,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018581,
+                    content_hash=content_hash,
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": len(payload),
+                        "mtime": 1770000018571,
+                        "mime_type": "text/markdown",
+                    },
+                )
+            ],
+        )
+        plan = build_content_snapshot_plan(
+            document,
+            base_revision=7,
+            created_at=1770000018592,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            snapshots = materialize_content_snapshot_plan(
+                root,
+                plan=plan,
+                document=document,
+                content_by_file_id={"file_live": payload},
+            )
+            staged = materialize_blob_staging_plan(
+                root,
+                plan=plan,
+                snapshot_materialization=snapshots,
+                encrypted_blob_by_file_id={"file_live": encrypted_payload},
+            )
+
+            table = build_commit_snapshot_table(
+                plan,
+                snapshot_materialization=snapshots,
+                blob_staging_materialization=staged,
+            )
+
+            self.assertEqual(
+                table,
+                CommitSnapshotTable(
+                    vault_id="vault_pkb_001",
+                    base_revision=7,
+                    created_at=1770000018592,
+                    entries=[
+                        CommitSnapshotEntry(
+                            file_id="file_live",
+                            path="Notes/Live.md",
+                            type="note",
+                            content_hash=content_hash,
+                            blob_id="blob_live",
+                            plaintext_size=len(payload),
+                            encrypted_size=len(encrypted_payload),
+                            mtime=1770000018571,
+                            mime_type="text/markdown",
+                            snapshot_path=(root / ".noteapp" / "staging" / "file_live.snapshot.plain").resolve(),
+                            blob_staging_path=(root / ".noteapp" / "staging" / "blob_live.blob.staging").resolve(),
+                        )
+                    ],
+                ),
+            )
+
+    def test_build_commit_snapshot_table_rejects_mismatched_blob_materialization(self) -> None:
+        payload = b"# frozen snapshot\n"
+        encrypted_payload = b"x" * (len(payload) + 16)
+        content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018593,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018583,
+                    content_hash=content_hash,
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": len(payload),
+                        "mtime": 1770000018573,
+                    },
+                )
+            ],
+        )
+        plan = build_content_snapshot_plan(
+            document,
+            base_revision=7,
+            created_at=1770000018594,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            snapshots = materialize_content_snapshot_plan(
+                root,
+                plan=plan,
+                document=document,
+                content_by_file_id={"file_live": payload},
+            )
+            staged = materialize_blob_staging_plan(
+                root,
+                plan=plan,
+                snapshot_materialization=snapshots,
+                encrypted_blob_by_file_id={"file_live": encrypted_payload},
+            )
+
+            tampered_staged = BlobStagingMaterializationResult(
+                snapshot_plan=staged.snapshot_plan,
+                files=[
+                    MaterializedBlobStagingFile(
+                        file_id="file_live",
+                        blob_id="blob_live_tampered",
+                        snapshot_path=staged.files[0].snapshot_path,
+                        blob_staging_path=staged.files[0].blob_staging_path,
+                        content_hash=staged.files[0].content_hash,
+                        plaintext_size=staged.files[0].plaintext_size,
+                        encrypted_size=staged.files[0].encrypted_size,
+                    )
+                ],
+            )
+
+            with self.assertRaisesRegex(ValueError, "materialized blob id mismatch for file_id file_live"):
+                build_commit_snapshot_table(
+                    plan,
+                    snapshot_materialization=snapshots,
+                    blob_staging_materialization=tampered_staged,
+                )
 
     def test_cleanup_commit_staging_artifacts_removes_only_snapshot_and_blob_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
