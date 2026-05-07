@@ -1,18 +1,26 @@
 import json
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 from vault_core import (
     FileMapDocument,
     FileRecord,
+    add_file,
+    allocate_conflict_copy_path,
     TombstoneRecord,
     append_tombstone,
     initialize_vault,
     load_filemap,
     load_tombstone_ledger,
     mark_deleted,
+    move_conflict_orphan,
+    move_staging_orphan,
     recover_filemap,
+    register_conflict_copy,
+    rename_file,
+    sanitize_device_name,
     write_filemap_atomic,
 )
 
@@ -193,6 +201,97 @@ class VaultCoreStorageTests(unittest.TestCase):
         self.assertEqual(updated_document.files[0].last_known_revision, 7)
         self.assertEqual(tombstone.local_delete_seq, 19)
         self.assertEqual(tombstone.last_known_path, "Notes/Architecture/Sync Design.md")
+
+    def test_add_file_and_rename_file_update_filemap(self) -> None:
+        document = FileMapDocument(vault_id="vault_pkb_001", updated_at=1770000000000, files=[])
+
+        created = add_file(
+            document,
+            file_id="file_note_a",
+            path="Notes/A.md",
+            type="note",
+            updated_at=1770000010000,
+        )
+        renamed = rename_file(
+            created,
+            file_id="file_note_a",
+            new_path="Notes/Architecture/A.md",
+            updated_at=1770000011000,
+        )
+
+        self.assertEqual(created.files[0].status, "active")
+        self.assertEqual(renamed.files[0].path, "Notes/Architecture/A.md")
+        self.assertEqual(renamed.updated_at, 1770000011000)
+
+    def test_register_conflict_copy_creates_secondary_record(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000010000,
+            files=[
+                FileRecord(
+                    file_id="file_note_a",
+                    path="Notes/A.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000010000,
+                )
+            ],
+        )
+
+        updated = register_conflict_copy(
+            document,
+            source_file_id="file_note_a",
+            conflict_file_id="file_note_a_conflict",
+            conflict_path="Notes/A (conflict 2026-04-29 Desktop-Win).md",
+            updated_at=1770000012000,
+        )
+
+        self.assertEqual(len(updated.files), 2)
+        conflict = [record for record in updated.files if record.status == "conflict_copy"][0]
+        self.assertEqual(conflict.conflict_source_file_id, "file_note_a")
+
+    def test_allocate_conflict_copy_path_sanitizes_device_and_avoids_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original = Path(tmpdir) / "Notes" / "A.md"
+            original.parent.mkdir(parents=True, exist_ok=True)
+            first = original.parent / "A (conflict 2026-04-29 Desktop-Win-01).md"
+            first.write_text("existing", encoding="utf-8")
+
+            candidate = allocate_conflict_copy_path(
+                original,
+                conflict_date=date(2026, 4, 29),
+                device_name="Desktop*Win?01",
+            )
+
+            self.assertEqual(candidate.name, "A (conflict 2026-04-29 Desktop-Win-01) 2.md")
+            self.assertEqual(sanitize_device_name("Desktop*Win?01"), "Desktop-Win-01")
+
+    def test_move_staging_orphan_rehomes_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "vault"
+            initialize_vault(root, vault_id="vault_pkb_001", now_ms=1770000020000)
+            staging_file = root / ".noteapp" / "staging" / "abc.staging"
+            staging_file.write_text("payload", encoding="utf-8")
+
+            target = move_staging_orphan(root, staging_file)
+
+            self.assertFalse(staging_file.exists())
+            self.assertTrue(target.exists())
+            self.assertEqual(target.parent.name, "staging-orphans")
+
+    def test_move_conflict_orphan_rehomes_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "vault"
+            notes_dir = root / "Notes"
+            notes_dir.mkdir(parents=True, exist_ok=True)
+            conflict_file = notes_dir / "A (conflict 2026-04-29 Desktop-Win).md"
+            conflict_file.write_text("payload", encoding="utf-8")
+
+            target = move_conflict_orphan(root, conflict_file)
+
+            self.assertFalse(conflict_file.exists())
+            self.assertTrue(target.exists())
+            self.assertEqual(target.parent.name, "conflict-orphans")
 
 
 if __name__ == "__main__":

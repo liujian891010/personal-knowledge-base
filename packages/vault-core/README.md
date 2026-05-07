@@ -15,4 +15,10 @@
 2. legacy ledger 缺失 `local_delete_seq` 的启动补号
 3. 删除操作到 `filemap` + tombstone 的联动语义
 
+当前 phase 3 继续补齐：
+
+1. 新建 / 改名 / 移动的 `filemap` 变更 API
+2. 冲突副本命名与去重
+3. `staging-orphans/` 与 `conflict-orphans/` 隔离 helper
+
 后续阶段再在此基础上补 journal、pull / commit 恢复和 SQLite 联调。
