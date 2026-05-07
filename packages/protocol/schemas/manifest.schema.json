@@ -1,15 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manifest",
-  "description": "Canonical synced manifest for a vault revision.",
+  "description": "Canonical synced manifest snapshot exported from filemap.json for one vault revision.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "vault_id",
     "revision",
+    "base_revision",
+    "created_by_device",
+    "created_at",
     "files",
-    "tombstones"
+    "tombstones",
+    "summary_hash"
   ],
   "properties": {
     "schema_version": {
@@ -23,6 +27,20 @@
     "revision": {
       "type": "integer",
       "minimum": 0
+    },
+    "base_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Revision the client last fully applied before creating this manifest."
+    },
+    "created_by_device": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "UTC Unix timestamp in milliseconds."
     },
     "files": {
       "type": "array",
@@ -55,7 +73,10 @@
         "file_id",
         "path",
         "type",
-        "content_hash"
+        "content_hash",
+        "blob_id",
+        "size",
+        "mtime"
       ],
       "properties": {
         "file_id": {
@@ -87,6 +108,11 @@
         "size": {
           "type": "integer",
           "minimum": 0
+        },
+        "mtime": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Source device local write time, stored as UTC Unix timestamp in milliseconds."
         },
         "mime_type": {
           "type": "string",

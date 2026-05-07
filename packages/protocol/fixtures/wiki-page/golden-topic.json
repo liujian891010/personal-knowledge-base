@@ -1,0 +1,51 @@
+{
+  "schema_version": "v1",
+  "title": "LLM Wiki",
+  "page_type": "topic",
+  "summary": "LLM Wiki 是一种先把原始资料编译成知识页，再基于知识页执行问答与整理的知识库路线。",
+  "body_markdown": "## Core Idea\n\n先编译，再问答。\n\n## Why It Matters\n\n它让 AI 产物成为可审计、可迭代的知识资产。",
+  "source_refs": [
+    {
+      "source_type": "note",
+      "file_id": "file_note_architecture",
+      "path": "Notes/Architecture/Sync Design.md",
+      "content_hash": "sha256:3f2e1df0d6eb1f2268dfe290e4a0d4eaa24f7c999f82c4fa5850c973d771f54b",
+      "locator": "## AI Knowledge Layer"
+    },
+    {
+      "source_type": "external",
+      "path": "https://example.com/llm-wiki",
+      "locator": "section-2"
+    }
+  ],
+  "tags": [
+    "knowledge-base",
+    "llm"
+  ],
+  "outline": [
+    {
+      "heading": "Core Idea",
+      "level": 2
+    },
+    {
+      "heading": "Why It Matters",
+      "level": 2
+    }
+  ],
+  "related_pages": [
+    {
+      "title": "Knowledge Compiler",
+      "path": ".ai/wiki/Knowledge Compiler.md"
+    }
+  ],
+  "updated_at": "2026-05-07T06:00:00Z",
+  "ai_generated": true,
+  "user_edited": false,
+  "locked": false,
+  "last_ai_compiled_at": "2026-05-07T05:59:00Z",
+  "last_compiled_from_sources_hash": "sha256:f37767510ecf26765fd2821fa15179957a8c84f3ce9ef6f10bd176af76d8eb52",
+  "last_synced_revision": 7,
+  "meta": {
+    "generated_by": "ag06-compile-worker"
+  }
+}

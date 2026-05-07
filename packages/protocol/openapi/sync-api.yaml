@@ -379,6 +379,7 @@ components:
         base_revision:
           type: integer
           minimum: 0
+          description: Must exactly match manifest.base_revision.
         created_by_device:
           type: string
         intent_manifest_hash:
@@ -664,8 +665,12 @@ components:
         - schema_version
         - vault_id
         - revision
+        - base_revision
+        - created_by_device
+        - created_at
         - files
         - tombstones
+        - summary_hash
       properties:
         schema_version:
           type: string
@@ -674,6 +679,15 @@ components:
           type: string
           minLength: 1
         revision:
+          type: integer
+          minimum: 0
+        base_revision:
+          type: integer
+          minimum: 0
+        created_by_device:
+          type: string
+          minLength: 1
+        created_at:
           type: integer
           minimum: 0
         files:
@@ -696,6 +710,9 @@ components:
         - path
         - type
         - content_hash
+        - blob_id
+        - size
+        - mtime
       properties:
         file_id:
           type: string
@@ -713,6 +730,9 @@ components:
           type: string
           minLength: 1
         size:
+          type: integer
+          minimum: 0
+        mtime:
           type: integer
           minimum: 0
         mime_type:
@@ -736,9 +756,12 @@ components:
             - type: integer
               minimum: 1
             - type: 'null'
-        deleted_at:
+        deleted_by_device:
           type: string
-          format: date-time
+          minLength: 1
+        deleted_at:
+          type: integer
+          minimum: 0
         local_delete_seq:
           type: integer
           minimum: 1
