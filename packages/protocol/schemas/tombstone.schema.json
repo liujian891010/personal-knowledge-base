@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tombstone",
+  "description": "Deletion marker used by sync and recovery.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "file_id",
+    "deleted_revision"
+  ],
+  "properties": {
+    "file_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "last_known_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deleted_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "Null is the only legal placeholder before the deletion is committed."
+    },
+    "deleted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "local_delete_seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

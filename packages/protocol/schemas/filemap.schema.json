@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FileMap",
+  "description": "Local authoritative file identity map.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "vault_id",
+    "files"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "vault_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fileRecord"
+      }
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "fileRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file_id",
+        "path",
+        "type",
+        "status"
+      ],
+      "properties": {
+        "file_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "note",
+            "attachment",
+            "ai_wiki",
+            "ai_index",
+            "ai_agents",
+            "conflict_copy"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "deleted",
+            "conflict_copy"
+          ]
+        },
+        "content_hash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "last_known_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "conflict_source_file_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "meta": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "conflict_copy"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "conflict_source_file_id"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

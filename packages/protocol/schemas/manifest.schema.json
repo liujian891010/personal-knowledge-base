@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manifest",
+  "description": "Canonical synced manifest for a vault revision.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "vault_id",
+    "revision",
+    "files",
+    "tombstones"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "vault_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fileEntry"
+      }
+    },
+    "tombstones": {
+      "type": "array",
+      "items": {
+        "$ref": "./tombstone.schema.json"
+      }
+    },
+    "summary_hash": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable digest of the canonical manifest."
+    },
+    "meta": {
+      "type": "object",
+      "description": "Reserved extension area. Must not affect canonical hashing unless explicitly versioned.",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "fileEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file_id",
+        "path",
+        "type",
+        "content_hash"
+      ],
+      "properties": {
+        "file_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "note",
+            "attachment",
+            "ai_wiki",
+            "ai_index",
+            "ai_agents"
+          ]
+        },
+        "content_hash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blob_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mime_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "meta": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

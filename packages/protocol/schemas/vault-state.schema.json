@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VaultState",
+  "description": "Persisted local sync runtime state for one vault.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "vault_id",
+    "last_applied_revision",
+    "remote_head_revision",
+    "acked_revision",
+    "pending_ack_to_server",
+    "commit_in_progress",
+    "last_manifest_summary",
+    "local_delete_sequence"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "vault_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "last_applied_revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "remote_head_revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "acked_revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "pending_ack_to_server": {
+      "type": "array",
+      "description": "Recommended as a set/queue of revisions awaiting POST /ack.",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "uniqueItems": true
+    },
+    "commit_in_progress": {
+      "type": "boolean"
+    },
+    "last_manifest_summary": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "local_delete_sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "has_unresolved_conflicts": {
+      "type": "boolean",
+      "default": false
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

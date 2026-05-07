@@ -1,0 +1,759 @@
+openapi: 3.0.3
+info:
+  title: NoteApp Sync API
+  version: 0.1.0
+  description: >
+    First-pass sync API contract for vault sync, device management, CAS commit,
+    blob authorization, and ack reporting.
+
+tags:
+  - name: Devices
+  - name: Vault Sync
+  - name: Blobs
+
+paths:
+  /devices/register:
+    post:
+      tags: [Devices]
+      summary: Register or refresh a device session
+      operationId: registerDevice
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterDeviceRequest'
+      responses:
+        '200':
+          description: Device registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterDeviceResponse'
+
+  /devices/{deviceId}:
+    delete:
+      tags: [Devices]
+      summary: Remove a device and revoke its future API access
+      operationId: deleteDevice
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '204':
+          description: Device removed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/head:
+    get:
+      tags: [Vault Sync]
+      summary: Get current observed remote head for a vault
+      operationId: getVaultHead
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      responses:
+        '200':
+          description: Current head revision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultHeadResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/manifests/{revision}:
+    get:
+      tags: [Vault Sync]
+      summary: Fetch a manifest for a specific revision
+      operationId: getManifestByRevision
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+        - $ref: '#/components/parameters/Revision'
+      responses:
+        '200':
+          description: Manifest payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Manifest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/commits:
+    post:
+      tags: [Vault Sync]
+      summary: Submit a CAS commit for one vault revision
+      operationId: createCommit
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCommitRequest'
+      responses:
+        '200':
+          description: Commit accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCommitResponse'
+        '409':
+          description: CAS conflict or stale base revision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommitConflictResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/commits/resolve-intent:
+    post:
+      tags: [Vault Sync]
+      summary: Resolve whether a commit intent already landed remotely
+      operationId: resolveCommitIntent
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveCommitIntentRequest'
+      responses:
+        '200':
+          description: Resolution result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveCommitIntentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/ack:
+    post:
+      tags: [Vault Sync]
+      summary: Report locally applied revisions after pull success
+      operationId: ackAppliedRevisions
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AckRequest'
+      responses:
+        '200':
+          description: Ack accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AckResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/blobs/check:
+    post:
+      tags: [Blobs]
+      summary: Check whether blobs already exist remotely
+      operationId: checkBlobs
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BlobCheckRequest'
+      responses:
+        '200':
+          description: Blob existence result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlobCheckResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/blobs/upload-init:
+    post:
+      tags: [Blobs]
+      summary: Issue short-lived upload capability for encrypted blobs
+      operationId: initBlobUpload
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadInitRequest'
+      responses:
+        '200':
+          description: Upload capability issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadInitResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/blobs/download-init:
+    post:
+      tags: [Blobs]
+      summary: Issue short-lived download capability for encrypted blobs
+      operationId: initBlobDownload
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DownloadInitRequest'
+      responses:
+        '200':
+          description: Download capability issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DownloadInitResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    VaultId:
+      name: vaultId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    DeviceId:
+      name: deviceId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    Revision:
+      name: revision
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+
+  responses:
+    Unauthorized:
+      description: Authentication required or token revoked
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Authenticated but not allowed for this resource
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    RegisterDeviceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - device_name
+        - platform
+      properties:
+        device_name:
+          type: string
+          minLength: 1
+        platform:
+          type: string
+          enum: [desktop, mobile, web]
+        app_version:
+          type: string
+        protocol_version:
+          type: string
+          default: v1
+
+    RegisterDeviceResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - device_id
+        - access_token
+      properties:
+        device_id:
+          type: string
+        access_token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+
+    VaultHeadResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - vault_id
+        - head_revision
+        - manifest_summary
+      properties:
+        vault_id:
+          type: string
+        head_revision:
+          type: integer
+          minimum: 0
+        manifest_summary:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+
+    CreateCommitRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - commit_intent_id
+        - base_revision
+        - intent_manifest_hash
+        - manifest
+      properties:
+        commit_intent_id:
+          type: string
+          minLength: 1
+        base_revision:
+          type: integer
+          minimum: 0
+        created_by_device:
+          type: string
+        intent_manifest_hash:
+          type: string
+          minLength: 1
+        intent_delete_seq_upper_bound:
+          type: integer
+          minimum: 1
+        manifest:
+          $ref: '#/components/schemas/Manifest'
+        blob_refs:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlobRef'
+
+    CreateCommitResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - vault_id
+        - new_revision
+        - head_manifest_summary
+        - acked_revision_for_device
+      properties:
+        vault_id:
+          type: string
+        new_revision:
+          type: integer
+          minimum: 1
+        head_manifest_summary:
+          type: string
+          minLength: 1
+        acked_revision_for_device:
+          type: integer
+          minimum: 1
+
+    CommitConflictResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - current_head_revision
+        - current_manifest_summary
+      properties:
+        code:
+          type: string
+          enum: [base_revision_conflict, manifest_conflict]
+        current_head_revision:
+          type: integer
+          minimum: 0
+        current_manifest_summary:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+
+    ResolveCommitIntentRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - commit_intent_id
+        - intent_manifest_hash
+      properties:
+        commit_intent_id:
+          type: string
+          minLength: 1
+        intent_manifest_hash:
+          type: string
+          minLength: 1
+
+    ResolveCommitIntentResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [found, not_found, mismatched]
+        matched_revision:
+          type: integer
+          minimum: 1
+        observed_head_revision:
+          type: integer
+          minimum: 0
+        head_manifest_summary:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+
+    AckRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - revisions
+      properties:
+        revisions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: integer
+            minimum: 1
+
+    AckResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - max_acked_revision
+      properties:
+        max_acked_revision:
+          type: integer
+          minimum: 1
+
+    BlobCheckRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - blob_ids
+      properties:
+        blob_ids:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+
+    BlobCheckResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - existing_blob_ids
+        - missing_blob_ids
+      properties:
+        existing_blob_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+        missing_blob_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+
+    UploadInitRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - blobs
+      properties:
+        blobs:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/BlobUploadRequestItem'
+
+    UploadInitResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - uploads
+      properties:
+        uploads:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlobUploadCapability'
+
+    DownloadInitRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - blob_ids
+      properties:
+        blob_ids:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+
+    DownloadInitResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - downloads
+      properties:
+        downloads:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlobDownloadCapability'
+
+    BlobUploadRequestItem:
+      type: object
+      additionalProperties: false
+      required:
+        - blob_id
+        - encrypted_size
+        - content_hash
+      properties:
+        blob_id:
+          type: string
+          minLength: 1
+        encrypted_size:
+          type: integer
+          minimum: 0
+        content_hash:
+          type: string
+          minLength: 1
+
+    BlobUploadCapability:
+      type: object
+      additionalProperties: false
+      required:
+        - blob_id
+        - upload_url
+        - expires_at
+      properties:
+        blob_id:
+          type: string
+        upload_url:
+          type: string
+          format: uri
+        method:
+          type: string
+          default: PUT
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+
+    BlobDownloadCapability:
+      type: object
+      additionalProperties: false
+      required:
+        - blob_id
+        - download_url
+        - encrypted_size
+        - expires_at
+      properties:
+        blob_id:
+          type: string
+        download_url:
+          type: string
+          format: uri
+        encrypted_size:
+          type: integer
+          minimum: 0
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+
+    BlobRef:
+      type: object
+      additionalProperties: false
+      required:
+        - blob_id
+        - file_id
+      properties:
+        blob_id:
+          type: string
+          minLength: 1
+        file_id:
+          type: string
+          minLength: 1
+
+    Manifest:
+      type: object
+      additionalProperties: false
+      required:
+        - schema_version
+        - vault_id
+        - revision
+        - files
+        - tombstones
+      properties:
+        schema_version:
+          type: string
+          enum: [v1]
+        vault_id:
+          type: string
+          minLength: 1
+        revision:
+          type: integer
+          minimum: 0
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManifestFileEntry'
+        tombstones:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tombstone'
+        summary_hash:
+          type: string
+          minLength: 1
+
+    ManifestFileEntry:
+      type: object
+      additionalProperties: false
+      required:
+        - file_id
+        - path
+        - type
+        - content_hash
+      properties:
+        file_id:
+          type: string
+          minLength: 1
+        path:
+          type: string
+          minLength: 1
+        type:
+          type: string
+          enum: [note, attachment, ai_wiki, ai_index, ai_agents]
+        content_hash:
+          type: string
+          minLength: 1
+        blob_id:
+          type: string
+          minLength: 1
+        size:
+          type: integer
+          minimum: 0
+        mime_type:
+          type: string
+
+    Tombstone:
+      type: object
+      additionalProperties: false
+      required:
+        - file_id
+        - deleted_revision
+      properties:
+        file_id:
+          type: string
+          minLength: 1
+        last_known_path:
+          type: string
+          minLength: 1
+        deleted_revision:
+          oneOf:
+            - type: integer
+              minimum: 1
+            - type: 'null'
+        deleted_at:
+          type: string
+          format: date-time
+        local_delete_seq:
+          type: integer
+          minimum: 1
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+
+security:
+  - bearerAuth: []
