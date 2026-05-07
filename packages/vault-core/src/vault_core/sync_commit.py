@@ -20,6 +20,8 @@ from .recovery import apply_committed_tombstones, should_block_new_commit
 from .sqlite_store import (
     finalize_committed_state,
     load_commit_intent_journal,
+    recover_prepared_commit_cleanup,
+    recover_submitted_commit_miss,
     upsert_commit_intent_journal,
     upsert_vault_state,
 )
@@ -215,3 +217,24 @@ def finalize_commit_submission(
         tombstones=updated_tombstones,
         state=updated_state,
     )
+
+
+def cleanup_failed_commit_submission(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    *,
+    normalized_at: int,
+) -> VaultStateRecord:
+    journal = load_commit_intent_journal(connection, vault_id)
+    if journal is None:
+        raise KeyError(f"commit_intent_journal not found: {vault_id}")
+
+    if journal.status == "prepared":
+        return recover_prepared_commit_cleanup(connection, vault_id)
+    if journal.status in {"submitted", "acknowledged"}:
+        return recover_submitted_commit_miss(
+            connection,
+            vault_id,
+            normalized_at=normalized_at,
+        )
+    raise ValueError(f"unsupported commit journal status: {journal.status}")

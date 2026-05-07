@@ -50,6 +50,7 @@ from .sync_apply import AppliedManifestResult, SubmittedRecoveryResult, apply_pu
 from .sync_commit import (
     CommitFinalizeResult,
     CommitSubmissionBundle,
+    cleanup_failed_commit_submission,
     finalize_commit_submission,
     apply_commit_submitted_state,
     build_commit_manifest,
@@ -121,6 +122,7 @@ __all__ = [
     "compute_intent_manifest_hash",
     "compute_manifest_summary_hash",
     "build_commit_manifest",
+    "cleanup_failed_commit_submission",
     "EMPTY_VAULT_FINAL_MANIFEST_SUMMARY",
     "execute_pull_reconcile",
     "finalize_commit_manifest",
