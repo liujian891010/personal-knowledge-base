@@ -9,11 +9,13 @@ from vault_core import (
     EMPTY_VAULT_FINAL_MANIFEST_SUMMARY,
     AppliedManifestResult,
     CommitRecoveryExecutionResult,
+    CommitFinalizeCleanupResult,
     FileMapDocument,
     FileRecord,
     ManifestFileEntry,
     ManifestRecord,
     ContentSnapshotPlan,
+    SnapshotDriftAbortResult,
     ReconcileResult,
     ReconcilePlan,
     RevisionMetadata,
@@ -42,8 +44,10 @@ from vault_core import (
     converge_manifest_state,
     TombstoneRecord,
     append_tombstone,
+    abort_drifted_commit_snapshot,
     build_commit_manifest,
     build_content_snapshot_plan,
+    cleanup_commit_staging_artifacts,
     cleanup_failed_commit_submission,
     CommitRecoveryPlan,
     assert_content_snapshot_plan_matches,
@@ -53,6 +57,7 @@ from vault_core import (
     execute_submitted_commit_confirmation_remote_state,
     find_matching_revision_metadata,
     finalize_commit_submission,
+    finalize_commit_submission_cleanup,
     finalize_commit_manifest,
     finalize_manifest_revision,
     initialize_vault,
@@ -950,6 +955,175 @@ class VaultCoreStorageTests(unittest.TestCase):
                 self.assertEqual(bundle.snapshot_plan.base_revision, 7)
                 self.assertEqual([item.file_id for item in bundle.snapshot_plan.files], ["file_live"])
 
+    def test_cleanup_commit_staging_artifacts_removes_only_snapshot_and_blob_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            staging_root = root / ".noteapp" / "staging"
+            staging_root.mkdir(parents=True, exist_ok=True)
+            snapshot_file = staging_root / "file_live.snapshot.plain"
+            blob_file = staging_root / "blob_live.blob.staging"
+            ignored_file = staging_root / "keep.txt"
+            snapshot_file.write_text("snapshot", encoding="utf-8")
+            blob_file.write_text("blob", encoding="utf-8")
+            ignored_file.write_text("keep", encoding="utf-8")
+
+            removed = cleanup_commit_staging_artifacts(root)
+
+            self.assertEqual(removed, [blob_file, snapshot_file])
+            self.assertFalse(snapshot_file.exists())
+            self.assertFalse(blob_file.exists())
+            self.assertTrue(ignored_file.exists())
+
+    def test_abort_drifted_commit_snapshot_cleans_prepared_state_and_staging(self) -> None:
+        baseline = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018600,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018590,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 128,
+                        "mtime": 1770000018580,
+                    },
+                )
+            ],
+        )
+        drifted = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018601,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018591,
+                    content_hash="sha256:changed",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 128,
+                        "mtime": 1770000018581,
+                    },
+                )
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            staging_root = root / ".noteapp" / "staging"
+            staging_root.mkdir(parents=True, exist_ok=True)
+            snapshot_file = staging_root / "file_live.snapshot.plain"
+            blob_file = staging_root / "blob_live.blob.staging"
+            snapshot_file.write_text("snapshot", encoding="utf-8")
+            blob_file.write_text("blob", encoding="utf-8")
+            db_path = root / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                state = VaultStateRecord(
+                    vault_id="vault_pkb_001",
+                    last_applied_revision=7,
+                    remote_head_revision=7,
+                    acked_revision=7,
+                    pending_ack_to_server=[],
+                    commit_in_progress=False,
+                    last_manifest_summary="sha256:head7",
+                    last_manifest_summary_status="valid",
+                    local_delete_sequence=2,
+                )
+                upsert_vault_state(connection, state)
+                frozen = prepare_frozen_commit_intent(
+                    connection,
+                    state=state,
+                    document=baseline,
+                    commit_intent_id="intent_prepared",
+                    created_by_device="desktop-shanghai",
+                    created_at=1770000018602,
+                )
+
+                aborted = abort_drifted_commit_snapshot(
+                    connection,
+                    vault_id="vault_pkb_001",
+                    vault_root=root,
+                    snapshot_plan=frozen.snapshot_plan,
+                    document=drifted,
+                )
+
+                self.assertEqual(
+                    aborted,
+                    SnapshotDriftAbortResult(
+                        state=aborted.state,
+                        drifted_file_ids=["file_live"],
+                        removed_staging_paths=[blob_file, snapshot_file],
+                    ),
+                )
+                self.assertFalse(aborted.state.commit_in_progress)
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+                self.assertFalse(snapshot_file.exists())
+                self.assertFalse(blob_file.exists())
+
+    def test_abort_drifted_commit_snapshot_rejects_matching_snapshot_plan(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018700,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018690,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 128,
+                        "mtime": 1770000018680,
+                    },
+                )
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                state = VaultStateRecord(
+                    vault_id="vault_pkb_001",
+                    last_applied_revision=7,
+                    remote_head_revision=7,
+                    acked_revision=7,
+                    pending_ack_to_server=[],
+                    commit_in_progress=False,
+                    last_manifest_summary="sha256:head7",
+                    last_manifest_summary_status="valid",
+                    local_delete_sequence=2,
+                )
+                upsert_vault_state(connection, state)
+                frozen = prepare_frozen_commit_intent(
+                    connection,
+                    state=state,
+                    document=document,
+                    commit_intent_id="intent_prepared",
+                    created_by_device="desktop-shanghai",
+                    created_at=1770000018701,
+                )
+
+                with self.assertRaisesRegex(ValueError, "content snapshot plan still matches"):
+                    abort_drifted_commit_snapshot(
+                        connection,
+                        vault_id="vault_pkb_001",
+                        vault_root=root,
+                        snapshot_plan=frozen.snapshot_plan,
+                        document=document,
+                    )
+
     def test_submit_prepared_commit_promotes_journal_to_submitted(self) -> None:
         document = FileMapDocument(
             vault_id="vault_pkb_001",
@@ -1278,6 +1452,81 @@ class VaultCoreStorageTests(unittest.TestCase):
                     [(item.file_id, item.deleted_revision) for item in load_tombstone_ledger(ledger_path)],
                     [("file_hit", 8), ("file_skip", None)],
                 )
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_finalize_commit_submission_cleanup_removes_commit_staging_artifacts_after_success(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=0,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000018650,
+            summary_hash="pending",
+            files=[],
+            tombstones=[],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            staging_root = root / ".noteapp" / "staging"
+            staging_root.mkdir(parents=True, exist_ok=True)
+            snapshot_file = staging_root / "file_live.snapshot.plain"
+            blob_file = staging_root / "blob_live.blob.staging"
+            snapshot_file.write_text("snapshot", encoding="utf-8")
+            blob_file.write_text("blob", encoding="utf-8")
+            ledger_path = root / "tombstone-ledger.jsonl"
+            db_path = root / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=2,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=2,
+                        created_at=1770000018650,
+                        updated_at=1770000018650,
+                    ),
+                )
+
+                cleaned = finalize_commit_submission_cleanup(
+                    connection,
+                    vault_root=root,
+                    ledger_path=ledger_path,
+                    manifest=manifest,
+                    local_tombstones=[],
+                    committed_revision=8,
+                )
+
+                self.assertEqual(
+                    cleaned,
+                    CommitFinalizeCleanupResult(
+                        finalized=cleaned.finalized,
+                        removed_staging_paths=[blob_file, snapshot_file],
+                    ),
+                )
+                self.assertEqual(cleaned.finalized.state.last_applied_revision, 8)
+                self.assertFalse(snapshot_file.exists())
+                self.assertFalse(blob_file.exists())
                 self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
 
     def test_finalize_commit_submission_requires_submitted_journal(self) -> None:
