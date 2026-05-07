@@ -254,6 +254,33 @@ class CommitSnapshotTable:
 
 
 @dataclass(frozen=True)
+class BlobCheckRequest:
+    blob_ids: list[str]
+
+
+@dataclass(frozen=True)
+class BlobCheckResult:
+    requested_blob_ids: list[str]
+    existing_blob_ids: list[str]
+    missing_blob_ids: list[str]
+
+
+@dataclass(frozen=True)
+class BlobUploadPlanEntry:
+    blob_id: str
+    content_hash: str
+    encrypted_size: int
+    blob_staging_path: Path
+    file_ids: list[str]
+
+
+@dataclass(frozen=True)
+class BlobUploadPlan:
+    vault_id: str
+    entries: list[BlobUploadPlanEntry]
+
+
+@dataclass(frozen=True)
 class SnapshotDriftAbortResult:
     state: VaultStateRecord
     drifted_file_ids: list[str]
@@ -754,6 +781,95 @@ def build_commit_snapshot_table(
         base_revision=plan.base_revision,
         created_at=plan.created_at,
         entries=entries,
+    )
+
+
+def build_blob_check_request(snapshot_table: CommitSnapshotTable) -> BlobCheckRequest:
+    blob_ids = sorted({entry.blob_id for entry in snapshot_table.entries})
+    if not blob_ids:
+        raise ValueError("commit snapshot table does not contain any blob entries")
+    return BlobCheckRequest(blob_ids=blob_ids)
+
+
+def resolve_blob_check_result(
+    snapshot_table: CommitSnapshotTable,
+    *,
+    existing_blob_ids: Iterable[str],
+    missing_blob_ids: Iterable[str],
+) -> BlobCheckResult:
+    requested_blob_ids = sorted({entry.blob_id for entry in snapshot_table.entries})
+    requested_blob_id_set = set(requested_blob_ids)
+    existing_blob_id_set = set(existing_blob_ids)
+    missing_blob_id_set = set(missing_blob_ids)
+
+    unknown_blob_ids = sorted((existing_blob_id_set | missing_blob_id_set) - requested_blob_id_set)
+    if unknown_blob_ids:
+        raise ValueError(
+            "blob check response contains unknown blob_ids: " + ", ".join(unknown_blob_ids)
+        )
+    overlapping_blob_ids = sorted(existing_blob_id_set & missing_blob_id_set)
+    if overlapping_blob_ids:
+        raise ValueError(
+            "blob check response contains overlapping blob_ids: " + ", ".join(overlapping_blob_ids)
+        )
+    unresolved_blob_ids = sorted(requested_blob_id_set - existing_blob_id_set - missing_blob_id_set)
+    if unresolved_blob_ids:
+        raise ValueError(
+            "blob check response does not cover requested blob_ids: " + ", ".join(unresolved_blob_ids)
+        )
+
+    return BlobCheckResult(
+        requested_blob_ids=requested_blob_ids,
+        existing_blob_ids=sorted(existing_blob_id_set),
+        missing_blob_ids=sorted(missing_blob_id_set),
+    )
+
+
+def build_blob_upload_plan(
+    snapshot_table: CommitSnapshotTable,
+    *,
+    missing_blob_ids: Iterable[str],
+) -> BlobUploadPlan:
+    missing_blob_id_set = set(missing_blob_ids)
+    requested_blob_ids = {entry.blob_id for entry in snapshot_table.entries}
+    unknown_blob_ids = sorted(missing_blob_id_set - requested_blob_ids)
+    if unknown_blob_ids:
+        raise ValueError(
+            "missing blob_ids are not present in commit snapshot table: "
+            + ", ".join(unknown_blob_ids)
+        )
+
+    entries_by_blob_id: dict[str, BlobUploadPlanEntry] = {}
+    for entry in snapshot_table.entries:
+        if entry.blob_id not in missing_blob_id_set:
+            continue
+        existing = entries_by_blob_id.get(entry.blob_id)
+        if existing is None:
+            entries_by_blob_id[entry.blob_id] = BlobUploadPlanEntry(
+                blob_id=entry.blob_id,
+                content_hash=entry.content_hash,
+                encrypted_size=entry.encrypted_size,
+                blob_staging_path=entry.blob_staging_path,
+                file_ids=[entry.file_id],
+            )
+            continue
+        if existing.content_hash != entry.content_hash:
+            raise ValueError(f"blob upload plan content hash mismatch for blob_id {entry.blob_id}")
+        if existing.encrypted_size != entry.encrypted_size:
+            raise ValueError(f"blob upload plan encrypted size mismatch for blob_id {entry.blob_id}")
+        if existing.blob_staging_path != entry.blob_staging_path:
+            raise ValueError(f"blob upload plan staging path mismatch for blob_id {entry.blob_id}")
+        entries_by_blob_id[entry.blob_id] = BlobUploadPlanEntry(
+            blob_id=existing.blob_id,
+            content_hash=existing.content_hash,
+            encrypted_size=existing.encrypted_size,
+            blob_staging_path=existing.blob_staging_path,
+            file_ids=existing.file_ids + [entry.file_id],
+        )
+
+    return BlobUploadPlan(
+        vault_id=snapshot_table.vault_id,
+        entries=[entries_by_blob_id[blob_id] for blob_id in sorted(entries_by_blob_id)],
     )
 
 
