@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
+from .manifest import EMPTY_VAULT_FINAL_MANIFEST_SUMMARY
 from .models import (
     CommitIntentJournalRecord,
     FileRecord,
@@ -138,6 +139,50 @@ def bootstrap_database(connection: sqlite3.Connection) -> None:
         (SCHEMA_VERSION,),
     )
     connection.commit()
+
+
+def build_initial_vault_state(
+    vault_id: str,
+    *,
+    local_delete_sequence: int = 0,
+    has_unresolved_conflicts: bool = False,
+    meta: Optional[Dict[str, Any]] = None,
+) -> VaultStateRecord:
+    return VaultStateRecord(
+        vault_id=vault_id,
+        last_applied_revision=0,
+        remote_head_revision=0,
+        acked_revision=0,
+        pending_ack_to_server=[],
+        commit_in_progress=False,
+        last_manifest_summary=EMPTY_VAULT_FINAL_MANIFEST_SUMMARY,
+        last_manifest_summary_status="valid",
+        local_delete_sequence=local_delete_sequence,
+        has_unresolved_conflicts=has_unresolved_conflicts,
+        meta=meta,
+    )
+
+
+def initialize_vault_state(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    *,
+    local_delete_sequence: int = 0,
+    has_unresolved_conflicts: bool = False,
+    meta: Optional[Dict[str, Any]] = None,
+) -> VaultStateRecord:
+    existing = load_vault_state(connection, vault_id)
+    if existing is not None:
+        return existing
+
+    record = build_initial_vault_state(
+        vault_id,
+        local_delete_sequence=local_delete_sequence,
+        has_unresolved_conflicts=has_unresolved_conflicts,
+        meta=meta,
+    )
+    upsert_vault_state(connection, record)
+    return record
 
 
 def upsert_vault_state(connection: sqlite3.Connection, record: VaultStateRecord) -> None:

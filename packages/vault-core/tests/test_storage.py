@@ -6,20 +6,26 @@ from datetime import date
 from pathlib import Path
 
 from vault_core import (
+    EMPTY_VAULT_FINAL_MANIFEST_SUMMARY,
     FileMapDocument,
     FileRecord,
     ManifestFileEntry,
     ManifestRecord,
     add_file,
     allocate_conflict_copy_path,
+    build_initial_vault_state,
     bootstrap_database,
     clear_commit_intent_journal,
     clear_sync_apply_journal,
+    canonical_manifest_payload,
     CommitIntentJournalRecord,
+    compute_intent_manifest_hash,
+    compute_manifest_summary_hash,
     converge_manifest_state,
     TombstoneRecord,
     append_tombstone,
     initialize_vault,
+    initialize_vault_state,
     load_commit_intent_journal,
     list_file_index,
     load_filemap,
@@ -46,6 +52,7 @@ from vault_core import (
     select_reclaimable_tombstones,
     select_pending_tombstones_for_commit,
     sanitize_device_name,
+    serialize_manifest_canonical,
     should_block_new_commit,
     SyncApplyJournalRecord,
     upsert_commit_intent_journal,
@@ -54,6 +61,7 @@ from vault_core import (
     upsert_vault_state,
     VaultStateRecord,
     WikiTaskRecord,
+    with_computed_manifest_summary,
     write_filemap_atomic,
 )
 
@@ -305,6 +313,138 @@ class VaultCoreStorageTests(unittest.TestCase):
         conflict = [record for record in updated.files if record.status == "conflict_copy"][0]
         self.assertEqual(conflict.conflict_source_file_id, "file_note_a")
 
+    def test_manifest_summary_hash_tracks_head_state_not_transport_metadata(self) -> None:
+        base = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=7,
+            base_revision=6,
+            created_by_device="desktop-shanghai",
+            created_at=1770000013000,
+            summary_hash="placeholder",
+            files=[
+                ManifestFileEntry(
+                    file_id="file_note_a",
+                    path="Notes/A.md",
+                    type="note",
+                    content_hash="sha256:a",
+                    blob_id="blob_a",
+                    size=128,
+                    mtime=1770000012000,
+                )
+            ],
+            tombstones=[
+                TombstoneRecord(
+                    file_id="file_deleted_b",
+                    deleted_revision=7,
+                    deleted_at=1770000011000,
+                    local_delete_seq=4,
+                    last_known_path="Notes/B.md",
+                )
+            ],
+        )
+        transport_variant = ManifestRecord(
+            vault_id="vault_other",
+            revision=7,
+            base_revision=3,
+            created_by_device="mobile-hangzhou",
+            created_at=1880000013000,
+            summary_hash="placeholder",
+            files=list(base.files),
+            tombstones=list(base.tombstones),
+        )
+        next_revision = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=8,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000014000,
+            summary_hash="placeholder",
+            files=list(base.files),
+            tombstones=list(base.tombstones),
+        )
+
+        self.assertEqual(compute_manifest_summary_hash(base), compute_manifest_summary_hash(transport_variant))
+        self.assertNotEqual(compute_manifest_summary_hash(base), compute_manifest_summary_hash(next_revision))
+
+    def test_intent_manifest_hash_omits_revision_and_null_deleted_revision(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=7,
+            base_revision=6,
+            created_by_device="desktop-shanghai",
+            created_at=1770000015000,
+            summary_hash="placeholder",
+            files=[
+                ManifestFileEntry(
+                    file_id="file_note_a",
+                    path="Notes/A.md",
+                    type="note",
+                    content_hash="sha256:a",
+                    blob_id="blob_a",
+                    size=128,
+                    mtime=1770000012000,
+                )
+            ],
+            tombstones=[
+                TombstoneRecord(
+                    file_id="file_local_delete",
+                    deleted_revision=None,
+                    deleted_at=1770000011000,
+                    local_delete_seq=4,
+                    last_known_path="Notes/B.md",
+                )
+            ],
+        )
+        same_intent_new_revision = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=99,
+            base_revision=6,
+            created_by_device="desktop-shanghai",
+            created_at=1770000015000,
+            summary_hash="placeholder",
+            files=list(manifest.files),
+            tombstones=list(manifest.tombstones),
+        )
+
+        canonical_payload = canonical_manifest_payload(manifest, purpose="intent")
+        canonical_bytes = serialize_manifest_canonical(manifest, purpose="intent")
+
+        self.assertEqual(compute_intent_manifest_hash(manifest), compute_intent_manifest_hash(same_intent_new_revision))
+        self.assertNotIn("revision", canonical_payload)
+        self.assertNotIn("deleted_revision", canonical_payload["tombstones"][0])
+        self.assertNotIn(b"deleted_revision", canonical_bytes)
+
+    def test_empty_vault_final_manifest_summary_constant_is_stable(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_any",
+            revision=0,
+            base_revision=0,
+            created_by_device="device_any",
+            created_at=999,
+            files=[],
+            tombstones=[],
+            summary_hash="placeholder",
+        )
+
+        self.assertEqual(compute_manifest_summary_hash(manifest), EMPTY_VAULT_FINAL_MANIFEST_SUMMARY)
+
+    def test_with_computed_manifest_summary_replaces_placeholder(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=7,
+            base_revision=6,
+            created_by_device="desktop-shanghai",
+            created_at=1770000016000,
+            files=[],
+            tombstones=[],
+            summary_hash="placeholder",
+        )
+
+        updated = with_computed_manifest_summary(manifest)
+
+        self.assertEqual(updated.summary_hash, compute_manifest_summary_hash(manifest))
+        self.assertNotEqual(updated.summary_hash, "placeholder")
+
     def test_allocate_conflict_copy_path_sanitizes_device_and_avoids_collision(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             original = Path(tmpdir) / "Notes" / "A.md"
@@ -386,6 +526,33 @@ class VaultCoreStorageTests(unittest.TestCase):
                 loaded = load_vault_state(connection, "vault_pkb_001")
 
                 self.assertEqual(loaded, record)
+
+    def test_build_initial_vault_state_uses_empty_vault_summary_gate(self) -> None:
+        record = build_initial_vault_state("vault_pkb_001")
+
+        self.assertEqual(record.last_applied_revision, 0)
+        self.assertEqual(record.remote_head_revision, 0)
+        self.assertEqual(record.acked_revision, 0)
+        self.assertEqual(record.last_manifest_summary, EMPTY_VAULT_FINAL_MANIFEST_SUMMARY)
+        self.assertFalse(should_block_new_commit(record))
+
+    def test_initialize_vault_state_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+
+                created = initialize_vault_state(
+                    connection,
+                    "vault_pkb_001",
+                    meta={"source": "bootstrap"},
+                )
+                loaded = load_vault_state(connection, "vault_pkb_001")
+                second = initialize_vault_state(connection, "vault_pkb_001")
+
+                self.assertEqual(created.last_manifest_summary, EMPTY_VAULT_FINAL_MANIFEST_SUMMARY)
+                self.assertEqual(loaded, created)
+                self.assertEqual(second, created)
 
     def test_file_index_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
