@@ -11,23 +11,32 @@ from vault_core import (
     add_file,
     allocate_conflict_copy_path,
     bootstrap_database,
+    clear_commit_intent_journal,
+    clear_sync_apply_journal,
+    CommitIntentJournalRecord,
     TombstoneRecord,
     append_tombstone,
     initialize_vault,
+    load_commit_intent_journal,
     list_file_index,
     load_filemap,
+    load_sync_apply_journal,
     load_tombstone_ledger,
     load_vault_state,
     mark_deleted,
     move_conflict_orphan,
     move_staging_orphan,
     open_database,
+    normalize_legacy_acknowledged_commit_intent,
     recover_filemap,
     replace_active_wiki_task,
     register_conflict_copy,
     rename_file,
     sanitize_device_name,
+    SyncApplyJournalRecord,
+    upsert_commit_intent_journal,
     upsert_file_index_entry,
+    upsert_sync_apply_journal,
     upsert_vault_state,
     VaultStateRecord,
     WikiTaskRecord,
@@ -410,6 +419,61 @@ class VaultCoreStorageTests(unittest.TestCase):
                     [(row["task_id"], row["status"]) for row in rows],
                     [("task_1", "superseded"), ("task_2", "running")],
                 )
+
+    def test_sync_apply_journal_round_trip_and_clear(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+
+                record = SyncApplyJournalRecord(
+                    vault_id="vault_pkb_001",
+                    journal_id="journal_1",
+                    target_revision=8,
+                    target_manifest_hash="sha256:manifest8",
+                    phase="materializing",
+                    ops_hash="sha256:ops8",
+                    created_at=1770000040000,
+                    updated_at=1770000041000,
+                )
+                upsert_sync_apply_journal(connection, record)
+                self.assertEqual(load_sync_apply_journal(connection, "vault_pkb_001"), record)
+
+                clear_sync_apply_journal(connection, "vault_pkb_001")
+                self.assertIsNone(load_sync_apply_journal(connection, "vault_pkb_001"))
+
+    def test_commit_intent_journal_round_trip_and_legacy_normalization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+
+                legacy = CommitIntentJournalRecord(
+                    vault_id="vault_pkb_001",
+                    commit_intent_id="intent_1",
+                    intent_manifest_hash="sha256:intent1",
+                    base_revision=7,
+                    created_by_device="desktop-shanghai",
+                    status="acknowledged",
+                    intent_delete_seq_upper_bound=None,
+                    created_at=1770000042000,
+                    updated_at=1770000042000,
+                )
+                upsert_commit_intent_journal(connection, legacy)
+
+                normalized = normalize_legacy_acknowledged_commit_intent(
+                    connection,
+                    "vault_pkb_001",
+                    normalized_at=1770000043000,
+                )
+                loaded = load_commit_intent_journal(connection, "vault_pkb_001")
+
+                self.assertEqual(normalized.status, "submitted")
+                self.assertEqual(loaded.status, "submitted")
+                self.assertIsNone(loaded.intent_delete_seq_upper_bound)
+
+                clear_commit_intent_journal(connection, "vault_pkb_001")
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
 
 
 if __name__ == "__main__":

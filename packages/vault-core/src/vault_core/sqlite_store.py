@@ -5,7 +5,13 @@ import sqlite3
 from pathlib import Path
 from typing import List, Optional
 
-from .models import FileRecord, VaultStateRecord, WikiTaskRecord
+from .models import (
+    CommitIntentJournalRecord,
+    FileRecord,
+    SyncApplyJournalRecord,
+    VaultStateRecord,
+    WikiTaskRecord,
+)
 
 SCHEMA_VERSION = 1
 
@@ -70,6 +76,29 @@ def bootstrap_database(connection: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_wiki_tasks_active_path
           ON wiki_tasks (target_wiki_path)
           WHERE status IN ('pending', 'running');
+
+        CREATE TABLE IF NOT EXISTS sync_apply_journal (
+          vault_id TEXT PRIMARY KEY,
+          journal_id TEXT NOT NULL,
+          target_revision INTEGER NOT NULL,
+          target_manifest_hash TEXT NOT NULL,
+          phase TEXT NOT NULL,
+          ops_hash TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS commit_intent_journal (
+          vault_id TEXT PRIMARY KEY,
+          commit_intent_id TEXT NOT NULL,
+          intent_manifest_hash TEXT NOT NULL,
+          base_revision INTEGER NOT NULL,
+          created_by_device TEXT NOT NULL,
+          status TEXT NOT NULL,
+          intent_delete_seq_upper_bound INTEGER,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
         """
     )
     try:
@@ -266,3 +295,148 @@ def replace_active_wiki_task(connection: sqlite3.Connection, record: WikiTaskRec
                 record.updated_at,
             ),
         )
+
+
+def upsert_sync_apply_journal(connection: sqlite3.Connection, record: SyncApplyJournalRecord) -> None:
+    connection.execute(
+        """
+        INSERT INTO sync_apply_journal (
+          vault_id,
+          journal_id,
+          target_revision,
+          target_manifest_hash,
+          phase,
+          ops_hash,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(vault_id) DO UPDATE SET
+          journal_id = excluded.journal_id,
+          target_revision = excluded.target_revision,
+          target_manifest_hash = excluded.target_manifest_hash,
+          phase = excluded.phase,
+          ops_hash = excluded.ops_hash,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at
+        """,
+        (
+            record.vault_id,
+            record.journal_id,
+            record.target_revision,
+            record.target_manifest_hash,
+            record.phase,
+            record.ops_hash,
+            record.created_at,
+            record.updated_at,
+        ),
+    )
+    connection.commit()
+
+
+def load_sync_apply_journal(connection: sqlite3.Connection, vault_id: str) -> Optional[SyncApplyJournalRecord]:
+    row = connection.execute("SELECT * FROM sync_apply_journal WHERE vault_id = ?", (vault_id,)).fetchone()
+    if row is None:
+        return None
+    return SyncApplyJournalRecord(
+        vault_id=row["vault_id"],
+        journal_id=row["journal_id"],
+        target_revision=row["target_revision"],
+        target_manifest_hash=row["target_manifest_hash"],
+        phase=row["phase"],
+        ops_hash=row["ops_hash"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def clear_sync_apply_journal(connection: sqlite3.Connection, vault_id: str) -> None:
+    connection.execute("DELETE FROM sync_apply_journal WHERE vault_id = ?", (vault_id,))
+    connection.commit()
+
+
+def upsert_commit_intent_journal(connection: sqlite3.Connection, record: CommitIntentJournalRecord) -> None:
+    connection.execute(
+        """
+        INSERT INTO commit_intent_journal (
+          vault_id,
+          commit_intent_id,
+          intent_manifest_hash,
+          base_revision,
+          created_by_device,
+          status,
+          intent_delete_seq_upper_bound,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(vault_id) DO UPDATE SET
+          commit_intent_id = excluded.commit_intent_id,
+          intent_manifest_hash = excluded.intent_manifest_hash,
+          base_revision = excluded.base_revision,
+          created_by_device = excluded.created_by_device,
+          status = excluded.status,
+          intent_delete_seq_upper_bound = excluded.intent_delete_seq_upper_bound,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at
+        """,
+        (
+            record.vault_id,
+            record.commit_intent_id,
+            record.intent_manifest_hash,
+            record.base_revision,
+            record.created_by_device,
+            record.status,
+            record.intent_delete_seq_upper_bound,
+            record.created_at,
+            record.updated_at,
+        ),
+    )
+    connection.commit()
+
+
+def load_commit_intent_journal(connection: sqlite3.Connection, vault_id: str) -> Optional[CommitIntentJournalRecord]:
+    row = connection.execute("SELECT * FROM commit_intent_journal WHERE vault_id = ?", (vault_id,)).fetchone()
+    if row is None:
+        return None
+    return CommitIntentJournalRecord(
+        vault_id=row["vault_id"],
+        commit_intent_id=row["commit_intent_id"],
+        intent_manifest_hash=row["intent_manifest_hash"],
+        base_revision=row["base_revision"],
+        created_by_device=row["created_by_device"],
+        status=row["status"],
+        intent_delete_seq_upper_bound=row["intent_delete_seq_upper_bound"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def normalize_legacy_acknowledged_commit_intent(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    *,
+    normalized_at: int,
+) -> Optional[CommitIntentJournalRecord]:
+    current = load_commit_intent_journal(connection, vault_id)
+    if current is None:
+        return None
+    if current.status != "acknowledged":
+        return current
+
+    normalized = CommitIntentJournalRecord(
+        vault_id=current.vault_id,
+        commit_intent_id=current.commit_intent_id,
+        intent_manifest_hash=current.intent_manifest_hash,
+        base_revision=current.base_revision,
+        created_by_device=current.created_by_device,
+        status="submitted",
+        intent_delete_seq_upper_bound=current.intent_delete_seq_upper_bound,
+        created_at=current.created_at,
+        updated_at=normalized_at,
+    )
+    upsert_commit_intent_journal(connection, normalized)
+    return normalized
+
+
+def clear_commit_intent_journal(connection: sqlite3.Connection, vault_id: str) -> None:
+    connection.execute("DELETE FROM commit_intent_journal WHERE vault_id = ?", (vault_id,))
+    connection.commit()

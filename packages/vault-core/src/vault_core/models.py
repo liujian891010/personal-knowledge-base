@@ -27,6 +27,20 @@ VALID_WIKI_TASK_STATUSES = {
     "superseded",
 }
 
+VALID_COMMIT_INTENT_STATUSES = {
+    "prepared",
+    "submitted",
+    "acknowledged",
+}
+
+VALID_SYNC_APPLY_PHASES = {
+    "preparing",
+    "staging",
+    "materializing",
+    "filemap_rewrite",
+    "finalizing",
+}
+
 
 def _require_non_negative_int(name: str, value: Optional[int], allow_none: bool = False) -> None:
     if value is None and allow_none:
@@ -264,5 +278,63 @@ class WikiTaskRecord:
         if self.status not in VALID_WIKI_TASK_STATUSES:
             raise ValueError(f"unsupported wiki task status: {self.status}")
         _require_non_negative_int("task_base_revision", self.task_base_revision)
+        _require_non_negative_int("created_at", self.created_at)
+        _require_non_negative_int("updated_at", self.updated_at)
+
+
+@dataclass(frozen=True)
+class CommitIntentJournalRecord:
+    vault_id: str
+    commit_intent_id: str
+    intent_manifest_hash: str
+    base_revision: int
+    created_by_device: str
+    status: str
+    created_at: int
+    updated_at: int
+    intent_delete_seq_upper_bound: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if not self.vault_id:
+            raise ValueError("vault_id must be non-empty")
+        if not self.commit_intent_id:
+            raise ValueError("commit_intent_id must be non-empty")
+        if not self.intent_manifest_hash:
+            raise ValueError("intent_manifest_hash must be non-empty")
+        if not self.created_by_device:
+            raise ValueError("created_by_device must be non-empty")
+        if self.status not in VALID_COMMIT_INTENT_STATUSES:
+            raise ValueError(f"unsupported commit intent status: {self.status}")
+        _require_non_negative_int("base_revision", self.base_revision)
+        _require_non_negative_int("created_at", self.created_at)
+        _require_non_negative_int("updated_at", self.updated_at)
+        _require_positive_int(
+            "intent_delete_seq_upper_bound",
+            self.intent_delete_seq_upper_bound,
+            allow_none=True,
+        )
+
+
+@dataclass(frozen=True)
+class SyncApplyJournalRecord:
+    vault_id: str
+    journal_id: str
+    target_revision: int
+    target_manifest_hash: str
+    phase: str
+    created_at: int
+    updated_at: int
+    ops_hash: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.vault_id:
+            raise ValueError("vault_id must be non-empty")
+        if not self.journal_id:
+            raise ValueError("journal_id must be non-empty")
+        if not self.target_manifest_hash:
+            raise ValueError("target_manifest_hash must be non-empty")
+        if self.phase not in VALID_SYNC_APPLY_PHASES:
+            raise ValueError(f"unsupported sync apply phase: {self.phase}")
+        _require_non_negative_int("target_revision", self.target_revision)
         _require_non_negative_int("created_at", self.created_at)
         _require_non_negative_int("updated_at", self.updated_at)

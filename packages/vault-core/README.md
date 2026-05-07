@@ -28,4 +28,10 @@
 3. `wiki_tasks` 活跃任务唯一约束
 4. `search_index` / FTS 结构
 
-后续阶段再在此基础上补 journal、pull / commit 恢复和更完整的索引联调。
+当前 phase 继续补 journal 持久化：
+
+1. `sync_apply_journal`
+2. `commit_intent_journal`
+3. legacy `acknowledged -> submitted` 规范化
+
+后续阶段再在此基础上补 pull / commit 恢复和更完整的索引联调。
