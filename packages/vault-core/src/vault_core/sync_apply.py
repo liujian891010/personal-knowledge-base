@@ -19,10 +19,13 @@ from .sqlite_store import (
     upsert_vault_state,
 )
 from .sync_commit import (
+    LocalCommitRecoveryResult,
     RevisionMetadata,
     SubmittedConfirmationPlan,
     SubmittedConfirmationResolution,
+    plan_commit_recovery,
     plan_submitted_confirmation,
+    recover_local_commit_state,
     resolve_submitted_confirmation,
 )
 
@@ -45,6 +48,13 @@ class SubmittedConfirmationExecutionResult:
     plan: SubmittedConfirmationPlan
     resolution: SubmittedConfirmationResolution
     recovery: SubmittedRecoveryResult
+
+
+@dataclass(frozen=True)
+class CommitRecoveryExecutionResult:
+    mode: str
+    local: Optional[LocalCommitRecoveryResult] = None
+    submitted: Optional[SubmittedConfirmationExecutionResult] = None
 
 
 def apply_pulled_manifest(
@@ -186,4 +196,61 @@ def execute_submitted_commit_confirmation(
         plan=plan,
         resolution=resolution,
         recovery=recovery,
+    )
+
+
+def resume_commit_recovery(
+    connection: sqlite3.Connection,
+    *,
+    vault_root: Path,
+    vault_id: str,
+    normalized_at: int,
+    ledger_path: Optional[Path] = None,
+    local_tombstones: Iterable[TombstoneRecord] = (),
+    observed_head_revision: Optional[int] = None,
+    head_commit_intent_id: Optional[str] = None,
+    revisions: Iterable[RevisionMetadata] = (),
+    matched_manifest: Optional[ManifestRecord] = None,
+) -> CommitRecoveryExecutionResult:
+    state = load_vault_state(connection, vault_id)
+    if state is None:
+        raise KeyError(f"vault_state not found: {vault_id}")
+
+    journal = load_commit_intent_journal(connection, vault_id)
+    plan = plan_commit_recovery(state, journal=journal)
+
+    if plan.mode != "submitted_confirmation":
+        local = recover_local_commit_state(
+            connection,
+            vault_id=vault_id,
+            vault_root=vault_root,
+        )
+        return CommitRecoveryExecutionResult(
+            mode=plan.mode,
+            local=local,
+            submitted=None,
+        )
+
+    if ledger_path is None:
+        raise ValueError("ledger_path is required for submitted confirmation recovery")
+    if observed_head_revision is None:
+        raise ValueError("observed_head_revision is required for submitted confirmation recovery")
+    if head_commit_intent_id is None:
+        raise ValueError("head_commit_intent_id is required for submitted confirmation recovery")
+
+    submitted = execute_submitted_commit_confirmation(
+        connection,
+        ledger_path=ledger_path,
+        vault_id=vault_id,
+        local_tombstones=local_tombstones,
+        observed_head_revision=observed_head_revision,
+        head_commit_intent_id=head_commit_intent_id,
+        normalized_at=normalized_at,
+        revisions=revisions,
+        matched_manifest=matched_manifest,
+    )
+    return CommitRecoveryExecutionResult(
+        mode=plan.mode,
+        local=None,
+        submitted=submitted,
     )

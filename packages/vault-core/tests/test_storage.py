@@ -8,6 +8,7 @@ from pathlib import Path
 from vault_core import (
     EMPTY_VAULT_FINAL_MANIFEST_SUMMARY,
     AppliedManifestResult,
+    CommitRecoveryExecutionResult,
     FileMapDocument,
     FileRecord,
     ManifestFileEntry,
@@ -76,6 +77,7 @@ from vault_core import (
     recover_filemap_rewrite_convergence,
     recover_local_commit_state,
     resolve_submitted_confirmation,
+    resume_commit_recovery,
     persist_manifest_convergence,
     plan_pull_reconcile,
     prepare_commit_submission,
@@ -2299,6 +2301,160 @@ class VaultCoreStorageTests(unittest.TestCase):
                     [("file_pending", None)],
                 )
                 self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_resume_commit_recovery_returns_idle_local_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "vault"
+            initialize_vault(root, vault_id="vault_pkb_001", now_ms=1770000020300)
+            db_path = root / ".noteapp" / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=False,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+
+                resumed = resume_commit_recovery(
+                    connection,
+                    vault_root=root,
+                    vault_id="vault_pkb_001",
+                    normalized_at=1770000020301,
+                )
+
+                self.assertEqual(
+                    resumed,
+                    CommitRecoveryExecutionResult(
+                        mode="idle",
+                        local=resumed.local,
+                        submitted=None,
+                    ),
+                )
+                self.assertIsNotNone(resumed.local)
+                self.assertEqual(resumed.local.plan.mode, "idle")
+                self.assertEqual(resumed.local.moved_staging_paths, [])
+
+    def test_resume_commit_recovery_executes_submitted_confirmation_when_remote_data_provided(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=8,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000020400,
+            summary_hash="placeholder",
+            files=[],
+            tombstones=[],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "vault"
+            initialize_vault(root, vault_id="vault_pkb_001", now_ms=1770000020390)
+            ledger_path = root / ".noteapp" / "tombstone-ledger.jsonl"
+            db_path = root / ".noteapp" / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=1770000020395,
+                        updated_at=1770000020395,
+                    ),
+                )
+
+                resumed = resume_commit_recovery(
+                    connection,
+                    vault_root=root,
+                    vault_id="vault_pkb_001",
+                    normalized_at=1770000020401,
+                    ledger_path=ledger_path,
+                    local_tombstones=[],
+                    observed_head_revision=8,
+                    head_commit_intent_id="intent_1",
+                    matched_manifest=manifest,
+                )
+
+                self.assertEqual(resumed.mode, "submitted_confirmation")
+                self.assertIsNone(resumed.local)
+                self.assertIsNotNone(resumed.submitted)
+                self.assertEqual(resumed.submitted.plan.mode, "head_match")
+                self.assertEqual(resumed.submitted.recovery.state.last_applied_revision, 8)
+
+    def test_resume_commit_recovery_requires_remote_inputs_for_submitted_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "vault"
+            initialize_vault(root, vault_id="vault_pkb_001", now_ms=1770000020500)
+            db_path = root / ".noteapp" / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=1770000020501,
+                        updated_at=1770000020501,
+                    ),
+                )
+
+                with self.assertRaisesRegex(ValueError, "ledger_path is required"):
+                    resume_commit_recovery(
+                        connection,
+                        vault_root=root,
+                        vault_id="vault_pkb_001",
+                        normalized_at=1770000020502,
+                    )
 
     def test_recover_submitted_commit_match_with_manifest_404_marks_summary_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

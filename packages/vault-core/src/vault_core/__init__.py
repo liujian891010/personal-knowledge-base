@@ -49,10 +49,12 @@ from .recovery import (
 )
 from .sync_apply import (
     AppliedManifestResult,
+    CommitRecoveryExecutionResult,
     SubmittedConfirmationExecutionResult,
     SubmittedRecoveryResult,
     apply_pulled_manifest,
     execute_submitted_commit_confirmation,
+    resume_commit_recovery,
     recover_submitted_commit_flow,
 )
 from .sync_commit import (
@@ -120,6 +122,7 @@ __all__ = [
     "ManifestFileEntry",
     "ManifestRecord",
     "AppliedManifestResult",
+    "CommitRecoveryExecutionResult",
     "CommitFinalizeResult",
     "CommitPreparationBundle",
     "CommitRecoveryPlan",
@@ -198,6 +201,7 @@ __all__ = [
     "recover_sync_apply_finalizing_state",
     "recover_submitted_commit_flow",
     "resolve_submitted_confirmation",
+    "resume_commit_recovery",
     "replace_active_wiki_task",
     "rebuild_filemap_from_manifest",
     "register_conflict_copy",
