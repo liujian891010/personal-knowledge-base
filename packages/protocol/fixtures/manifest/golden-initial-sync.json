@@ -1,0 +1,51 @@
+{
+  "schema_version": "v1",
+  "vault_id": "vault_pkb_001",
+  "revision": 7,
+  "base_revision": 6,
+  "created_by_device": "desktop-shanghai",
+  "created_at": 1770000000123,
+  "files": [
+    {
+      "file_id": "file_ai_wiki_llm_wiki",
+      "path": ".ai/wiki/LLM Wiki.md",
+      "type": "ai_wiki",
+      "content_hash": "sha256:9b3b835f5d0d8d1cbf555520b1a8662cf198ce3ac7144a57f8f7c6d8fd62f6d0",
+      "blob_id": "blob_7f1c19c4570b03ad328ce972d2994816",
+      "size": 4096,
+      "mtime": 1770000000000,
+      "mime_type": "text/markdown"
+    },
+    {
+      "file_id": "file_attachment_topology_png",
+      "path": "Attachments/runtime-topology.png",
+      "type": "attachment",
+      "content_hash": "sha256:0dbfd2d45f9df1785a67f0a5f6aa06e2276d7564c7f354ff0d3617e5f5d80975",
+      "blob_id": "blob_08b80c79f43ea8561ef5f32dd11eeb7b",
+      "size": 912034,
+      "mtime": 1769999997000,
+      "mime_type": "image/png"
+    },
+    {
+      "file_id": "file_note_architecture",
+      "path": "Notes/Architecture/Sync Design.md",
+      "type": "note",
+      "content_hash": "sha256:3f2e1df0d6eb1f2268dfe290e4a0d4eaa24f7c999f82c4fa5850c973d771f54b",
+      "blob_id": "blob_a9d445bc54a0cb5d9cc413529984c832",
+      "size": 12848,
+      "mtime": 1769999999000,
+      "mime_type": "text/markdown"
+    }
+  ],
+  "tombstones": [
+    {
+      "file_id": "file_note_legacy_plan",
+      "last_known_path": "Notes/Archive/Legacy Plan.md",
+      "deleted_revision": 7,
+      "deleted_by_device": "desktop-shanghai",
+      "deleted_at": 1769999995000,
+      "local_delete_seq": 18
+    }
+  ],
+  "summary_hash": "sha256:6d9739f66a1bc0a2a47e7efcf0f5e34fe9f931e30b6b5d653ce7b99cc7ab9e4b"
+}

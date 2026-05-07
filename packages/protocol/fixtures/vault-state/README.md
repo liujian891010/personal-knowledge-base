@@ -1,3 +1,6 @@
 # vault-state fixtures
 
-用于存放 vault_state golden fixtures。
+当前 golden fixture：
+
+1. `golden-post-pull.json`
+   - 覆盖一次成功 pull 后仍需补发 ack 的本地状态

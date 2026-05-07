@@ -1,0 +1,15 @@
+{
+  "schema_version": "v1",
+  "vault_id": "vault_pkb_001",
+  "last_applied_revision": 7,
+  "remote_head_revision": 7,
+  "acked_revision": 6,
+  "pending_ack_to_server": [
+    7
+  ],
+  "commit_in_progress": false,
+  "last_manifest_summary": "sha256:6d9739f66a1bc0a2a47e7efcf0f5e34fe9f931e30b6b5d653ce7b99cc7ab9e4b",
+  "last_manifest_summary_status": "valid",
+  "local_delete_sequence": 18,
+  "has_unresolved_conflicts": true
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": "v1",
+  "vault_id": "vault_pkb_001",
+  "updated_at": 1770000001123,
+  "files": [
+    {
+      "file_id": "file_note_architecture",
+      "path": "Notes/Architecture/Sync Design.md",
+      "type": "note",
+      "status": "active",
+      "content_hash": "sha256:3f2e1df0d6eb1f2268dfe290e4a0d4eaa24f7c999f82c4fa5850c973d771f54b",
+      "last_known_revision": 7,
+      "updated_at": 1770000000100
+    },
+    {
+      "file_id": "file_note_legacy_plan",
+      "path": "Notes/Archive/Legacy Plan.md",
+      "type": "note",
+      "status": "deleted",
+      "last_known_revision": 7,
+      "updated_at": 1769999995000
+    },
+    {
+      "file_id": "file_note_architecture_conflict",
+      "path": "Notes/Architecture/Sync Design (conflict 2026-04-29 Desktop-Win).md",
+      "type": "note",
+      "status": "conflict_copy",
+      "content_hash": "sha256:884f11dc76de93b0a75bbdf2f2cf4429a3199193b37f71f499de5caec3c9c967",
+      "last_known_revision": null,
+      "updated_at": 1770000000900,
+      "conflict_source_file_id": "file_note_architecture"
+    }
+  ]
+}

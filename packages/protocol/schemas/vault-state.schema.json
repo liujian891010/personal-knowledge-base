@@ -13,6 +13,7 @@
     "pending_ack_to_server",
     "commit_in_progress",
     "last_manifest_summary",
+    "last_manifest_summary_status",
     "local_delete_sequence"
   ],
   "properties": {
@@ -58,6 +59,15 @@
           "type": "null"
         }
       ]
+    },
+    "last_manifest_summary_status": {
+      "type": "string",
+      "enum": [
+        "valid",
+        "missing",
+        "stale"
+      ],
+      "description": "Missing means no summary has ever been persisted. Stale disables summary-based shortcut paths until a fresh manifest is downloaded."
     },
     "local_delete_sequence": {
       "type": "integer",

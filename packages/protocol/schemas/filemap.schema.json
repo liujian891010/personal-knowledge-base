@@ -7,7 +7,8 @@
   "required": [
     "schema_version",
     "vault_id",
-    "files"
+    "files",
+    "updated_at"
   ],
   "properties": {
     "schema_version": {
@@ -24,6 +25,11 @@
         "$ref": "#/$defs/fileRecord"
       }
     },
+    "updated_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "UTC Unix timestamp in milliseconds for the last successful atomic rewrite."
+    },
     "meta": {
       "type": "object",
       "additionalProperties": true
@@ -37,7 +43,8 @@
         "file_id",
         "path",
         "type",
-        "status"
+        "status",
+        "updated_at"
       ],
       "properties": {
         "file_id": {
@@ -55,8 +62,7 @@
             "attachment",
             "ai_wiki",
             "ai_index",
-            "ai_agents",
-            "conflict_copy"
+            "ai_agents"
           ]
         },
         "status": {
@@ -77,6 +83,11 @@
             "null"
           ],
           "minimum": 0
+        },
+        "updated_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "UTC Unix timestamp in milliseconds for the last local mutation to this record."
         },
         "conflict_source_file_id": {
           "type": "string",

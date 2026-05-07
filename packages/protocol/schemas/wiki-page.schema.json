@@ -7,9 +7,14 @@
   "required": [
     "schema_version",
     "title",
+    "page_type",
     "summary",
     "body_markdown",
-    "source_refs"
+    "source_refs",
+    "updated_at",
+    "ai_generated",
+    "user_edited",
+    "locked"
   ],
   "properties": {
     "schema_version": {
@@ -19,6 +24,16 @@
     "title": {
       "type": "string",
       "minLength": 1
+    },
+    "page_type": {
+      "type": "string",
+      "enum": [
+        "topic",
+        "entity",
+        "timeline",
+        "qa",
+        "summary"
+      ]
     },
     "summary": {
       "type": "string",
@@ -48,6 +63,40 @@
       "items": {
         "$ref": "#/$defs/outlineItem"
       }
+    },
+    "related_pages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relatedPage"
+      }
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ai_generated": {
+      "type": "boolean"
+    },
+    "user_edited": {
+      "type": "boolean"
+    },
+    "locked": {
+      "type": "boolean"
+    },
+    "last_ai_compiled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_compiled_from_sources_hash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "last_synced_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
     },
     "meta": {
       "type": "object",
@@ -88,7 +137,30 @@
           "minLength": 1,
           "description": "Optional precise location such as heading, page span or timestamp."
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source_type": {
+                "enum": [
+                  "note",
+                  "attachment"
+                ]
+              }
+            },
+            "required": [
+              "source_type"
+            ]
+          },
+          "then": {
+            "required": [
+              "file_id",
+              "path"
+            ]
+          }
+        }
+      ]
     },
     "outlineItem": {
       "type": "object",
@@ -106,6 +178,24 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 6
+        }
+      }
+    },
+    "relatedPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "path"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
         }
       }
     }

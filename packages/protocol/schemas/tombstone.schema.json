@@ -25,9 +25,14 @@
       "minimum": 1,
       "description": "Null is the only legal placeholder before the deletion is committed."
     },
-    "deleted_at": {
+    "deleted_by_device": {
       "type": "string",
-      "format": "date-time"
+      "minLength": 1
+    },
+    "deleted_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "UTC Unix timestamp in milliseconds."
     },
     "local_delete_seq": {
       "type": "integer",
