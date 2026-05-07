@@ -21,4 +21,11 @@
 2. 冲突副本命名与去重
 3. `staging-orphans/` 与 `conflict-orphans/` 隔离 helper
 
-后续阶段再在此基础上补 journal、pull / commit 恢复和 SQLite 联调。
+当前 AG03 phase 1 开始补 SQLite 基线：
+
+1. `vault_state` 持久化
+2. `file_index`
+3. `wiki_tasks` 活跃任务唯一约束
+4. `search_index` / FTS 结构
+
+后续阶段再在此基础上补 journal、pull / commit 恢复和更完整的索引联调。

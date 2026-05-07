@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from contextlib import closing
 from datetime import date
 from pathlib import Path
 
@@ -9,18 +10,27 @@ from vault_core import (
     FileRecord,
     add_file,
     allocate_conflict_copy_path,
+    bootstrap_database,
     TombstoneRecord,
     append_tombstone,
     initialize_vault,
+    list_file_index,
     load_filemap,
     load_tombstone_ledger,
+    load_vault_state,
     mark_deleted,
     move_conflict_orphan,
     move_staging_orphan,
+    open_database,
     recover_filemap,
+    replace_active_wiki_task,
     register_conflict_copy,
     rename_file,
     sanitize_device_name,
+    upsert_file_index_entry,
+    upsert_vault_state,
+    VaultStateRecord,
+    WikiTaskRecord,
     write_filemap_atomic,
 )
 
@@ -292,6 +302,114 @@ class VaultCoreStorageTests(unittest.TestCase):
             self.assertFalse(conflict_file.exists())
             self.assertTrue(target.exists())
             self.assertEqual(target.parent.name, "conflict-orphans")
+
+    def test_bootstrap_database_creates_core_tables(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+
+                table_names = {
+                    row["name"]
+                    for row in connection.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'index')")
+                }
+                self.assertIn("vault_state", table_names)
+                self.assertIn("file_index", table_names)
+                self.assertIn("wiki_tasks", table_names)
+                self.assertIn("idx_wiki_tasks_active_path", table_names)
+                self.assertTrue("search_index" in table_names)
+
+    def test_vault_state_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+
+                record = VaultStateRecord(
+                    vault_id="vault_pkb_001",
+                    last_applied_revision=7,
+                    remote_head_revision=8,
+                    acked_revision=6,
+                    pending_ack_to_server=[7],
+                    commit_in_progress=False,
+                    last_manifest_summary="sha256:abc",
+                    last_manifest_summary_status="valid",
+                    local_delete_sequence=19,
+                    has_unresolved_conflicts=True,
+                )
+                upsert_vault_state(connection, record)
+                loaded = load_vault_state(connection, "vault_pkb_001")
+
+                self.assertEqual(loaded, record)
+
+    def test_file_index_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+
+                record = FileRecord(
+                    file_id="file_note_a",
+                    path="Notes/A.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000030000,
+                    content_hash="sha256:abc",
+                    last_known_revision=7,
+                )
+                upsert_file_index_entry(
+                    connection,
+                    vault_id="vault_pkb_001",
+                    record=record,
+                    local_mtime=1770000029000,
+                    size=1024,
+                )
+                rows = list_file_index(connection, "vault_pkb_001")
+
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["path"], "Notes/A.md")
+                self.assertEqual(rows[0]["size"], 1024)
+
+    def test_replace_active_wiki_task_supersedes_previous_active_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+
+                first = WikiTaskRecord(
+                    task_id="task_1",
+                    target_wiki_path=".ai/wiki/LLM Wiki.md",
+                    task_base_page_hash="sha256:page1",
+                    task_base_revision=7,
+                    task_sources_hash="sha256:sources1",
+                    status="pending",
+                    created_at=1770000031000,
+                    updated_at=1770000031000,
+                )
+                second = WikiTaskRecord(
+                    task_id="task_2",
+                    target_wiki_path=".ai/wiki/LLM Wiki.md",
+                    task_base_page_hash="sha256:page2",
+                    task_base_revision=8,
+                    task_sources_hash="sha256:sources2",
+                    status="running",
+                    created_at=1770000032000,
+                    updated_at=1770000032000,
+                )
+
+                replace_active_wiki_task(connection, first)
+                replace_active_wiki_task(connection, second)
+
+                rows = list(
+                    connection.execute(
+                        "SELECT task_id, status FROM wiki_tasks WHERE target_wiki_path = ? ORDER BY created_at",
+                        (".ai/wiki/LLM Wiki.md",),
+                    ).fetchall()
+                )
+                self.assertEqual(
+                    [(row["task_id"], row["status"]) for row in rows],
+                    [("task_1", "superseded"), ("task_2", "running")],
+                )
 
 
 if __name__ == "__main__":
