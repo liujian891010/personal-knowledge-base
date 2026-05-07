@@ -17,6 +17,7 @@ from vault_core import (
     SubmittedRecoveryResult,
     add_file,
     apply_committed_tombstones,
+    apply_commit_submitted_state,
     apply_manifest_reconciled_state,
     apply_manifest_summary_stale,
     apply_pulled_manifest,
@@ -32,7 +33,10 @@ from vault_core import (
     converge_manifest_state,
     TombstoneRecord,
     append_tombstone,
+    build_commit_manifest,
     execute_pull_reconcile,
+    finalize_commit_manifest,
+    finalize_manifest_revision,
     initialize_vault,
     initialize_vault_state,
     load_commit_intent_journal,
@@ -58,6 +62,7 @@ from vault_core import (
     recover_filemap_rewrite_convergence,
     persist_manifest_convergence,
     plan_pull_reconcile,
+    prepare_commit_submission,
     requires_full_pull,
     replace_active_wiki_task,
     register_conflict_copy,
@@ -457,6 +462,338 @@ class VaultCoreStorageTests(unittest.TestCase):
 
         self.assertEqual(updated.summary_hash, compute_manifest_summary_hash(manifest))
         self.assertNotEqual(updated.summary_hash, "placeholder")
+
+    def test_finalize_manifest_revision_recomputes_summary_for_committed_revision(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=0,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000017000,
+            summary_hash="pending",
+            files=[],
+            tombstones=[],
+        )
+
+        finalized = finalize_manifest_revision(manifest, revision=8)
+
+        self.assertEqual(finalized.revision, 8)
+        self.assertEqual(finalized.summary_hash, compute_manifest_summary_hash(finalized))
+        self.assertNotEqual(finalized.summary_hash, "pending")
+
+    def test_build_commit_manifest_exports_active_entries_and_tombstones(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018000,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000017900,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 128,
+                        "mtime": 1770000017800,
+                        "mime_type": "text/markdown",
+                    },
+                ),
+                FileRecord(
+                    file_id="file_deleted",
+                    path="Notes/Deleted.md",
+                    type="note",
+                    status="deleted",
+                    updated_at=1770000017850,
+                ),
+                FileRecord(
+                    file_id="file_conflict",
+                    path="Notes/Live (conflict).md",
+                    type="note",
+                    status="conflict_copy",
+                    updated_at=1770000017860,
+                    content_hash="sha256:conflict",
+                    conflict_source_file_id="file_live",
+                    meta={
+                        "blob_id": "blob_conflict",
+                        "size": 64,
+                        "mtime": 1770000017850,
+                    },
+                ),
+            ],
+        )
+        tombstones = [
+            TombstoneRecord(
+                file_id="file_deleted",
+                deleted_revision=None,
+                deleted_at=1770000017810,
+                local_delete_seq=3,
+                last_known_path="Notes/Deleted.md",
+            )
+        ]
+
+        manifest = build_commit_manifest(
+            document,
+            tombstones=tombstones,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000018001,
+        )
+
+        self.assertEqual(manifest.revision, 0)
+        self.assertEqual(manifest.summary_hash, "pending")
+        self.assertEqual([item.file_id for item in manifest.files], ["file_live"])
+        self.assertEqual(manifest.files[0].blob_id, "blob_live")
+        self.assertEqual(manifest.files[0].mime_type, "text/markdown")
+        self.assertEqual([item.file_id for item in manifest.tombstones], ["file_deleted"])
+
+    def test_build_commit_manifest_rejects_missing_active_file_metadata(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018100,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018000,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "mtime": 1770000017900,
+                    },
+                )
+            ],
+        )
+
+        with self.assertRaisesRegex(ValueError, "missing size"):
+            build_commit_manifest(
+                document,
+                tombstones=[],
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                created_at=1770000018101,
+            )
+
+    def test_build_commit_manifest_rejects_deleted_entries_without_tombstones(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018200,
+            files=[
+                FileRecord(
+                    file_id="file_deleted",
+                    path="Notes/Deleted.md",
+                    type="note",
+                    status="deleted",
+                    updated_at=1770000018190,
+                )
+            ],
+        )
+
+        with self.assertRaisesRegex(ValueError, "missing tombstones"):
+            build_commit_manifest(
+                document,
+                tombstones=[],
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                created_at=1770000018201,
+            )
+
+    def test_apply_commit_submitted_state_sets_commit_in_progress(self) -> None:
+        state = VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=7,
+            remote_head_revision=7,
+            acked_revision=7,
+            pending_ack_to_server=[7],
+            commit_in_progress=False,
+            last_manifest_summary="sha256:head7",
+            last_manifest_summary_status="valid",
+            local_delete_sequence=5,
+        )
+
+        updated = apply_commit_submitted_state(state)
+
+        self.assertTrue(updated.commit_in_progress)
+        self.assertEqual(updated.pending_ack_to_server, [7])
+        self.assertEqual(updated.last_manifest_summary, state.last_manifest_summary)
+
+    def test_prepare_commit_submission_persists_submitted_journal_and_state(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018300,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018290,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 128,
+                        "mtime": 1770000018280,
+                    },
+                )
+            ],
+        )
+        tombstones = [
+            TombstoneRecord(
+                file_id="file_deleted",
+                deleted_revision=None,
+                deleted_at=1770000018270,
+                local_delete_seq=2,
+                last_known_path="Notes/Deleted.md",
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with closing(open_database(Path(tmpdir) / "state.sqlite3")) as connection:
+                bootstrap_database(connection)
+                state = initialize_vault_state(connection, "vault_pkb_001")
+                state = VaultStateRecord(
+                    vault_id=state.vault_id,
+                    last_applied_revision=7,
+                    remote_head_revision=7,
+                    acked_revision=7,
+                    pending_ack_to_server=[],
+                    commit_in_progress=False,
+                    last_manifest_summary="sha256:head7",
+                    last_manifest_summary_status="valid",
+                    local_delete_sequence=2,
+                )
+                upsert_vault_state(connection, state)
+
+                bundle = prepare_commit_submission(
+                    connection,
+                    state=state,
+                    document=document,
+                    tombstones=tombstones,
+                    commit_intent_id="intent_1",
+                    created_by_device="desktop-shanghai",
+                    created_at=1770000018301,
+                )
+
+                stored_journal = load_commit_intent_journal(connection, "vault_pkb_001")
+                stored_state = load_vault_state(connection, "vault_pkb_001")
+
+                self.assertEqual(bundle.intent_manifest_hash, compute_intent_manifest_hash(bundle.manifest))
+                self.assertEqual(bundle.journal.status, "submitted")
+                self.assertEqual(bundle.journal.intent_delete_seq_upper_bound, 2)
+                self.assertIsNotNone(stored_journal)
+                self.assertEqual(stored_journal, bundle.journal)
+                self.assertIsNotNone(stored_state)
+                self.assertTrue(stored_state.commit_in_progress)
+                self.assertEqual(stored_state, bundle.state)
+
+    def test_prepare_commit_submission_rejects_blocked_state_and_active_journal(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018400,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018390,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 128,
+                        "mtime": 1770000018380,
+                    },
+                )
+            ],
+        )
+        stale_state = VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=7,
+            remote_head_revision=7,
+            acked_revision=7,
+            pending_ack_to_server=[],
+            commit_in_progress=False,
+            last_manifest_summary=None,
+            last_manifest_summary_status="stale",
+            local_delete_sequence=2,
+        )
+        valid_state = VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=7,
+            remote_head_revision=7,
+            acked_revision=7,
+            pending_ack_to_server=[],
+            commit_in_progress=False,
+            last_manifest_summary="sha256:head7",
+            last_manifest_summary_status="valid",
+            local_delete_sequence=2,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with closing(open_database(Path(tmpdir) / "stale.sqlite3")) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(connection, stale_state)
+
+                with self.assertRaisesRegex(ValueError, "not eligible"):
+                    prepare_commit_submission(
+                        connection,
+                        state=stale_state,
+                        document=document,
+                        tombstones=[],
+                        commit_intent_id="intent_stale",
+                        created_by_device="desktop-shanghai",
+                        created_at=1770000018401,
+                    )
+
+            with closing(open_database(Path(tmpdir) / "journal.sqlite3")) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(connection, valid_state)
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_existing",
+                        intent_manifest_hash="sha256:intent_existing",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=2,
+                        created_at=1770000018400,
+                        updated_at=1770000018400,
+                    ),
+                )
+
+                with self.assertRaisesRegex(ValueError, "not eligible"):
+                    prepare_commit_submission(
+                        connection,
+                        state=valid_state,
+                        document=document,
+                        tombstones=[],
+                        commit_intent_id="intent_next",
+                        created_by_device="desktop-shanghai",
+                        created_at=1770000018402,
+                    )
+
+    def test_finalize_commit_manifest_sets_committed_revision_and_summary(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=0,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000018500,
+            summary_hash="pending",
+            files=[],
+            tombstones=[],
+        )
+
+        finalized = finalize_commit_manifest(manifest, committed_revision=8)
+
+        self.assertEqual(finalized.revision, 8)
+        self.assertEqual(finalized.summary_hash, compute_manifest_summary_hash(finalized))
+        self.assertNotEqual(finalized.summary_hash, "pending")
 
     def test_allocate_conflict_copy_path_sanitizes_device_and_avoids_collision(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -104,6 +104,27 @@ def with_computed_manifest_summary(manifest: ManifestRecord) -> ManifestRecord:
     )
 
 
+def finalize_manifest_revision(
+    manifest: ManifestRecord,
+    *,
+    revision: int,
+) -> ManifestRecord:
+    return with_computed_manifest_summary(
+        ManifestRecord(
+            schema_version=manifest.schema_version,
+            vault_id=manifest.vault_id,
+            revision=revision,
+            base_revision=manifest.base_revision,
+            created_by_device=manifest.created_by_device,
+            created_at=manifest.created_at,
+            files=list(manifest.files),
+            tombstones=list(manifest.tombstones),
+            summary_hash="placeholder",
+            meta=manifest.meta,
+        )
+    )
+
+
 def build_empty_vault_manifest_summary() -> str:
     empty_manifest = ManifestRecord(
         vault_id="__empty_vault__",
