@@ -211,6 +211,23 @@ class ContentSnapshotMaterializationResult:
 
 
 @dataclass(frozen=True)
+class MaterializedBlobStagingFile:
+    file_id: str
+    blob_id: str
+    snapshot_path: Path
+    blob_staging_path: Path
+    content_hash: str
+    plaintext_size: int
+    encrypted_size: int
+
+
+@dataclass(frozen=True)
+class BlobStagingMaterializationResult:
+    snapshot_plan: ContentSnapshotPlan
+    files: list[MaterializedBlobStagingFile]
+
+
+@dataclass(frozen=True)
 class SnapshotDriftAbortResult:
     state: VaultStateRecord
     drifted_file_ids: list[str]
@@ -396,6 +413,28 @@ def _resolve_snapshot_output_path(
     return output_path
 
 
+def _resolve_blob_staging_output_path(
+    vault_root: Path,
+    frozen: ContentSnapshotFile,
+) -> Path:
+    relative_path = Path(frozen.blob_staging_path)
+    expected_relative_path = Path(STAGING_DIRNAME) / f"{frozen.blob_id}.blob.staging"
+    if relative_path != expected_relative_path:
+        raise ValueError(
+            f"snapshot plan has unexpected blob staging path for file_id {frozen.file_id}"
+        )
+
+    staging_root = (vault_root / Path(STAGING_DIRNAME)).resolve()
+    output_path = (vault_root / relative_path).resolve()
+    try:
+        output_path.relative_to(staging_root)
+    except ValueError as exc:
+        raise ValueError(
+            f"blob staging path escapes staging root for file_id {frozen.file_id}"
+        ) from exc
+    return output_path
+
+
 def _write_bytes_atomic(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(path.name + ".tmp")
@@ -450,6 +489,89 @@ def materialize_content_snapshot_plan(
         raise
 
     return ContentSnapshotMaterializationResult(
+        snapshot_plan=plan,
+        files=written_files,
+    )
+
+
+def materialize_blob_staging_plan(
+    vault_root: Path,
+    *,
+    plan: ContentSnapshotPlan,
+    snapshot_materialization: ContentSnapshotMaterializationResult,
+    encrypted_blob_by_file_id: Mapping[str, bytes],
+) -> BlobStagingMaterializationResult:
+    if snapshot_materialization.snapshot_plan != plan:
+        raise ValueError("snapshot materialization result does not match snapshot plan")
+
+    snapshots_by_file_id = {
+        item.file_id: item
+        for item in snapshot_materialization.files
+    }
+
+    written_files: list[MaterializedBlobStagingFile] = []
+    written_paths: list[Path] = []
+    try:
+        for frozen in plan.files:
+            materialized_snapshot = snapshots_by_file_id.get(frozen.file_id)
+            if materialized_snapshot is None:
+                raise KeyError(
+                    f"materialized snapshot not found for file_id: {frozen.file_id}"
+                )
+            if materialized_snapshot.content_hash != frozen.content_hash:
+                raise ValueError(
+                    f"materialized snapshot hash mismatch for file_id {frozen.file_id}"
+                )
+
+            snapshot_path = _resolve_snapshot_output_path(vault_root, frozen)
+            if materialized_snapshot.snapshot_path != snapshot_path:
+                raise ValueError(
+                    f"materialized snapshot path mismatch for file_id {frozen.file_id}"
+                )
+
+            snapshot_payload = snapshot_path.read_bytes()
+            snapshot_content_hash = _compute_content_hash(snapshot_payload)
+            if snapshot_content_hash != frozen.content_hash:
+                raise ValueError(
+                    "snapshot file hash mismatch for file_id "
+                    f"{frozen.file_id}: expected {frozen.content_hash}, got {snapshot_content_hash}"
+                )
+            if len(snapshot_payload) != materialized_snapshot.size_bytes:
+                raise ValueError(
+                    f"snapshot file size mismatch for file_id {frozen.file_id}"
+                )
+
+            if frozen.file_id not in encrypted_blob_by_file_id:
+                raise KeyError(f"encrypted blob not provided for file_id: {frozen.file_id}")
+
+            encrypted_payload = encrypted_blob_by_file_id[frozen.file_id]
+            expected_encrypted_size = materialized_snapshot.size_bytes + 16
+            if len(encrypted_payload) != expected_encrypted_size:
+                raise ValueError(
+                    "encrypted blob size mismatch for file_id "
+                    f"{frozen.file_id}: expected {expected_encrypted_size}, got {len(encrypted_payload)}"
+                )
+
+            blob_staging_path = _resolve_blob_staging_output_path(vault_root, frozen)
+            _write_bytes_atomic(blob_staging_path, encrypted_payload)
+            written_paths.append(blob_staging_path)
+            written_files.append(
+                MaterializedBlobStagingFile(
+                    file_id=frozen.file_id,
+                    blob_id=frozen.blob_id,
+                    snapshot_path=snapshot_path,
+                    blob_staging_path=blob_staging_path,
+                    content_hash=frozen.content_hash,
+                    plaintext_size=materialized_snapshot.size_bytes,
+                    encrypted_size=len(encrypted_payload),
+                )
+            )
+    except Exception:
+        for path in reversed(written_paths):
+            path.unlink(missing_ok=True)
+        raise
+
+    return BlobStagingMaterializationResult(
         snapshot_plan=plan,
         files=written_files,
     )
