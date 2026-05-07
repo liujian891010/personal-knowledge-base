@@ -14,10 +14,12 @@ from vault_core import (
     BlobStagingMaterializationResult,
     BlobUploadPlan,
     BlobUploadPlanEntry,
+    CommitNetworkPlan,
     CommitSnapshotEntry,
     CommitSnapshotTable,
     CommitRecoveryExecutionResult,
     CommitFinalizeCleanupResult,
+    CommitSubmissionBundle,
     ContentSnapshotMaterializationResult,
     FileMapDocument,
     FileRecord,
@@ -25,6 +27,8 @@ from vault_core import (
     ManifestFileEntry,
     ManifestRecord,
     MaterializedBlobStagingFile,
+    CreateCommitBlobRef,
+    CreateCommitRequestPayload,
     ContentSnapshotPlan,
     SnapshotDriftAbortResult,
     ReconcileResult,
@@ -60,8 +64,10 @@ from vault_core import (
     build_blob_upload_plan,
     build_commit_manifest,
     build_commit_manifest_from_snapshot_plan,
+    build_commit_network_plan,
     build_commit_snapshot_table,
     build_content_snapshot_plan,
+    build_create_commit_request_payload,
     cleanup_commit_staging_artifacts,
     cleanup_failed_commit_submission,
     CommitRecoveryPlan,
@@ -1835,6 +1841,261 @@ class VaultCoreStorageTests(unittest.TestCase):
             build_blob_upload_plan(
                 inconsistent_snapshot_table,
                 missing_blob_ids=["blob_shared"],
+            )
+
+    def test_build_create_commit_request_payload_uses_snapshot_table_blob_refs(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=0,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000018598,
+            summary_hash="pending",
+            files=[
+                ManifestFileEntry(
+                    file_id="file_a",
+                    path="Notes/A.md",
+                    type="note",
+                    content_hash="sha256:a",
+                    blob_id="blob_shared",
+                    size=16,
+                    mtime=1770000018594,
+                ),
+                ManifestFileEntry(
+                    file_id="file_b",
+                    path="Notes/B.md",
+                    type="note",
+                    content_hash="sha256:b",
+                    blob_id="blob_unique",
+                    size=8,
+                    mtime=1770000018595,
+                    mime_type="text/markdown",
+                ),
+            ],
+            tombstones=[],
+        )
+        submission = CommitSubmissionBundle(
+            manifest=manifest,
+            intent_manifest_hash="sha256:intent",
+            journal=CommitIntentJournalRecord(
+                vault_id="vault_pkb_001",
+                commit_intent_id="intent_1",
+                intent_manifest_hash="sha256:intent",
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                status="submitted",
+                intent_delete_seq_upper_bound=5,
+                created_at=1770000018598,
+                updated_at=1770000018600,
+            ),
+            state=VaultStateRecord(
+                vault_id="vault_pkb_001",
+                last_applied_revision=7,
+                remote_head_revision=7,
+                acked_revision=7,
+                pending_ack_to_server=[],
+                commit_in_progress=True,
+                last_manifest_summary="sha256:head7",
+                last_manifest_summary_status="valid",
+                local_delete_sequence=5,
+            ),
+        )
+        snapshot_table = CommitSnapshotTable(
+            vault_id="vault_pkb_001",
+            base_revision=7,
+            created_at=1770000018598,
+            entries=[
+                CommitSnapshotEntry(
+                    file_id="file_b",
+                    path="Notes/B.md",
+                    type="note",
+                    content_hash="sha256:b",
+                    blob_id="blob_unique",
+                    plaintext_size=8,
+                    encrypted_size=24,
+                    mtime=1770000018595,
+                    mime_type="text/markdown",
+                    snapshot_path=Path("C:/tmp/file_b.snapshot.plain"),
+                    blob_staging_path=Path("C:/tmp/blob_unique.blob.staging"),
+                ),
+                CommitSnapshotEntry(
+                    file_id="file_a",
+                    path="Notes/A.md",
+                    type="note",
+                    content_hash="sha256:a",
+                    blob_id="blob_shared",
+                    plaintext_size=16,
+                    encrypted_size=32,
+                    mtime=1770000018594,
+                    mime_type=None,
+                    snapshot_path=Path("C:/tmp/file_a.snapshot.plain"),
+                    blob_staging_path=Path("C:/tmp/blob_shared.blob.staging"),
+                ),
+            ],
+        )
+
+        payload = build_create_commit_request_payload(
+            submission,
+            snapshot_table=snapshot_table,
+        )
+
+        self.assertEqual(
+            payload,
+            CreateCommitRequestPayload(
+                commit_intent_id="intent_1",
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                intent_manifest_hash="sha256:intent",
+                intent_delete_seq_upper_bound=5,
+                manifest=manifest,
+                blob_refs=[
+                    CreateCommitBlobRef(blob_id="blob_shared", file_id="file_a"),
+                    CreateCommitBlobRef(blob_id="blob_unique", file_id="file_b"),
+                ],
+            ),
+        )
+
+    def test_build_commit_network_plan_combines_commit_request_and_missing_uploads(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=0,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000018601,
+            summary_hash="pending",
+            files=[
+                ManifestFileEntry(
+                    file_id="file_a",
+                    path="Notes/A.md",
+                    type="note",
+                    content_hash="sha256:a",
+                    blob_id="blob_shared",
+                    size=16,
+                    mtime=1770000018596,
+                ),
+                ManifestFileEntry(
+                    file_id="file_b",
+                    path="Notes/B.md",
+                    type="note",
+                    content_hash="sha256:b",
+                    blob_id="blob_unique",
+                    size=8,
+                    mtime=1770000018597,
+                ),
+            ],
+            tombstones=[],
+        )
+        submission = CommitSubmissionBundle(
+            manifest=manifest,
+            intent_manifest_hash="sha256:intent",
+            journal=CommitIntentJournalRecord(
+                vault_id="vault_pkb_001",
+                commit_intent_id="intent_2",
+                intent_manifest_hash="sha256:intent",
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                status="submitted",
+                intent_delete_seq_upper_bound=5,
+                created_at=1770000018601,
+                updated_at=1770000018602,
+            ),
+            state=VaultStateRecord(
+                vault_id="vault_pkb_001",
+                last_applied_revision=7,
+                remote_head_revision=7,
+                acked_revision=7,
+                pending_ack_to_server=[],
+                commit_in_progress=True,
+                last_manifest_summary="sha256:head7",
+                last_manifest_summary_status="valid",
+                local_delete_sequence=5,
+            ),
+        )
+        snapshot_table = CommitSnapshotTable(
+            vault_id="vault_pkb_001",
+            base_revision=7,
+            created_at=1770000018601,
+            entries=[
+                CommitSnapshotEntry(
+                    file_id="file_a",
+                    path="Notes/A.md",
+                    type="note",
+                    content_hash="sha256:a",
+                    blob_id="blob_shared",
+                    plaintext_size=16,
+                    encrypted_size=32,
+                    mtime=1770000018596,
+                    mime_type=None,
+                    snapshot_path=Path("C:/tmp/file_a.snapshot.plain"),
+                    blob_staging_path=Path("C:/tmp/blob_shared.blob.staging"),
+                ),
+                CommitSnapshotEntry(
+                    file_id="file_b",
+                    path="Notes/B.md",
+                    type="note",
+                    content_hash="sha256:b",
+                    blob_id="blob_unique",
+                    plaintext_size=8,
+                    encrypted_size=24,
+                    mtime=1770000018597,
+                    mime_type=None,
+                    snapshot_path=Path("C:/tmp/file_b.snapshot.plain"),
+                    blob_staging_path=Path("C:/tmp/blob_unique.blob.staging"),
+                ),
+            ],
+        )
+        blob_check = BlobCheckResult(
+            requested_blob_ids=["blob_shared", "blob_unique"],
+            existing_blob_ids=["blob_unique"],
+            missing_blob_ids=["blob_shared"],
+        )
+
+        network_plan = build_commit_network_plan(
+            submission,
+            snapshot_table=snapshot_table,
+            blob_check=blob_check,
+        )
+
+        self.assertEqual(
+            network_plan,
+            CommitNetworkPlan(
+                request=CreateCommitRequestPayload(
+                    commit_intent_id="intent_2",
+                    base_revision=7,
+                    created_by_device="desktop-shanghai",
+                    intent_manifest_hash="sha256:intent",
+                    intent_delete_seq_upper_bound=5,
+                    manifest=manifest,
+                    blob_refs=[
+                        CreateCommitBlobRef(blob_id="blob_shared", file_id="file_a"),
+                        CreateCommitBlobRef(blob_id="blob_unique", file_id="file_b"),
+                    ],
+                ),
+                blob_check=blob_check,
+                blob_uploads=BlobUploadPlan(
+                    vault_id="vault_pkb_001",
+                    entries=[
+                        BlobUploadPlanEntry(
+                            blob_id="blob_shared",
+                            content_hash="sha256:a",
+                            encrypted_size=32,
+                            blob_staging_path=Path("C:/tmp/blob_shared.blob.staging"),
+                            file_ids=["file_a"],
+                        )
+                    ],
+                ),
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "blob check result does not match snapshot table blob_ids"):
+            build_commit_network_plan(
+                submission,
+                snapshot_table=snapshot_table,
+                blob_check=BlobCheckResult(
+                    requested_blob_ids=["blob_shared"],
+                    existing_blob_ids=[],
+                    missing_blob_ids=["blob_shared"],
+                ),
             )
 
     def test_cleanup_commit_staging_artifacts_removes_only_snapshot_and_blob_files(self) -> None:
