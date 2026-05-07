@@ -9,6 +9,7 @@ from pathlib import Path
 from vault_core import (
     EMPTY_VAULT_FINAL_MANIFEST_SUMMARY,
     AppliedManifestResult,
+    BlobStagingMaterializationResult,
     CommitRecoveryExecutionResult,
     CommitFinalizeCleanupResult,
     ContentSnapshotMaterializationResult,
@@ -17,6 +18,7 @@ from vault_core import (
     MaterializedContentSnapshotFile,
     ManifestFileEntry,
     ManifestRecord,
+    MaterializedBlobStagingFile,
     ContentSnapshotPlan,
     SnapshotDriftAbortResult,
     ReconcileResult,
@@ -72,6 +74,7 @@ from vault_core import (
     load_sync_apply_journal,
     load_tombstone_ledger,
     load_vault_state,
+    materialize_blob_staging_plan,
     materialize_content_snapshot_plan,
     normalize_commit_journal_for_recovery,
     mark_deleted,
@@ -1170,6 +1173,192 @@ class VaultCoreStorageTests(unittest.TestCase):
 
             self.assertFalse((root / ".noteapp" / "staging" / "file_first.snapshot.plain").exists())
             self.assertFalse((root / ".noteapp" / "staging" / "file_second.snapshot.plain").exists())
+
+    def test_materialize_blob_staging_plan_writes_encrypted_blob_files(self) -> None:
+        payload = b"# frozen snapshot\n"
+        encrypted_payload = b"x" * (len(payload) + 16)
+        content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018585,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018575,
+                    content_hash=content_hash,
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": len(payload),
+                        "mtime": 1770000018565,
+                    },
+                )
+            ],
+        )
+        plan = build_content_snapshot_plan(
+            document,
+            base_revision=7,
+            created_at=1770000018586,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            snapshots = materialize_content_snapshot_plan(
+                root,
+                plan=plan,
+                document=document,
+                content_by_file_id={"file_live": payload},
+            )
+            staged = materialize_blob_staging_plan(
+                root,
+                plan=plan,
+                snapshot_materialization=snapshots,
+                encrypted_blob_by_file_id={
+                    "file_live": encrypted_payload,
+                    "file_unused": b"ignore me",
+                },
+            )
+
+            blob_path = root / ".noteapp" / "staging" / "blob_live.blob.staging"
+            snapshot_path = root / ".noteapp" / "staging" / "file_live.snapshot.plain"
+            self.assertEqual(
+                staged,
+                BlobStagingMaterializationResult(
+                    snapshot_plan=plan,
+                    files=[
+                        MaterializedBlobStagingFile(
+                            file_id="file_live",
+                            blob_id="blob_live",
+                            snapshot_path=snapshot_path.resolve(),
+                            blob_staging_path=blob_path.resolve(),
+                            content_hash=content_hash,
+                            plaintext_size=len(payload),
+                            encrypted_size=len(encrypted_payload),
+                        )
+                    ],
+                ),
+            )
+            self.assertEqual(blob_path.read_bytes(), encrypted_payload)
+            self.assertEqual(snapshot_path.read_bytes(), payload)
+
+    def test_materialize_blob_staging_plan_rejects_tampered_snapshot_file(self) -> None:
+        payload = b"# frozen snapshot\n"
+        encrypted_payload = b"x" * (len(payload) + 16)
+        content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018587,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018577,
+                    content_hash=content_hash,
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": len(payload),
+                        "mtime": 1770000018567,
+                    },
+                )
+            ],
+        )
+        plan = build_content_snapshot_plan(
+            document,
+            base_revision=7,
+            created_at=1770000018588,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            snapshots = materialize_content_snapshot_plan(
+                root,
+                plan=plan,
+                document=document,
+                content_by_file_id={"file_live": payload},
+            )
+            snapshot_path = root / ".noteapp" / "staging" / "file_live.snapshot.plain"
+            snapshot_path.write_bytes(b"# tampered\n")
+
+            with self.assertRaisesRegex(ValueError, "snapshot file hash mismatch for file_id file_live"):
+                materialize_blob_staging_plan(
+                    root,
+                    plan=plan,
+                    snapshot_materialization=snapshots,
+                    encrypted_blob_by_file_id={"file_live": encrypted_payload},
+                )
+
+            self.assertFalse((root / ".noteapp" / "staging" / "blob_live.blob.staging").exists())
+
+    def test_materialize_blob_staging_plan_cleans_partial_writes_on_failure(self) -> None:
+        first_payload = b"# first\n"
+        second_payload = b"# second\n"
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018589,
+            files=[
+                FileRecord(
+                    file_id="file_first",
+                    path="Notes/First.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018578,
+                    content_hash="sha256:" + hashlib.sha256(first_payload).hexdigest(),
+                    meta={
+                        "blob_id": "blob_first",
+                        "size": len(first_payload),
+                        "mtime": 1770000018568,
+                    },
+                ),
+                FileRecord(
+                    file_id="file_second",
+                    path="Notes/Second.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018579,
+                    content_hash="sha256:" + hashlib.sha256(second_payload).hexdigest(),
+                    meta={
+                        "blob_id": "blob_second",
+                        "size": len(second_payload),
+                        "mtime": 1770000018569,
+                    },
+                ),
+            ],
+        )
+        plan = build_content_snapshot_plan(
+            document,
+            base_revision=7,
+            created_at=1770000018590,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            snapshots = materialize_content_snapshot_plan(
+                root,
+                plan=plan,
+                document=document,
+                content_by_file_id={
+                    "file_first": first_payload,
+                    "file_second": second_payload,
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "encrypted blob size mismatch for file_id file_second"):
+                materialize_blob_staging_plan(
+                    root,
+                    plan=plan,
+                    snapshot_materialization=snapshots,
+                    encrypted_blob_by_file_id={
+                        "file_first": b"a" * (len(first_payload) + 16),
+                        "file_second": b"b" * len(second_payload),
+                    },
+                )
+
+            self.assertFalse((root / ".noteapp" / "staging" / "blob_first.blob.staging").exists())
+            self.assertFalse((root / ".noteapp" / "staging" / "blob_second.blob.staging").exists())
 
     def test_cleanup_commit_staging_artifacts_removes_only_snapshot_and_blob_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
