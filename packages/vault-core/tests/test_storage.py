@@ -9,7 +9,11 @@ from pathlib import Path
 from vault_core import (
     EMPTY_VAULT_FINAL_MANIFEST_SUMMARY,
     AppliedManifestResult,
+    BlobCheckRequest,
+    BlobCheckResult,
     BlobStagingMaterializationResult,
+    BlobUploadPlan,
+    BlobUploadPlanEntry,
     CommitSnapshotEntry,
     CommitSnapshotTable,
     CommitRecoveryExecutionResult,
@@ -52,6 +56,8 @@ from vault_core import (
     TombstoneRecord,
     append_tombstone,
     abort_drifted_commit_snapshot,
+    build_blob_check_request,
+    build_blob_upload_plan,
     build_commit_manifest,
     build_commit_manifest_from_snapshot_plan,
     build_commit_snapshot_table,
@@ -98,6 +104,7 @@ from vault_core import (
     recover_filemap,
     recover_filemap_rewrite_convergence,
     recover_local_commit_state,
+    resolve_blob_check_result,
     resolve_submitted_confirmation,
     resume_commit_recovery,
     persist_manifest_convergence,
@@ -1606,6 +1613,229 @@ class VaultCoreStorageTests(unittest.TestCase):
                     snapshot_materialization=snapshots,
                     blob_staging_materialization=tampered_staged,
                 )
+
+    def test_build_blob_check_request_deduplicates_blob_ids_from_snapshot_table(self) -> None:
+        snapshot_table = CommitSnapshotTable(
+            vault_id="vault_pkb_001",
+            base_revision=7,
+            created_at=1770000018595,
+            entries=[
+                CommitSnapshotEntry(
+                    file_id="file_b",
+                    path="Notes/B.md",
+                    type="note",
+                    content_hash="sha256:same",
+                    blob_id="blob_shared",
+                    plaintext_size=16,
+                    encrypted_size=32,
+                    mtime=1770000018590,
+                    mime_type=None,
+                    snapshot_path=Path("C:/tmp/file_b.snapshot.plain"),
+                    blob_staging_path=Path("C:/tmp/blob_shared.blob.staging"),
+                ),
+                CommitSnapshotEntry(
+                    file_id="file_a",
+                    path="Notes/A.md",
+                    type="note",
+                    content_hash="sha256:same",
+                    blob_id="blob_shared",
+                    plaintext_size=16,
+                    encrypted_size=32,
+                    mtime=1770000018589,
+                    mime_type=None,
+                    snapshot_path=Path("C:/tmp/file_a.snapshot.plain"),
+                    blob_staging_path=Path("C:/tmp/blob_shared.blob.staging"),
+                ),
+                CommitSnapshotEntry(
+                    file_id="file_c",
+                    path="Notes/C.md",
+                    type="note",
+                    content_hash="sha256:other",
+                    blob_id="blob_unique",
+                    plaintext_size=8,
+                    encrypted_size=24,
+                    mtime=1770000018591,
+                    mime_type=None,
+                    snapshot_path=Path("C:/tmp/file_c.snapshot.plain"),
+                    blob_staging_path=Path("C:/tmp/blob_unique.blob.staging"),
+                ),
+            ],
+        )
+
+        request = build_blob_check_request(snapshot_table)
+
+        self.assertEqual(
+            request,
+            BlobCheckRequest(blob_ids=["blob_shared", "blob_unique"]),
+        )
+
+    def test_resolve_blob_check_result_requires_full_partition_of_requested_blob_ids(self) -> None:
+        snapshot_table = CommitSnapshotTable(
+            vault_id="vault_pkb_001",
+            base_revision=7,
+            created_at=1770000018596,
+            entries=[
+                CommitSnapshotEntry(
+                    file_id="file_a",
+                    path="Notes/A.md",
+                    type="note",
+                    content_hash="sha256:a",
+                    blob_id="blob_a",
+                    plaintext_size=16,
+                    encrypted_size=32,
+                    mtime=1770000018592,
+                    mime_type=None,
+                    snapshot_path=Path("C:/tmp/file_a.snapshot.plain"),
+                    blob_staging_path=Path("C:/tmp/blob_a.blob.staging"),
+                ),
+                CommitSnapshotEntry(
+                    file_id="file_b",
+                    path="Notes/B.md",
+                    type="note",
+                    content_hash="sha256:b",
+                    blob_id="blob_b",
+                    plaintext_size=32,
+                    encrypted_size=48,
+                    mtime=1770000018593,
+                    mime_type=None,
+                    snapshot_path=Path("C:/tmp/file_b.snapshot.plain"),
+                    blob_staging_path=Path("C:/tmp/blob_b.blob.staging"),
+                ),
+            ],
+        )
+
+        resolved = resolve_blob_check_result(
+            snapshot_table,
+            existing_blob_ids=["blob_b"],
+            missing_blob_ids=["blob_a"],
+        )
+        self.assertEqual(
+            resolved,
+            BlobCheckResult(
+                requested_blob_ids=["blob_a", "blob_b"],
+                existing_blob_ids=["blob_b"],
+                missing_blob_ids=["blob_a"],
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "unknown blob_ids: blob_extra"):
+            resolve_blob_check_result(
+                snapshot_table,
+                existing_blob_ids=["blob_b", "blob_extra"],
+                missing_blob_ids=["blob_a"],
+            )
+
+        with self.assertRaisesRegex(ValueError, "does not cover requested blob_ids: blob_b"):
+            resolve_blob_check_result(
+                snapshot_table,
+                existing_blob_ids=[],
+                missing_blob_ids=["blob_a"],
+            )
+
+    def test_build_blob_upload_plan_deduplicates_missing_blob_uploads(self) -> None:
+        shared_blob_path = Path("C:/tmp/blob_shared.blob.staging")
+        snapshot_table = CommitSnapshotTable(
+            vault_id="vault_pkb_001",
+            base_revision=7,
+            created_at=1770000018597,
+            entries=[
+                CommitSnapshotEntry(
+                    file_id="file_a",
+                    path="Notes/A.md",
+                    type="note",
+                    content_hash="sha256:same",
+                    blob_id="blob_shared",
+                    plaintext_size=16,
+                    encrypted_size=32,
+                    mtime=1770000018594,
+                    mime_type=None,
+                    snapshot_path=Path("C:/tmp/file_a.snapshot.plain"),
+                    blob_staging_path=shared_blob_path,
+                ),
+                CommitSnapshotEntry(
+                    file_id="file_b",
+                    path="Notes/B.md",
+                    type="note",
+                    content_hash="sha256:same",
+                    blob_id="blob_shared",
+                    plaintext_size=16,
+                    encrypted_size=32,
+                    mtime=1770000018595,
+                    mime_type=None,
+                    snapshot_path=Path("C:/tmp/file_b.snapshot.plain"),
+                    blob_staging_path=shared_blob_path,
+                ),
+                CommitSnapshotEntry(
+                    file_id="file_c",
+                    path="Notes/C.md",
+                    type="note",
+                    content_hash="sha256:other",
+                    blob_id="blob_unique",
+                    plaintext_size=8,
+                    encrypted_size=24,
+                    mtime=1770000018596,
+                    mime_type=None,
+                    snapshot_path=Path("C:/tmp/file_c.snapshot.plain"),
+                    blob_staging_path=Path("C:/tmp/blob_unique.blob.staging"),
+                ),
+            ],
+        )
+
+        upload_plan = build_blob_upload_plan(
+            snapshot_table,
+            missing_blob_ids=["blob_shared", "blob_unique"],
+        )
+
+        self.assertEqual(
+            upload_plan,
+            BlobUploadPlan(
+                vault_id="vault_pkb_001",
+                entries=[
+                    BlobUploadPlanEntry(
+                        blob_id="blob_shared",
+                        content_hash="sha256:same",
+                        encrypted_size=32,
+                        blob_staging_path=shared_blob_path,
+                        file_ids=["file_a", "file_b"],
+                    ),
+                    BlobUploadPlanEntry(
+                        blob_id="blob_unique",
+                        content_hash="sha256:other",
+                        encrypted_size=24,
+                        blob_staging_path=Path("C:/tmp/blob_unique.blob.staging"),
+                        file_ids=["file_c"],
+                    ),
+                ],
+            ),
+        )
+
+        inconsistent_snapshot_table = CommitSnapshotTable(
+            vault_id=snapshot_table.vault_id,
+            base_revision=snapshot_table.base_revision,
+            created_at=snapshot_table.created_at,
+            entries=[
+                snapshot_table.entries[0],
+                CommitSnapshotEntry(
+                    file_id="file_b",
+                    path="Notes/B.md",
+                    type="note",
+                    content_hash="sha256:different",
+                    blob_id="blob_shared",
+                    plaintext_size=16,
+                    encrypted_size=32,
+                    mtime=1770000018595,
+                    mime_type=None,
+                    snapshot_path=Path("C:/tmp/file_b.snapshot.plain"),
+                    blob_staging_path=shared_blob_path,
+                ),
+            ],
+        )
+
+        with self.assertRaisesRegex(ValueError, "content hash mismatch for blob_id blob_shared"):
+            build_blob_upload_plan(
+                inconsistent_snapshot_table,
+                missing_blob_ids=["blob_shared"],
+            )
 
     def test_cleanup_commit_staging_artifacts_removes_only_snapshot_and_blob_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
