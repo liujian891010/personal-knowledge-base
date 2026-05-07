@@ -5,10 +5,11 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .manifest import EMPTY_VAULT_FINAL_MANIFEST_SUMMARY
+from .manifest import EMPTY_VAULT_FINAL_MANIFEST_SUMMARY, compute_manifest_summary_hash
 from .models import (
     CommitIntentJournalRecord,
     FileRecord,
+    ManifestRecord,
     SyncApplyJournalRecord,
     VaultStateRecord,
     WikiTaskRecord,
@@ -566,6 +567,27 @@ def recover_submitted_commit_match(
         _upsert_vault_state(connection, recovered)
         connection.execute("DELETE FROM commit_intent_journal WHERE vault_id = ?", (vault_id,))
     return recovered
+
+
+def recover_submitted_commit_from_manifest(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    *,
+    matched_manifest: Optional[ManifestRecord],
+    matched_revision: int,
+    observed_head_revision: int,
+    normalized_at: int,
+) -> VaultStateRecord:
+    return recover_submitted_commit_match(
+        connection,
+        vault_id,
+        matched_revision=matched_revision,
+        observed_head_revision=observed_head_revision,
+        matched_manifest_summary=(
+            None if matched_manifest is None else compute_manifest_summary_hash(matched_manifest)
+        ),
+        normalized_at=normalized_at,
+    )
 
 
 def recover_submitted_commit_miss(

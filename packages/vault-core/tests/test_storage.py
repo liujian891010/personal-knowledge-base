@@ -40,6 +40,7 @@ from vault_core import (
     open_database,
     normalize_legacy_acknowledged_commit_intent,
     recover_prepared_commit_cleanup,
+    recover_submitted_commit_from_manifest,
     recover_submitted_commit_match,
     recover_submitted_commit_miss,
     recover_sync_apply_finalizing_state,
@@ -806,6 +807,76 @@ class VaultCoreStorageTests(unittest.TestCase):
                 self.assertEqual(recovered.pending_ack_to_server, [4, 6])
                 self.assertEqual(recovered.last_manifest_summary_status, "stale")
                 self.assertIsNone(recovered.last_manifest_summary)
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_recover_submitted_commit_from_manifest_computes_final_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[4, 6],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=19,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=19,
+                        created_at=1770000053000,
+                        updated_at=1770000053000,
+                    ),
+                )
+                matched_manifest = ManifestRecord(
+                    vault_id="vault_pkb_001",
+                    revision=8,
+                    base_revision=7,
+                    created_by_device="desktop-shanghai",
+                    created_at=1770000053500,
+                    summary_hash="placeholder",
+                    files=[
+                        ManifestFileEntry(
+                            file_id="file_note_a",
+                            path="Notes/A.md",
+                            type="note",
+                            content_hash="sha256:a",
+                            blob_id="blob_a",
+                            size=128,
+                            mtime=1770000052000,
+                        )
+                    ],
+                    tombstones=[],
+                )
+
+                recovered = recover_submitted_commit_from_manifest(
+                    connection,
+                    "vault_pkb_001",
+                    matched_manifest=matched_manifest,
+                    matched_revision=8,
+                    observed_head_revision=10,
+                    normalized_at=1770000054000,
+                )
+
+                self.assertEqual(recovered.last_applied_revision, 8)
+                self.assertEqual(recovered.remote_head_revision, 10)
+                self.assertEqual(recovered.acked_revision, 8)
+                self.assertEqual(recovered.last_manifest_summary, compute_manifest_summary_hash(matched_manifest))
+                self.assertEqual(recovered.last_manifest_summary_status, "valid")
                 self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
 
     def test_recover_submitted_commit_miss_only_releases_lock(self) -> None:
