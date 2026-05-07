@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
+from .constants import STAGING_DIRNAME
 from .ledger import rewrite_tombstone_ledger
 from .manifest import compute_intent_manifest_hash, finalize_manifest_revision
 from .models import (
@@ -22,11 +23,13 @@ from .sqlite_store import (
     finalize_committed_state,
     load_commit_intent_journal,
     load_vault_state,
+    recover_orphaned_commit_lock,
     recover_prepared_commit_cleanup,
     recover_submitted_commit_miss,
     upsert_commit_intent_journal,
     upsert_vault_state,
 )
+from .paths import move_staging_orphan
 
 
 PENDING_INTENT_MANIFEST_HASH = "pending"
@@ -169,6 +172,12 @@ class CommitFinalizeResult:
     manifest: ManifestRecord
     tombstones: list[TombstoneRecord]
     state: VaultStateRecord
+
+
+@dataclass(frozen=True)
+class OrphanedCommitRecoveryResult:
+    state: VaultStateRecord
+    moved_staging_paths: list[Path]
 
 
 def prepare_commit_intent(
@@ -339,3 +348,31 @@ def cleanup_failed_commit_submission(
             normalized_at=normalized_at,
         )
     raise ValueError(f"unsupported commit journal status: {journal.status}")
+
+
+def isolate_staging_orphans(vault_root: Path) -> list[Path]:
+    staging_root = vault_root / STAGING_DIRNAME
+    if not staging_root.exists():
+        return []
+
+    moved_paths: list[Path] = []
+    for staging_path in sorted(
+        (path for path in staging_root.rglob("*") if path.is_file()),
+        key=lambda item: str(item.relative_to(staging_root)),
+    ):
+        moved_paths.append(move_staging_orphan(vault_root, staging_path))
+    return moved_paths
+
+
+def recover_orphaned_commit_session(
+    connection: sqlite3.Connection,
+    *,
+    vault_id: str,
+    vault_root: Path,
+) -> OrphanedCommitRecoveryResult:
+    moved_staging_paths = isolate_staging_orphans(vault_root)
+    state = recover_orphaned_commit_lock(connection, vault_id)
+    return OrphanedCommitRecoveryResult(
+        state=state,
+        moved_staging_paths=moved_staging_paths,
+    )

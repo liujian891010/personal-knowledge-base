@@ -19,6 +19,7 @@ from vault_core import (
     apply_commit_success_state,
     apply_committed_tombstones,
     apply_commit_submitted_state,
+    apply_orphaned_commit_lock_recovery,
     apply_manifest_reconciled_state,
     apply_manifest_summary_stale,
     apply_pulled_manifest,
@@ -42,6 +43,7 @@ from vault_core import (
     finalize_manifest_revision,
     initialize_vault,
     initialize_vault_state,
+    isolate_staging_orphans,
     load_commit_intent_journal,
     list_file_index,
     load_filemap,
@@ -68,6 +70,8 @@ from vault_core import (
     prepare_commit_submission,
     prepare_commit_intent,
     requires_full_pull,
+    recover_orphaned_commit_lock,
+    recover_orphaned_commit_session,
     replace_active_wiki_task,
     register_conflict_copy,
     rename_file,
@@ -1552,6 +1556,144 @@ class VaultCoreStorageTests(unittest.TestCase):
 
                 self.assertFalse(recovered.commit_in_progress)
                 self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_apply_orphaned_commit_lock_recovery_releases_commit_lock(self) -> None:
+        state = VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=7,
+            remote_head_revision=7,
+            acked_revision=7,
+            pending_ack_to_server=[4],
+            commit_in_progress=True,
+            last_manifest_summary="sha256:head7",
+            last_manifest_summary_status="valid",
+            local_delete_sequence=2,
+        )
+
+        recovered = apply_orphaned_commit_lock_recovery(state)
+
+        self.assertFalse(recovered.commit_in_progress)
+        self.assertEqual(recovered.pending_ack_to_server, [4])
+        self.assertEqual(recovered.last_manifest_summary, "sha256:head7")
+
+    def test_recover_orphaned_commit_lock_requires_no_active_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_existing",
+                        intent_manifest_hash="sha256:intent_existing",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=1,
+                        created_at=1770000019300,
+                        updated_at=1770000019300,
+                    ),
+                )
+
+                with self.assertRaisesRegex(ValueError, "no active journal"):
+                    recover_orphaned_commit_lock(connection, "vault_pkb_001")
+
+    def test_recover_orphaned_commit_lock_releases_lock_when_journal_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[4],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=2,
+                    ),
+                )
+
+                recovered = recover_orphaned_commit_lock(connection, "vault_pkb_001")
+
+                self.assertFalse(recovered.commit_in_progress)
+                self.assertEqual(recovered.pending_ack_to_server, [4])
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_isolate_staging_orphans_moves_all_staging_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "vault"
+            initialize_vault(root, vault_id="vault_pkb_001", now_ms=1770000019400)
+            direct = root / ".noteapp" / "staging" / "direct.snapshot.plain"
+            nested = root / ".noteapp" / "staging" / "nested" / "blob.staging"
+            nested.parent.mkdir(parents=True, exist_ok=True)
+            direct.write_text("direct", encoding="utf-8")
+            nested.write_text("nested", encoding="utf-8")
+
+            moved = isolate_staging_orphans(root)
+
+            self.assertEqual(len(moved), 2)
+            self.assertFalse(direct.exists())
+            self.assertFalse(nested.exists())
+            self.assertTrue(all(path.exists() for path in moved))
+            self.assertTrue(all(path.parent.name == "staging-orphans" for path in moved))
+
+    def test_recover_orphaned_commit_session_moves_staging_files_and_releases_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "vault"
+            initialize_vault(root, vault_id="vault_pkb_001", now_ms=1770000019500)
+            staging_file = root / ".noteapp" / "staging" / "leftover.blob.staging"
+            staging_file.write_text("payload", encoding="utf-8")
+            db_path = root / ".noteapp" / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+
+                recovered = recover_orphaned_commit_session(
+                    connection,
+                    vault_id="vault_pkb_001",
+                    vault_root=root,
+                )
+
+                self.assertFalse(recovered.state.commit_in_progress)
+                self.assertEqual(len(recovered.moved_staging_paths), 1)
+                self.assertFalse(staging_file.exists())
+                self.assertTrue(recovered.moved_staging_paths[0].exists())
 
     def test_recover_submitted_commit_match_with_manifest_404_marks_summary_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

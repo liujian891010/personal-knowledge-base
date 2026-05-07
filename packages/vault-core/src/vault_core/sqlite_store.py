@@ -16,6 +16,7 @@ from .models import (
 )
 from .recovery import (
     apply_commit_success_state,
+    apply_orphaned_commit_lock_recovery,
     apply_prepared_commit_recovery,
     apply_submitted_commit_match_recovery,
     apply_submitted_commit_miss_recovery,
@@ -531,6 +532,25 @@ def recover_prepared_commit_cleanup(
     with connection:
         _upsert_vault_state(connection, recovered)
         connection.execute("DELETE FROM commit_intent_journal WHERE vault_id = ?", (vault_id,))
+    return recovered
+
+
+def recover_orphaned_commit_lock(
+    connection: sqlite3.Connection,
+    vault_id: str,
+) -> VaultStateRecord:
+    state = load_vault_state(connection, vault_id)
+    journal = load_commit_intent_journal(connection, vault_id)
+    if state is None:
+        raise KeyError("vault_state must exist")
+    if journal is not None:
+        raise ValueError("orphaned commit lock recovery requires no active journal")
+    if not state.commit_in_progress:
+        raise ValueError("orphaned commit lock recovery requires commit_in_progress=true")
+
+    recovered = apply_orphaned_commit_lock_recovery(state)
+    with connection:
+        _upsert_vault_state(connection, recovered)
     return recovered
 
 
