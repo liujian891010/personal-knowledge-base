@@ -176,6 +176,9 @@ class ContentSnapshotFile:
     type: str
     content_hash: str
     blob_id: str
+    size: int
+    mtime: int
+    mime_type: Optional[str]
     source_version_token: str
     snapshot_path: str
     blob_staging_path: str
@@ -344,6 +347,9 @@ def build_content_snapshot_plan(
                 type=record.type,
                 content_hash=entry.content_hash,
                 blob_id=entry.blob_id,
+                size=entry.size,
+                mtime=entry.mtime,
+                mime_type=entry.mime_type,
                 source_version_token=_derive_snapshot_source_version(record),
                 snapshot_path=_snapshot_plain_path(record.file_id),
                 blob_staging_path=_blob_staging_path(entry.blob_id),
@@ -389,6 +395,87 @@ def assert_content_snapshot_plan_matches(
         raise ValueError(
             "content snapshot drift detected: " + ", ".join(sorted(drifted_file_ids))
         )
+
+
+def _build_manifest_file_entry_from_snapshot(
+    frozen: ContentSnapshotFile,
+) -> ManifestFileEntry:
+    return ManifestFileEntry(
+        file_id=frozen.file_id,
+        path=frozen.path,
+        type=frozen.type,
+        content_hash=frozen.content_hash,
+        blob_id=frozen.blob_id,
+        size=frozen.size,
+        mtime=frozen.mtime,
+        mime_type=frozen.mime_type,
+    )
+
+
+def _assert_snapshot_plan_covers_document(
+    plan: ContentSnapshotPlan,
+    document: FileMapDocument,
+) -> dict[str, ContentSnapshotFile]:
+    if document.vault_id != plan.vault_id:
+        raise ValueError("document vault_id does not match snapshot plan vault")
+
+    frozen_by_file_id = {item.file_id: item for item in plan.files}
+    active_file_ids = {
+        record.file_id
+        for record in document.files
+        if record.status == "active"
+    }
+    if active_file_ids != set(frozen_by_file_id):
+        raise ValueError("content snapshot plan active file set does not match document")
+
+    for record in document.files:
+        if record.status != "active":
+            continue
+        frozen = frozen_by_file_id[record.file_id]
+        if frozen.path != record.path or frozen.type != record.type:
+            raise ValueError(
+                f"content snapshot plan structure mismatch for file_id {record.file_id}"
+            )
+    return frozen_by_file_id
+
+
+def build_commit_manifest_from_snapshot_plan(
+    document: FileMapDocument,
+    *,
+    snapshot_plan: ContentSnapshotPlan,
+    tombstones: Iterable[TombstoneRecord],
+    base_revision: int,
+    created_by_device: str,
+    created_at: int,
+) -> ManifestRecord:
+    _validate_commit_document_paths(document)
+    frozen_by_file_id = _assert_snapshot_plan_covers_document(snapshot_plan, document)
+    tombstone_list = list(tombstones)
+    tombstone_ids = {record.file_id for record in tombstone_list}
+    deleted_ids = {
+        record.file_id
+        for record in document.files
+        if record.status == "deleted"
+    }
+    missing_tombstones = sorted(deleted_ids - tombstone_ids)
+    if missing_tombstones:
+        raise ValueError(f"deleted filemap entries are missing tombstones: {', '.join(missing_tombstones)}")
+
+    files = [
+        _build_manifest_file_entry_from_snapshot(frozen_by_file_id[record.file_id])
+        for record in document.files
+        if record.status == "active"
+    ]
+    return ManifestRecord(
+        vault_id=document.vault_id,
+        revision=0,
+        base_revision=base_revision,
+        created_by_device=created_by_device,
+        created_at=created_at,
+        files=files,
+        tombstones=tombstone_list,
+        summary_hash="pending",
+    )
 
 
 def _resolve_snapshot_output_path(
@@ -470,6 +557,11 @@ def materialize_content_snapshot_plan(
                 raise ValueError(
                     "snapshot content hash mismatch for file_id "
                     f"{frozen.file_id}: expected {frozen.content_hash}, got {content_hash}"
+                )
+            if len(payload) != frozen.size:
+                raise ValueError(
+                    "snapshot content size mismatch for file_id "
+                    f"{frozen.file_id}: expected {frozen.size}, got {len(payload)}"
                 )
 
             snapshot_path = _resolve_snapshot_output_path(vault_root, frozen)
@@ -685,6 +777,7 @@ def submit_prepared_commit(
     document: FileMapDocument,
     tombstones: Iterable[TombstoneRecord],
     submitted_at: int,
+    snapshot_plan: Optional[ContentSnapshotPlan] = None,
 ) -> CommitSubmissionBundle:
     journal = load_commit_intent_journal(connection, vault_id)
     if journal is None:
@@ -696,13 +789,29 @@ def submit_prepared_commit(
     if state is None:
         raise KeyError(f"vault_state not found: {vault_id}")
 
-    manifest = build_commit_manifest(
-        document,
-        tombstones=tombstones,
-        base_revision=journal.base_revision,
-        created_by_device=journal.created_by_device,
-        created_at=journal.created_at,
-    )
+    if snapshot_plan is None:
+        manifest = build_commit_manifest(
+            document,
+            tombstones=tombstones,
+            base_revision=journal.base_revision,
+            created_by_device=journal.created_by_device,
+            created_at=journal.created_at,
+        )
+    else:
+        if snapshot_plan.vault_id != vault_id:
+            raise ValueError("snapshot_plan vault_id does not match submitted commit vault")
+        if snapshot_plan.base_revision != journal.base_revision:
+            raise ValueError("snapshot_plan base_revision does not match prepared journal")
+        if snapshot_plan.created_at != journal.created_at:
+            raise ValueError("snapshot_plan created_at does not match prepared journal")
+        manifest = build_commit_manifest_from_snapshot_plan(
+            document,
+            snapshot_plan=snapshot_plan,
+            tombstones=tombstones,
+            base_revision=journal.base_revision,
+            created_by_device=journal.created_by_device,
+            created_at=journal.created_at,
+        )
     intent_manifest_hash = compute_intent_manifest_hash(manifest)
     submitted_journal = CommitIntentJournalRecord(
         vault_id=journal.vault_id,
@@ -748,6 +857,7 @@ def prepare_commit_submission(
         document=document,
         tombstones=tombstones,
         submitted_at=created_at,
+        snapshot_plan=frozen.snapshot_plan,
     )
     return CommitSubmissionBundle(
         manifest=submitted.manifest,

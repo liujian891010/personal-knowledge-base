@@ -51,6 +51,7 @@ from vault_core import (
     append_tombstone,
     abort_drifted_commit_snapshot,
     build_commit_manifest,
+    build_commit_manifest_from_snapshot_plan,
     build_content_snapshot_plan,
     cleanup_commit_staging_artifacts,
     cleanup_failed_commit_submission,
@@ -856,6 +857,9 @@ class VaultCoreStorageTests(unittest.TestCase):
         self.assertEqual(plan.files[0].file_id, "file_live")
         self.assertEqual(plan.files[0].snapshot_path, ".noteapp/staging/file_live.snapshot.plain")
         self.assertEqual(plan.files[0].blob_staging_path, ".noteapp/staging/blob_live.blob.staging")
+        self.assertEqual(plan.files[0].size, 128)
+        self.assertEqual(plan.files[0].mtime, 1770000018280)
+        self.assertIsNone(plan.files[0].mime_type)
         self.assertEqual(
             plan.files[0].source_version_token,
             "mtime:1770000018280:size:128:hash:sha256:live",
@@ -961,6 +965,66 @@ class VaultCoreStorageTests(unittest.TestCase):
                 self.assertTrue(bundle.state.commit_in_progress)
                 self.assertEqual(bundle.snapshot_plan.base_revision, 7)
                 self.assertEqual([item.file_id for item in bundle.snapshot_plan.files], ["file_live"])
+
+    def test_build_commit_manifest_from_snapshot_plan_uses_frozen_metadata(self) -> None:
+        baseline = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018520,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018510,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 128,
+                        "mtime": 1770000018500,
+                        "mime_type": "text/markdown",
+                    },
+                )
+            ],
+        )
+        current = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018521,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018511,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live_new",
+                        "size": 256,
+                        "mtime": 1770000018500,
+                        "mime_type": "text/x-markdown",
+                    },
+                )
+            ],
+        )
+        plan = build_content_snapshot_plan(
+            baseline,
+            base_revision=7,
+            created_at=1770000018522,
+        )
+
+        manifest = build_commit_manifest_from_snapshot_plan(
+            current,
+            snapshot_plan=plan,
+            tombstones=[],
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000018522,
+        )
+
+        self.assertEqual(manifest.files[0].blob_id, "blob_live")
+        self.assertEqual(manifest.files[0].size, 128)
+        self.assertEqual(manifest.files[0].mime_type, "text/markdown")
 
     def test_materialize_content_snapshot_plan_writes_snapshot_plain_files(self) -> None:
         payload = b"# frozen snapshot\n"
@@ -1113,6 +1177,45 @@ class VaultCoreStorageTests(unittest.TestCase):
                     plan=plan,
                     document=document,
                     content_by_file_id={"file_live": b"# changed\n"},
+                )
+
+            self.assertFalse((root / ".noteapp" / "staging" / "file_live.snapshot.plain").exists())
+
+    def test_materialize_content_snapshot_plan_rejects_content_size_mismatch(self) -> None:
+        payload = b"# frozen snapshot\n"
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018572,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018562,
+                    content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": len(payload) + 1,
+                        "mtime": 1770000018552,
+                    },
+                )
+            ],
+        )
+        plan = build_content_snapshot_plan(
+            document,
+            base_revision=7,
+            created_at=1770000018573,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with self.assertRaisesRegex(ValueError, "snapshot content size mismatch for file_id file_live"):
+                materialize_content_snapshot_plan(
+                    root,
+                    plan=plan,
+                    document=document,
+                    content_by_file_id={"file_live": payload},
                 )
 
             self.assertFalse((root / ".noteapp" / "staging" / "file_live.snapshot.plain").exists())
@@ -1596,6 +1699,85 @@ class VaultCoreStorageTests(unittest.TestCase):
                 self.assertEqual(bundle.manifest.base_revision, 7)
                 self.assertIsNotNone(stored_journal)
                 self.assertEqual(stored_journal, bundle.journal)
+
+    def test_submit_prepared_commit_uses_snapshot_plan_for_frozen_manifest_fields(self) -> None:
+        baseline = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018310,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018309,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 128,
+                        "mtime": 1770000018308,
+                        "mime_type": "text/markdown",
+                    },
+                )
+            ],
+        )
+        current = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018311,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018310,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live_next",
+                        "size": 512,
+                        "mtime": 1770000018308,
+                        "mime_type": "text/x-markdown",
+                    },
+                )
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with closing(open_database(Path(tmpdir) / "state.sqlite3")) as connection:
+                bootstrap_database(connection)
+                state = VaultStateRecord(
+                    vault_id="vault_pkb_001",
+                    last_applied_revision=7,
+                    remote_head_revision=7,
+                    acked_revision=7,
+                    pending_ack_to_server=[],
+                    commit_in_progress=False,
+                    last_manifest_summary="sha256:head7",
+                    last_manifest_summary_status="valid",
+                    local_delete_sequence=2,
+                )
+                upsert_vault_state(connection, state)
+                frozen = prepare_frozen_commit_intent(
+                    connection,
+                    state=state,
+                    document=baseline,
+                    commit_intent_id="intent_prepared",
+                    created_by_device="desktop-shanghai",
+                    created_at=1770000018312,
+                )
+
+                bundle = submit_prepared_commit(
+                    connection,
+                    vault_id="vault_pkb_001",
+                    document=current,
+                    tombstones=[],
+                    submitted_at=1770000018313,
+                    snapshot_plan=frozen.snapshot_plan,
+                )
+
+                self.assertEqual(bundle.manifest.files[0].blob_id, "blob_live")
+                self.assertEqual(bundle.manifest.files[0].size, 128)
+                self.assertEqual(bundle.manifest.files[0].mime_type, "text/markdown")
 
     def test_prepare_commit_submission_persists_submitted_journal_and_state(self) -> None:
         document = FileMapDocument(
