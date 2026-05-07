@@ -231,6 +231,29 @@ class BlobStagingMaterializationResult:
 
 
 @dataclass(frozen=True)
+class CommitSnapshotEntry:
+    file_id: str
+    path: str
+    type: str
+    content_hash: str
+    blob_id: str
+    plaintext_size: int
+    encrypted_size: int
+    mtime: int
+    mime_type: Optional[str]
+    snapshot_path: Path
+    blob_staging_path: Path
+
+
+@dataclass(frozen=True)
+class CommitSnapshotTable:
+    vault_id: str
+    base_revision: int
+    created_at: int
+    entries: list[CommitSnapshotEntry]
+
+
+@dataclass(frozen=True)
 class SnapshotDriftAbortResult:
     state: VaultStateRecord
     drifted_file_ids: list[str]
@@ -666,6 +689,71 @@ def materialize_blob_staging_plan(
     return BlobStagingMaterializationResult(
         snapshot_plan=plan,
         files=written_files,
+    )
+
+
+def build_commit_snapshot_table(
+    plan: ContentSnapshotPlan,
+    *,
+    snapshot_materialization: ContentSnapshotMaterializationResult,
+    blob_staging_materialization: BlobStagingMaterializationResult,
+) -> CommitSnapshotTable:
+    if snapshot_materialization.snapshot_plan != plan:
+        raise ValueError("snapshot materialization result does not match snapshot plan")
+    if blob_staging_materialization.snapshot_plan != plan:
+        raise ValueError("blob staging materialization result does not match snapshot plan")
+
+    snapshots_by_file_id = {
+        item.file_id: item
+        for item in snapshot_materialization.files
+    }
+    blobs_by_file_id = {
+        item.file_id: item
+        for item in blob_staging_materialization.files
+    }
+
+    entries: list[CommitSnapshotEntry] = []
+    for frozen in plan.files:
+        materialized_snapshot = snapshots_by_file_id.get(frozen.file_id)
+        if materialized_snapshot is None:
+            raise KeyError(f"materialized snapshot not found for file_id: {frozen.file_id}")
+        materialized_blob = blobs_by_file_id.get(frozen.file_id)
+        if materialized_blob is None:
+            raise KeyError(f"materialized blob staging not found for file_id: {frozen.file_id}")
+        if materialized_snapshot.content_hash != frozen.content_hash:
+            raise ValueError(f"materialized snapshot hash mismatch for file_id {frozen.file_id}")
+        if materialized_snapshot.size_bytes != frozen.size:
+            raise ValueError(f"materialized snapshot size mismatch for file_id {frozen.file_id}")
+        if materialized_blob.blob_id != frozen.blob_id:
+            raise ValueError(f"materialized blob id mismatch for file_id {frozen.file_id}")
+        if materialized_blob.content_hash != frozen.content_hash:
+            raise ValueError(f"materialized blob hash mismatch for file_id {frozen.file_id}")
+        if materialized_blob.plaintext_size != frozen.size:
+            raise ValueError(f"materialized blob plaintext size mismatch for file_id {frozen.file_id}")
+        if materialized_blob.snapshot_path != materialized_snapshot.snapshot_path:
+            raise ValueError(f"materialized snapshot path mismatch for file_id {frozen.file_id}")
+
+        entries.append(
+            CommitSnapshotEntry(
+                file_id=frozen.file_id,
+                path=frozen.path,
+                type=frozen.type,
+                content_hash=frozen.content_hash,
+                blob_id=frozen.blob_id,
+                plaintext_size=frozen.size,
+                encrypted_size=materialized_blob.encrypted_size,
+                mtime=frozen.mtime,
+                mime_type=frozen.mime_type,
+                snapshot_path=materialized_snapshot.snapshot_path,
+                blob_staging_path=materialized_blob.blob_staging_path,
+            )
+        )
+
+    return CommitSnapshotTable(
+        vault_id=plan.vault_id,
+        base_revision=plan.base_revision,
+        created_at=plan.created_at,
+        entries=entries,
     )
 
 
