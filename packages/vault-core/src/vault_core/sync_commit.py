@@ -159,12 +159,40 @@ class CommitSubmissionBundle:
     intent_manifest_hash: str
     journal: CommitIntentJournalRecord
     state: VaultStateRecord
+    snapshot_plan: Optional[ContentSnapshotPlan] = None
 
 
 @dataclass(frozen=True)
 class CommitPreparationBundle:
     journal: CommitIntentJournalRecord
     state: VaultStateRecord
+
+
+@dataclass(frozen=True)
+class ContentSnapshotFile:
+    file_id: str
+    path: str
+    type: str
+    content_hash: str
+    blob_id: str
+    source_version_token: str
+    snapshot_path: str
+    blob_staging_path: str
+
+
+@dataclass(frozen=True)
+class ContentSnapshotPlan:
+    vault_id: str
+    base_revision: int
+    created_at: int
+    files: list[ContentSnapshotFile]
+
+
+@dataclass(frozen=True)
+class FrozenCommitPreparationBundle:
+    journal: CommitIntentJournalRecord
+    state: VaultStateRecord
+    snapshot_plan: ContentSnapshotPlan
 
 
 @dataclass(frozen=True)
@@ -218,6 +246,98 @@ class SubmittedConfirmationResolution:
     matched_metadata: Optional[RevisionMetadata]
 
 
+def _snapshot_plain_path(file_id: str) -> str:
+    return f"{STAGING_DIRNAME}/{file_id}.snapshot.plain"
+
+
+def _blob_staging_path(blob_id: str) -> str:
+    return f"{STAGING_DIRNAME}/{blob_id}.blob.staging"
+
+
+def _derive_snapshot_source_version(record: FileRecord) -> str:
+    meta = record.meta or {}
+    source_version_token = meta.get("source_version_token")
+    if source_version_token is not None:
+        if not isinstance(source_version_token, str) or not source_version_token:
+            raise ValueError(f"active file has invalid source_version_token: {record.file_id}")
+        return source_version_token
+
+    if record.content_hash is None:
+        raise ValueError(f"active file is missing content_hash: {record.file_id}")
+
+    mtime = meta.get("mtime")
+    size = meta.get("size")
+    if isinstance(mtime, int) and mtime >= 0 and isinstance(size, int) and size >= 0:
+        return f"mtime:{mtime}:size:{size}:hash:{record.content_hash}"
+    return f"updated_at:{record.updated_at}:hash:{record.content_hash}"
+
+
+def build_content_snapshot_plan(
+    document: FileMapDocument,
+    *,
+    base_revision: int,
+    created_at: int,
+) -> ContentSnapshotPlan:
+    _validate_commit_document_paths(document)
+    files = []
+    for record in document.sorted_files():
+        if record.status != "active":
+            continue
+        entry = _build_manifest_file_entry(record)
+        files.append(
+            ContentSnapshotFile(
+                file_id=record.file_id,
+                path=record.path,
+                type=record.type,
+                content_hash=entry.content_hash,
+                blob_id=entry.blob_id,
+                source_version_token=_derive_snapshot_source_version(record),
+                snapshot_path=_snapshot_plain_path(record.file_id),
+                blob_staging_path=_blob_staging_path(entry.blob_id),
+            )
+        )
+    return ContentSnapshotPlan(
+        vault_id=document.vault_id,
+        base_revision=base_revision,
+        created_at=created_at,
+        files=files,
+    )
+
+
+def detect_content_snapshot_drift(
+    plan: ContentSnapshotPlan,
+    document: FileMapDocument,
+) -> list[str]:
+    current_active = {
+        record.file_id: record
+        for record in document.files
+        if record.status == "active"
+    }
+    drifted_file_ids: list[str] = []
+    for frozen in plan.files:
+        current = current_active.get(frozen.file_id)
+        if current is None:
+            drifted_file_ids.append(frozen.file_id)
+            continue
+        if current.path != frozen.path or current.type != frozen.type:
+            drifted_file_ids.append(frozen.file_id)
+            continue
+        if _derive_snapshot_source_version(current) != frozen.source_version_token:
+            drifted_file_ids.append(frozen.file_id)
+    return drifted_file_ids
+
+
+def assert_content_snapshot_plan_matches(
+    plan: ContentSnapshotPlan,
+    document: FileMapDocument,
+) -> None:
+    drifted_file_ids = detect_content_snapshot_drift(plan, document)
+    if drifted_file_ids:
+        raise ValueError(
+            "content snapshot drift detected: " + ", ".join(sorted(drifted_file_ids))
+        )
+
+
 def prepare_commit_intent(
     connection: sqlite3.Connection,
     *,
@@ -247,6 +367,34 @@ def prepare_commit_intent(
     return CommitPreparationBundle(
         journal=journal,
         state=updated_state,
+    )
+
+
+def prepare_frozen_commit_intent(
+    connection: sqlite3.Connection,
+    *,
+    state: VaultStateRecord,
+    document: FileMapDocument,
+    commit_intent_id: str,
+    created_by_device: str,
+    created_at: int,
+) -> FrozenCommitPreparationBundle:
+    preparation = prepare_commit_intent(
+        connection,
+        state=state,
+        commit_intent_id=commit_intent_id,
+        created_by_device=created_by_device,
+        created_at=created_at,
+    )
+    snapshot_plan = build_content_snapshot_plan(
+        document,
+        base_revision=preparation.journal.base_revision,
+        created_at=created_at,
+    )
+    return FrozenCommitPreparationBundle(
+        journal=preparation.journal,
+        state=preparation.state,
+        snapshot_plan=snapshot_plan,
     )
 
 
@@ -306,19 +454,27 @@ def prepare_commit_submission(
     created_by_device: str,
     created_at: int,
 ) -> CommitSubmissionBundle:
-    prepare_commit_intent(
+    frozen = prepare_frozen_commit_intent(
         connection,
         state=state,
+        document=document,
         commit_intent_id=commit_intent_id,
         created_by_device=created_by_device,
         created_at=created_at,
     )
-    return submit_prepared_commit(
+    submitted = submit_prepared_commit(
         connection,
         vault_id=state.vault_id,
         document=document,
         tombstones=tombstones,
         submitted_at=created_at,
+    )
+    return CommitSubmissionBundle(
+        manifest=submitted.manifest,
+        intent_manifest_hash=submitted.intent_manifest_hash,
+        journal=submitted.journal,
+        state=submitted.state,
+        snapshot_plan=frozen.snapshot_plan,
     )
 
 

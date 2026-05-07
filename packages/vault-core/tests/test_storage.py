@@ -13,6 +13,7 @@ from vault_core import (
     FileRecord,
     ManifestFileEntry,
     ManifestRecord,
+    ContentSnapshotPlan,
     ReconcileResult,
     ReconcilePlan,
     RevisionMetadata,
@@ -42,8 +43,11 @@ from vault_core import (
     TombstoneRecord,
     append_tombstone,
     build_commit_manifest,
+    build_content_snapshot_plan,
     cleanup_failed_commit_submission,
     CommitRecoveryPlan,
+    assert_content_snapshot_plan_matches,
+    detect_content_snapshot_drift,
     execute_pull_reconcile,
     execute_submitted_commit_confirmation,
     execute_submitted_commit_confirmation_remote_state,
@@ -82,6 +86,7 @@ from vault_core import (
     resume_commit_recovery,
     persist_manifest_convergence,
     plan_pull_reconcile,
+    prepare_frozen_commit_intent,
     prepare_commit_submission,
     prepare_commit_intent,
     requires_full_pull,
@@ -784,6 +789,167 @@ class VaultCoreStorageTests(unittest.TestCase):
                 self.assertIsNotNone(stored_journal)
                 self.assertEqual(stored_journal, bundle.journal)
 
+    def test_build_content_snapshot_plan_freezes_active_files_into_staging_paths(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018300,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018290,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 128,
+                        "mtime": 1770000018280,
+                    },
+                ),
+                FileRecord(
+                    file_id="file_conflict",
+                    path="Notes/Live (conflict).md",
+                    type="note",
+                    status="conflict_copy",
+                    updated_at=1770000018291,
+                    conflict_source_file_id="file_live",
+                ),
+                FileRecord(
+                    file_id="file_deleted",
+                    path="Notes/Deleted.md",
+                    type="note",
+                    status="deleted",
+                    updated_at=1770000018292,
+                ),
+            ],
+        )
+
+        plan = build_content_snapshot_plan(
+            document,
+            base_revision=7,
+            created_at=1770000018301,
+        )
+
+        self.assertEqual(
+            plan,
+            ContentSnapshotPlan(
+                vault_id="vault_pkb_001",
+                base_revision=7,
+                created_at=1770000018301,
+                files=plan.files,
+            ),
+        )
+        self.assertEqual(len(plan.files), 1)
+        self.assertEqual(plan.files[0].file_id, "file_live")
+        self.assertEqual(plan.files[0].snapshot_path, ".noteapp/staging/file_live.snapshot.plain")
+        self.assertEqual(plan.files[0].blob_staging_path, ".noteapp/staging/blob_live.blob.staging")
+        self.assertEqual(
+            plan.files[0].source_version_token,
+            "mtime:1770000018280:size:128:hash:sha256:live",
+        )
+
+    def test_detect_content_snapshot_drift_flags_changed_or_missing_files(self) -> None:
+        baseline = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018400,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018390,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 128,
+                        "mtime": 1770000018380,
+                    },
+                )
+            ],
+        )
+        drifted = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018401,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Renamed.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018391,
+                    content_hash="sha256:new",
+                    meta={
+                        "blob_id": "blob_live_next",
+                        "size": 256,
+                        "mtime": 1770000018381,
+                    },
+                )
+            ],
+        )
+
+        plan = build_content_snapshot_plan(
+            baseline,
+            base_revision=7,
+            created_at=1770000018402,
+        )
+
+        self.assertEqual(detect_content_snapshot_drift(plan, drifted), ["file_live"])
+        with self.assertRaisesRegex(ValueError, "content snapshot drift detected: file_live"):
+            assert_content_snapshot_plan_matches(plan, drifted)
+
+    def test_prepare_frozen_commit_intent_returns_snapshot_plan_with_prepared_journal(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018500,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018490,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 128,
+                        "mtime": 1770000018480,
+                    },
+                )
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with closing(open_database(Path(tmpdir) / "state.sqlite3")) as connection:
+                bootstrap_database(connection)
+                state = VaultStateRecord(
+                    vault_id="vault_pkb_001",
+                    last_applied_revision=7,
+                    remote_head_revision=7,
+                    acked_revision=7,
+                    pending_ack_to_server=[],
+                    commit_in_progress=False,
+                    last_manifest_summary="sha256:head7",
+                    last_manifest_summary_status="valid",
+                    local_delete_sequence=2,
+                )
+                upsert_vault_state(connection, state)
+
+                bundle = prepare_frozen_commit_intent(
+                    connection,
+                    state=state,
+                    document=document,
+                    commit_intent_id="intent_prepared",
+                    created_by_device="desktop-shanghai",
+                    created_at=1770000018501,
+                )
+
+                self.assertEqual(bundle.journal.status, "prepared")
+                self.assertTrue(bundle.state.commit_in_progress)
+                self.assertEqual(bundle.snapshot_plan.base_revision, 7)
+                self.assertEqual([item.file_id for item in bundle.snapshot_plan.files], ["file_live"])
+
     def test_submit_prepared_commit_promotes_journal_to_submitted(self) -> None:
         document = FileMapDocument(
             vault_id="vault_pkb_001",
@@ -915,6 +1081,8 @@ class VaultCoreStorageTests(unittest.TestCase):
                 self.assertEqual(bundle.intent_manifest_hash, compute_intent_manifest_hash(bundle.manifest))
                 self.assertEqual(bundle.journal.status, "submitted")
                 self.assertEqual(bundle.journal.intent_delete_seq_upper_bound, 2)
+                self.assertIsNotNone(bundle.snapshot_plan)
+                self.assertEqual([item.file_id for item in bundle.snapshot_plan.files], ["file_live"])
                 self.assertIsNotNone(stored_journal)
                 self.assertEqual(stored_journal, bundle.journal)
                 self.assertIsNotNone(stored_state)
