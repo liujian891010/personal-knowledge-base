@@ -105,6 +105,28 @@ def apply_prepared_commit_recovery(state: VaultStateRecord) -> VaultStateRecord:
     )
 
 
+def apply_commit_success_state(
+    state: VaultStateRecord,
+    *,
+    committed_revision: int,
+    manifest_summary: str,
+) -> VaultStateRecord:
+    return VaultStateRecord(
+        vault_id=state.vault_id,
+        last_applied_revision=max(state.last_applied_revision, committed_revision),
+        remote_head_revision=max(state.remote_head_revision, committed_revision),
+        acked_revision=max(state.acked_revision, committed_revision),
+        pending_ack_to_server=list(state.pending_ack_to_server),
+        commit_in_progress=False,
+        last_manifest_summary=manifest_summary,
+        last_manifest_summary_status="valid",
+        local_delete_sequence=state.local_delete_sequence,
+        has_unresolved_conflicts=state.has_unresolved_conflicts,
+        schema_version=state.schema_version,
+        meta=state.meta,
+    )
+
+
 def apply_submitted_commit_match_recovery(
     state: VaultStateRecord,
     *,

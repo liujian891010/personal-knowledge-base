@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
+from .ledger import rewrite_tombstone_ledger
 from .manifest import compute_intent_manifest_hash, finalize_manifest_revision
 from .models import (
     CommitIntentJournalRecord,
@@ -14,8 +16,13 @@ from .models import (
     TombstoneRecord,
     VaultStateRecord,
 )
-from .recovery import should_block_new_commit
-from .sqlite_store import load_commit_intent_journal, upsert_commit_intent_journal, upsert_vault_state
+from .recovery import apply_committed_tombstones, should_block_new_commit
+from .sqlite_store import (
+    finalize_committed_state,
+    load_commit_intent_journal,
+    upsert_commit_intent_journal,
+    upsert_vault_state,
+)
 
 
 def _manifest_file_meta(record: FileRecord) -> Mapping[str, object]:
@@ -114,6 +121,13 @@ class CommitSubmissionBundle:
     state: VaultStateRecord
 
 
+@dataclass(frozen=True)
+class CommitFinalizeResult:
+    manifest: ManifestRecord
+    tombstones: list[TombstoneRecord]
+    state: VaultStateRecord
+
+
 def prepare_commit_submission(
     connection: sqlite3.Connection,
     *,
@@ -164,3 +178,40 @@ def finalize_commit_manifest(
     committed_revision: int,
 ) -> ManifestRecord:
     return finalize_manifest_revision(manifest, revision=committed_revision)
+
+
+def finalize_commit_submission(
+    connection: sqlite3.Connection,
+    *,
+    ledger_path: Path,
+    manifest: ManifestRecord,
+    local_tombstones: Iterable[TombstoneRecord],
+    committed_revision: int,
+) -> CommitFinalizeResult:
+    journal = load_commit_intent_journal(connection, manifest.vault_id)
+    if journal is None:
+        raise KeyError(f"commit_intent_journal not found: {manifest.vault_id}")
+    if journal.status != "submitted":
+        raise ValueError("commit finalization requires a submitted journal")
+
+    finalized_manifest = finalize_commit_manifest(
+        manifest,
+        committed_revision=committed_revision,
+    )
+    updated_tombstones = apply_committed_tombstones(
+        list(local_tombstones),
+        journal,
+        committed_revision=committed_revision,
+    )
+    rewrite_tombstone_ledger(ledger_path, updated_tombstones)
+    updated_state = finalize_committed_state(
+        connection,
+        manifest.vault_id,
+        committed_revision=committed_revision,
+        manifest_summary=finalized_manifest.summary_hash,
+    )
+    return CommitFinalizeResult(
+        manifest=finalized_manifest,
+        tombstones=updated_tombstones,
+        state=updated_state,
+    )
