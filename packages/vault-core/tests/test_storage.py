@@ -604,6 +604,88 @@ class VaultCoreStorageTests(unittest.TestCase):
                 created_at=1770000018201,
             )
 
+    def test_build_commit_manifest_rejects_active_path_collisions_after_nfc_normalization(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018250,
+            files=[
+                FileRecord(
+                    file_id="file_a",
+                    path="Notes/Cafe\u0301.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018240,
+                    content_hash="sha256:a",
+                    meta={
+                        "blob_id": "blob_a",
+                        "size": 1,
+                        "mtime": 1770000018230,
+                    },
+                ),
+                FileRecord(
+                    file_id="file_b",
+                    path="Notes/Caf\u00e9.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018241,
+                    content_hash="sha256:b",
+                    meta={
+                        "blob_id": "blob_b",
+                        "size": 1,
+                        "mtime": 1770000018231,
+                    },
+                ),
+            ],
+        )
+
+        with self.assertRaisesRegex(ValueError, "collide after NFC normalization"):
+            build_commit_manifest(
+                document,
+                tombstones=[],
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                created_at=1770000018251,
+            )
+
+    def test_build_commit_manifest_rejects_conflict_copy_path_overlap_with_active(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018260,
+            files=[
+                FileRecord(
+                    file_id="file_conflict",
+                    path="Notes/Caf\u00e9.md",
+                    type="note",
+                    status="conflict_copy",
+                    updated_at=1770000018258,
+                    content_hash="sha256:conflict",
+                    conflict_source_file_id="file_live",
+                ),
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Cafe\u0301.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018259,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 1,
+                        "mtime": 1770000018250,
+                    },
+                ),
+            ],
+        )
+
+        with self.assertRaisesRegex(ValueError, "conflict copy path overlaps"):
+            build_commit_manifest(
+                document,
+                tombstones=[],
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                created_at=1770000018261,
+            )
+
     def test_apply_commit_submitted_state_sets_commit_in_progress(self) -> None:
         state = VaultStateRecord(
             vault_id="vault_pkb_001",
