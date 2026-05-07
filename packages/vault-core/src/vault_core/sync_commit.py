@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import unicodedata
 from dataclasses import dataclass
@@ -196,6 +197,20 @@ class FrozenCommitPreparationBundle:
 
 
 @dataclass(frozen=True)
+class MaterializedContentSnapshotFile:
+    file_id: str
+    snapshot_path: Path
+    content_hash: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
+class ContentSnapshotMaterializationResult:
+    snapshot_plan: ContentSnapshotPlan
+    files: list[MaterializedContentSnapshotFile]
+
+
+@dataclass(frozen=True)
 class SnapshotDriftAbortResult:
     state: VaultStateRecord
     drifted_file_ids: list[str]
@@ -269,6 +284,10 @@ def _blob_staging_path(blob_id: str) -> str:
 
 def _is_commit_staging_artifact(path: Path) -> bool:
     return path.name.endswith(".snapshot.plain") or path.name.endswith(".blob.staging")
+
+
+def _compute_content_hash(payload: bytes) -> str:
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 def _derive_snapshot_source_version(record: FileRecord) -> str:
@@ -353,6 +372,87 @@ def assert_content_snapshot_plan_matches(
         raise ValueError(
             "content snapshot drift detected: " + ", ".join(sorted(drifted_file_ids))
         )
+
+
+def _resolve_snapshot_output_path(
+    vault_root: Path,
+    frozen: ContentSnapshotFile,
+) -> Path:
+    relative_path = Path(frozen.snapshot_path)
+    expected_relative_path = Path(STAGING_DIRNAME) / f"{frozen.file_id}.snapshot.plain"
+    if relative_path != expected_relative_path:
+        raise ValueError(
+            f"snapshot plan has unexpected snapshot path for file_id {frozen.file_id}"
+        )
+
+    staging_root = (vault_root / Path(STAGING_DIRNAME)).resolve()
+    output_path = (vault_root / relative_path).resolve()
+    try:
+        output_path.relative_to(staging_root)
+    except ValueError as exc:
+        raise ValueError(
+            f"snapshot path escapes staging root for file_id {frozen.file_id}"
+        ) from exc
+    return output_path
+
+
+def _write_bytes_atomic(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(path.name + ".tmp")
+    try:
+        temp_path.write_bytes(payload)
+        temp_path.replace(path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def materialize_content_snapshot_plan(
+    vault_root: Path,
+    *,
+    plan: ContentSnapshotPlan,
+    document: FileMapDocument,
+    content_by_file_id: Mapping[str, bytes],
+) -> ContentSnapshotMaterializationResult:
+    if document.vault_id != plan.vault_id:
+        raise ValueError("document vault_id does not match snapshot plan vault")
+
+    assert_content_snapshot_plan_matches(plan, document)
+
+    written_files: list[MaterializedContentSnapshotFile] = []
+    written_paths: list[Path] = []
+    try:
+        for frozen in plan.files:
+            if frozen.file_id not in content_by_file_id:
+                raise KeyError(f"snapshot content not provided for file_id: {frozen.file_id}")
+
+            payload = content_by_file_id[frozen.file_id]
+            content_hash = _compute_content_hash(payload)
+            if content_hash != frozen.content_hash:
+                raise ValueError(
+                    "snapshot content hash mismatch for file_id "
+                    f"{frozen.file_id}: expected {frozen.content_hash}, got {content_hash}"
+                )
+
+            snapshot_path = _resolve_snapshot_output_path(vault_root, frozen)
+            _write_bytes_atomic(snapshot_path, payload)
+            written_paths.append(snapshot_path)
+            written_files.append(
+                MaterializedContentSnapshotFile(
+                    file_id=frozen.file_id,
+                    snapshot_path=snapshot_path,
+                    content_hash=content_hash,
+                    size_bytes=len(payload),
+                )
+            )
+    except Exception:
+        for path in reversed(written_paths):
+            path.unlink(missing_ok=True)
+        raise
+
+    return ContentSnapshotMaterializationResult(
+        snapshot_plan=plan,
+        files=written_files,
+    )
 
 
 def cleanup_commit_staging_artifacts(vault_root: Path) -> list[Path]:
