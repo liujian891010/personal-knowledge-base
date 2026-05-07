@@ -16,6 +16,7 @@ from vault_core import (
     ReconcilePlan,
     SubmittedRecoveryResult,
     add_file,
+    apply_commit_success_state,
     apply_committed_tombstones,
     apply_commit_submitted_state,
     apply_manifest_reconciled_state,
@@ -35,6 +36,7 @@ from vault_core import (
     append_tombstone,
     build_commit_manifest,
     execute_pull_reconcile,
+    finalize_commit_submission,
     finalize_commit_manifest,
     finalize_manifest_revision,
     initialize_vault,
@@ -620,6 +622,32 @@ class VaultCoreStorageTests(unittest.TestCase):
         self.assertEqual(updated.pending_ack_to_server, [7])
         self.assertEqual(updated.last_manifest_summary, state.last_manifest_summary)
 
+    def test_apply_commit_success_state_advances_revision_without_touching_pending_ack(self) -> None:
+        state = VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=7,
+            remote_head_revision=7,
+            acked_revision=7,
+            pending_ack_to_server=[4, 6],
+            commit_in_progress=True,
+            last_manifest_summary="sha256:head7",
+            last_manifest_summary_status="valid",
+            local_delete_sequence=5,
+        )
+
+        updated = apply_commit_success_state(
+            state,
+            committed_revision=8,
+            manifest_summary="sha256:head8",
+        )
+
+        self.assertEqual(updated.last_applied_revision, 8)
+        self.assertEqual(updated.remote_head_revision, 8)
+        self.assertEqual(updated.acked_revision, 8)
+        self.assertEqual(updated.pending_ack_to_server, [4, 6])
+        self.assertFalse(updated.commit_in_progress)
+        self.assertEqual(updated.last_manifest_summary, "sha256:head8")
+
     def test_prepare_commit_submission_persists_submitted_journal_and_state(self) -> None:
         document = FileMapDocument(
             vault_id="vault_pkb_001",
@@ -794,6 +822,147 @@ class VaultCoreStorageTests(unittest.TestCase):
         self.assertEqual(finalized.revision, 8)
         self.assertEqual(finalized.summary_hash, compute_manifest_summary_hash(finalized))
         self.assertNotEqual(finalized.summary_hash, "pending")
+
+    def test_finalize_commit_submission_rewrites_ledger_and_clears_journal(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=0,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000018600,
+            summary_hash="pending",
+            files=[],
+            tombstones=[],
+        )
+        tombstones = [
+            TombstoneRecord(
+                file_id="file_hit",
+                deleted_revision=None,
+                deleted_at=1770000018500,
+                local_delete_seq=2,
+                last_known_path="Notes/Hit.md",
+            ),
+            TombstoneRecord(
+                file_id="file_skip",
+                deleted_revision=None,
+                deleted_at=1770000018510,
+                local_delete_seq=5,
+                last_known_path="Notes/Skip.md",
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "tombstone-ledger.jsonl"
+            db_path = Path(tmpdir) / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[4],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=5,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=2,
+                        created_at=1770000018600,
+                        updated_at=1770000018600,
+                    ),
+                )
+
+                finalized = finalize_commit_submission(
+                    connection,
+                    ledger_path=ledger_path,
+                    manifest=manifest,
+                    local_tombstones=tombstones,
+                    committed_revision=8,
+                )
+
+                self.assertEqual(finalized.manifest.revision, 8)
+                self.assertEqual(finalized.manifest.summary_hash, compute_manifest_summary_hash(finalized.manifest))
+                self.assertEqual(finalized.state.last_applied_revision, 8)
+                self.assertEqual(finalized.state.remote_head_revision, 8)
+                self.assertEqual(finalized.state.acked_revision, 8)
+                self.assertEqual(finalized.state.pending_ack_to_server, [4])
+                self.assertFalse(finalized.state.commit_in_progress)
+                self.assertEqual(finalized.state.last_manifest_summary, finalized.manifest.summary_hash)
+                self.assertEqual(
+                    [(item.file_id, item.deleted_revision) for item in load_tombstone_ledger(ledger_path)],
+                    [("file_hit", 8), ("file_skip", None)],
+                )
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_finalize_commit_submission_requires_submitted_journal(self) -> None:
+        manifest = ManifestRecord(
+            vault_id="vault_pkb_001",
+            revision=0,
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            created_at=1770000018700,
+            summary_hash="pending",
+            files=[],
+            tombstones=[],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "tombstone-ledger.jsonl"
+            db_path = Path(tmpdir) / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_prepared",
+                        intent_manifest_hash="sha256:intent_prepared",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="prepared",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=1770000018700,
+                        updated_at=1770000018700,
+                    ),
+                )
+
+                with self.assertRaisesRegex(ValueError, "submitted journal"):
+                    finalize_commit_submission(
+                        connection,
+                        ledger_path=ledger_path,
+                        manifest=manifest,
+                        local_tombstones=[],
+                        committed_revision=8,
+                    )
 
     def test_allocate_conflict_copy_path_sanitizes_device_and_avoids_collision(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

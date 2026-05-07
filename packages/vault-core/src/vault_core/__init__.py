@@ -33,6 +33,7 @@ from .models import (
 from .operations import add_file, mark_deleted, register_conflict_copy, rename_file
 from .paths import allocate_conflict_copy_path, move_conflict_orphan, move_staging_orphan, sanitize_device_name
 from .recovery import (
+    apply_commit_success_state,
     apply_manifest_summary_stale,
     apply_manifest_reconciled_state,
     apply_prepared_commit_recovery,
@@ -47,7 +48,9 @@ from .recovery import (
 )
 from .sync_apply import AppliedManifestResult, SubmittedRecoveryResult, apply_pulled_manifest, recover_submitted_commit_flow
 from .sync_commit import (
+    CommitFinalizeResult,
     CommitSubmissionBundle,
+    finalize_commit_submission,
     apply_commit_submitted_state,
     build_commit_manifest,
     finalize_commit_manifest,
@@ -91,6 +94,7 @@ __all__ = [
     "ManifestFileEntry",
     "ManifestRecord",
     "AppliedManifestResult",
+    "CommitFinalizeResult",
     "CommitSubmissionBundle",
     "ReconcileResult",
     "ReconcilePlan",
@@ -98,6 +102,7 @@ __all__ = [
     "add_file",
     "allocate_conflict_copy_path",
     "apply_commit_submitted_state",
+    "apply_commit_success_state",
     "apply_committed_tombstones",
     "apply_manifest_summary_stale",
     "apply_manifest_reconciled_state",
@@ -119,6 +124,7 @@ __all__ = [
     "EMPTY_VAULT_FINAL_MANIFEST_SUMMARY",
     "execute_pull_reconcile",
     "finalize_commit_manifest",
+    "finalize_commit_submission",
     "finalize_manifest_revision",
     "initialize_vault",
     "initialize_vault_state",

@@ -15,6 +15,7 @@ from .models import (
     WikiTaskRecord,
 )
 from .recovery import (
+    apply_commit_success_state,
     apply_prepared_commit_recovery,
     apply_submitted_commit_match_recovery,
     apply_submitted_commit_miss_recovery,
@@ -531,6 +532,31 @@ def recover_prepared_commit_cleanup(
         _upsert_vault_state(connection, recovered)
         connection.execute("DELETE FROM commit_intent_journal WHERE vault_id = ?", (vault_id,))
     return recovered
+
+
+def finalize_committed_state(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    *,
+    committed_revision: int,
+    manifest_summary: str,
+) -> VaultStateRecord:
+    state = load_vault_state(connection, vault_id)
+    journal = load_commit_intent_journal(connection, vault_id)
+    if state is None or journal is None:
+        raise KeyError("vault_state and commit_intent_journal must both exist")
+    if journal.status != "submitted":
+        raise ValueError("commit finalization requires a submitted journal")
+
+    updated = apply_commit_success_state(
+        state,
+        committed_revision=committed_revision,
+        manifest_summary=manifest_summary,
+    )
+    with connection:
+        _upsert_vault_state(connection, updated)
+        connection.execute("DELETE FROM commit_intent_journal WHERE vault_id = ?", (vault_id,))
+    return updated
 
 
 def recover_submitted_commit_match(
