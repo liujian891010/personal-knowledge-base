@@ -37,6 +37,7 @@ from vault_core import (
     append_tombstone,
     build_commit_manifest,
     cleanup_failed_commit_submission,
+    CommitRecoveryPlan,
     execute_pull_reconcile,
     finalize_commit_submission,
     finalize_commit_manifest,
@@ -57,6 +58,7 @@ from vault_core import (
     merge_manifest_tombstones,
     open_database,
     normalize_legacy_acknowledged_commit_intent,
+    plan_commit_recovery,
     recover_prepared_commit_cleanup,
     recover_submitted_commit_flow,
     recover_submitted_commit_from_manifest,
@@ -65,6 +67,7 @@ from vault_core import (
     recover_sync_apply_finalizing_state,
     recover_filemap,
     recover_filemap_rewrite_convergence,
+    recover_local_commit_state,
     persist_manifest_convergence,
     plan_pull_reconcile,
     prepare_commit_submission,
@@ -1694,6 +1697,176 @@ class VaultCoreStorageTests(unittest.TestCase):
                 self.assertEqual(len(recovered.moved_staging_paths), 1)
                 self.assertFalse(staging_file.exists())
                 self.assertTrue(recovered.moved_staging_paths[0].exists())
+
+    def test_plan_commit_recovery_classifies_idle_prepared_submitted_and_orphaned(self) -> None:
+        idle_state = VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=7,
+            remote_head_revision=7,
+            acked_revision=7,
+            pending_ack_to_server=[],
+            commit_in_progress=False,
+            last_manifest_summary="sha256:head7",
+            last_manifest_summary_status="valid",
+            local_delete_sequence=0,
+        )
+        orphaned_state = VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=7,
+            remote_head_revision=7,
+            acked_revision=7,
+            pending_ack_to_server=[],
+            commit_in_progress=True,
+            last_manifest_summary="sha256:head7",
+            last_manifest_summary_status="valid",
+            local_delete_sequence=0,
+        )
+        prepared = CommitIntentJournalRecord(
+            vault_id="vault_pkb_001",
+            commit_intent_id="intent_prepared",
+            intent_manifest_hash="pending",
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            status="prepared",
+            intent_delete_seq_upper_bound=None,
+            created_at=1770000019600,
+            updated_at=1770000019600,
+        )
+        submitted = CommitIntentJournalRecord(
+            vault_id="vault_pkb_001",
+            commit_intent_id="intent_submitted",
+            intent_manifest_hash="sha256:intent_submitted",
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            status="submitted",
+            intent_delete_seq_upper_bound=1,
+            created_at=1770000019601,
+            updated_at=1770000019601,
+        )
+        acknowledged = CommitIntentJournalRecord(
+            vault_id="vault_pkb_001",
+            commit_intent_id="intent_ack",
+            intent_manifest_hash="sha256:intent_ack",
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            status="acknowledged",
+            intent_delete_seq_upper_bound=1,
+            created_at=1770000019602,
+            updated_at=1770000019602,
+        )
+
+        self.assertEqual(plan_commit_recovery(idle_state, journal=None), CommitRecoveryPlan("idle", False, False))
+        self.assertEqual(
+            plan_commit_recovery(orphaned_state, journal=None),
+            CommitRecoveryPlan("orphaned_lock", True, False),
+        )
+        self.assertEqual(
+            plan_commit_recovery(idle_state, journal=prepared),
+            CommitRecoveryPlan("prepared_cleanup", True, False),
+        )
+        self.assertEqual(
+            plan_commit_recovery(idle_state, journal=submitted),
+            CommitRecoveryPlan("submitted_confirmation", False, True),
+        )
+        self.assertEqual(
+            plan_commit_recovery(idle_state, journal=acknowledged),
+            CommitRecoveryPlan("submitted_confirmation", False, True),
+        )
+
+    def test_recover_local_commit_state_cleans_prepared_journal_and_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "vault"
+            initialize_vault(root, vault_id="vault_pkb_001", now_ms=1770000019700)
+            staging_file = root / ".noteapp" / "staging" / "prepared.snapshot.plain"
+            staging_file.write_text("payload", encoding="utf-8")
+            db_path = root / ".noteapp" / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_prepared",
+                        intent_manifest_hash="pending",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="prepared",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=1770000019701,
+                        updated_at=1770000019701,
+                    ),
+                )
+
+                recovered = recover_local_commit_state(
+                    connection,
+                    vault_id="vault_pkb_001",
+                    vault_root=root,
+                )
+
+                self.assertEqual(recovered.plan.mode, "prepared_cleanup")
+                self.assertFalse(recovered.plan.requires_remote_confirmation)
+                self.assertFalse(recovered.state.commit_in_progress)
+                self.assertEqual(len(recovered.moved_staging_paths), 1)
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_recover_local_commit_state_rejects_submitted_recovery_without_remote_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "vault"
+            initialize_vault(root, vault_id="vault_pkb_001", now_ms=1770000019800)
+            db_path = root / ".noteapp" / "state.sqlite3"
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_submitted",
+                        intent_manifest_hash="sha256:intent_submitted",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=1,
+                        created_at=1770000019801,
+                        updated_at=1770000019801,
+                    ),
+                )
+
+                with self.assertRaisesRegex(ValueError, "remote confirmation"):
+                    recover_local_commit_state(
+                        connection,
+                        vault_id="vault_pkb_001",
+                        vault_root=root,
+                    )
 
     def test_recover_submitted_commit_match_with_manifest_404_marks_summary_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

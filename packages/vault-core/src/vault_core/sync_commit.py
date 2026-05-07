@@ -180,6 +180,20 @@ class OrphanedCommitRecoveryResult:
     moved_staging_paths: list[Path]
 
 
+@dataclass(frozen=True)
+class CommitRecoveryPlan:
+    mode: str
+    should_cleanup_staging: bool
+    requires_remote_confirmation: bool
+
+
+@dataclass(frozen=True)
+class LocalCommitRecoveryResult:
+    plan: CommitRecoveryPlan
+    state: VaultStateRecord
+    moved_staging_paths: list[Path]
+
+
 def prepare_commit_intent(
     connection: sqlite3.Connection,
     *,
@@ -376,3 +390,80 @@ def recover_orphaned_commit_session(
         state=state,
         moved_staging_paths=moved_staging_paths,
     )
+
+
+def plan_commit_recovery(
+    state: VaultStateRecord,
+    *,
+    journal: Optional[CommitIntentJournalRecord],
+) -> CommitRecoveryPlan:
+    if journal is None:
+        if state.commit_in_progress:
+            return CommitRecoveryPlan(
+                mode="orphaned_lock",
+                should_cleanup_staging=True,
+                requires_remote_confirmation=False,
+            )
+        return CommitRecoveryPlan(
+            mode="idle",
+            should_cleanup_staging=False,
+            requires_remote_confirmation=False,
+        )
+
+    if journal.status == "prepared":
+        return CommitRecoveryPlan(
+            mode="prepared_cleanup",
+            should_cleanup_staging=True,
+            requires_remote_confirmation=False,
+        )
+    if journal.status in {"submitted", "acknowledged"}:
+        return CommitRecoveryPlan(
+            mode="submitted_confirmation",
+            should_cleanup_staging=False,
+            requires_remote_confirmation=True,
+        )
+    raise ValueError(f"unsupported commit journal status: {journal.status}")
+
+
+def recover_local_commit_state(
+    connection: sqlite3.Connection,
+    *,
+    vault_id: str,
+    vault_root: Path,
+) -> LocalCommitRecoveryResult:
+    state = load_vault_state(connection, vault_id)
+    if state is None:
+        raise KeyError(f"vault_state not found: {vault_id}")
+
+    journal = load_commit_intent_journal(connection, vault_id)
+    plan = plan_commit_recovery(state, journal=journal)
+
+    if plan.mode == "idle":
+        return LocalCommitRecoveryResult(
+            plan=plan,
+            state=state,
+            moved_staging_paths=[],
+        )
+
+    if plan.mode == "orphaned_lock":
+        recovered = recover_orphaned_commit_session(
+            connection,
+            vault_id=vault_id,
+            vault_root=vault_root,
+        )
+        return LocalCommitRecoveryResult(
+            plan=plan,
+            state=recovered.state,
+            moved_staging_paths=recovered.moved_staging_paths,
+        )
+
+    if plan.mode == "prepared_cleanup":
+        moved_staging_paths = isolate_staging_orphans(vault_root)
+        recovered_state = recover_prepared_commit_cleanup(connection, vault_id)
+        return LocalCommitRecoveryResult(
+            plan=plan,
+            state=recovered_state,
+            moved_staging_paths=moved_staging_paths,
+        )
+
+    raise ValueError("local commit recovery requires remote confirmation for submitted journal state")
