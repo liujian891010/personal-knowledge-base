@@ -7,12 +7,15 @@ NOTEAPP_DIRNAME = ".noteapp"
 AI_DIRNAME = ".ai"
 NOTES_DIRNAME = "Notes"
 ATTACHMENTS_DIRNAME = "Attachments"
+STAGING_DIRNAME = ".noteapp/staging"
+STAGING_ORPHANS_DIRNAME = ".noteapp/staging-orphans"
+CONFLICT_ORPHANS_DIRNAME = ".noteapp/conflict-orphans"
 
 LOCAL_ONLY_DIRS = (
     ".noteapp/drafts",
-    ".noteapp/staging",
-    ".noteapp/staging-orphans",
-    ".noteapp/conflict-orphans",
+    STAGING_DIRNAME,
+    STAGING_ORPHANS_DIRNAME,
+    CONFLICT_ORPHANS_DIRNAME,
     ".ai/raw",
 )
 

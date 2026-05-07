@@ -8,3 +8,5 @@
 4. `conflict_copy` 约束校验
 5. `tombstone-ledger.jsonl` 追加与 legacy 修复
 6. 删除操作对 `filemap` 和 tombstone 的联动
+7. 新建 / 改名 / 冲突副本登记
+8. 冲突副本命名和 orphan 隔离路径
