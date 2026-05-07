@@ -141,6 +141,35 @@ def apply_submitted_commit_miss_recovery(state: VaultStateRecord) -> VaultStateR
     return apply_prepared_commit_recovery(state)
 
 
+def apply_committed_tombstones(
+    tombstones: Iterable[TombstoneRecord],
+    journal: CommitIntentJournalRecord,
+    *,
+    committed_revision: int,
+) -> List[TombstoneRecord]:
+    selected_ids = {
+        record.file_id
+        for record in select_pending_tombstones_for_commit(tombstones, journal)
+    }
+    updated = []
+    for record in tombstones:
+        if record.file_id not in selected_ids:
+            updated.append(record)
+            continue
+        updated.append(
+            TombstoneRecord(
+                file_id=record.file_id,
+                deleted_revision=committed_revision,
+                deleted_at=record.deleted_at,
+                local_delete_seq=record.local_delete_seq,
+                last_known_path=record.last_known_path,
+                deleted_by_device=record.deleted_by_device,
+                meta=record.meta,
+            )
+        )
+    return updated
+
+
 def normalize_commit_journal_for_recovery(
     journal: CommitIntentJournalRecord,
     *,

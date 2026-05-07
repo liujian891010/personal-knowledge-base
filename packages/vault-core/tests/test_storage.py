@@ -12,7 +12,9 @@ from vault_core import (
     FileRecord,
     ManifestFileEntry,
     ManifestRecord,
+    SubmittedRecoveryResult,
     add_file,
+    apply_committed_tombstones,
     apply_manifest_reconciled_state,
     apply_manifest_summary_stale,
     apply_pulled_manifest,
@@ -44,6 +46,7 @@ from vault_core import (
     open_database,
     normalize_legacy_acknowledged_commit_intent,
     recover_prepared_commit_cleanup,
+    recover_submitted_commit_flow,
     recover_submitted_commit_from_manifest,
     recover_submitted_commit_match,
     recover_submitted_commit_miss,
@@ -993,6 +996,61 @@ class VaultCoreStorageTests(unittest.TestCase):
         self.assertEqual(updated.last_manifest_summary, "sha256:head8")
         self.assertEqual(updated.last_manifest_summary_status, "valid")
 
+    def test_apply_committed_tombstones_updates_seq_and_legacy_selected_entries(self) -> None:
+        tombstones = [
+            TombstoneRecord(
+                file_id="file_seq_hit",
+                deleted_revision=None,
+                deleted_at=100,
+                local_delete_seq=1,
+            ),
+            TombstoneRecord(
+                file_id="file_legacy_hit",
+                deleted_revision=None,
+                deleted_at=110,
+                local_delete_seq=5,
+            ),
+            TombstoneRecord(
+                file_id="file_skip",
+                deleted_revision=None,
+                deleted_at=210,
+                local_delete_seq=6,
+            ),
+        ]
+        seq_journal = CommitIntentJournalRecord(
+            vault_id="vault_pkb_001",
+            commit_intent_id="intent_seq",
+            intent_manifest_hash="sha256:intent_seq",
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            status="submitted",
+            intent_delete_seq_upper_bound=2,
+            created_at=150,
+            updated_at=150,
+        )
+        legacy_journal = CommitIntentJournalRecord(
+            vault_id="vault_pkb_001",
+            commit_intent_id="intent_legacy",
+            intent_manifest_hash="sha256:intent_legacy",
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            status="submitted",
+            intent_delete_seq_upper_bound=None,
+            created_at=150,
+            updated_at=150,
+        )
+
+        seq_updated = {item.file_id: item for item in apply_committed_tombstones(tombstones, seq_journal, committed_revision=8)}
+        legacy_updated = {
+            item.file_id: item for item in apply_committed_tombstones(tombstones, legacy_journal, committed_revision=9)
+        }
+
+        self.assertEqual(seq_updated["file_seq_hit"].deleted_revision, 8)
+        self.assertIsNone(seq_updated["file_legacy_hit"].deleted_revision)
+        self.assertEqual(legacy_updated["file_seq_hit"].deleted_revision, 9)
+        self.assertEqual(legacy_updated["file_legacy_hit"].deleted_revision, 9)
+        self.assertIsNone(legacy_updated["file_skip"].deleted_revision)
+
     def test_select_pending_tombstones_supports_seq_and_legacy_time_modes(self) -> None:
         tombstones = [
             TombstoneRecord(
@@ -1567,6 +1625,167 @@ class VaultCoreStorageTests(unittest.TestCase):
                     [item.file_id for item in load_tombstone_ledger(ledger_path)],
                     ["file_remote_deleted", "file_pending_delete"],
                 )
+
+    def test_recover_submitted_commit_flow_with_manifest_404_rewrites_ledger_and_forces_full_pull(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ledger_path = root / "tombstone-ledger.jsonl"
+            db_path = root / "state.sqlite3"
+            tombstones = [
+                TombstoneRecord(
+                    file_id="file_seq_hit",
+                    deleted_revision=None,
+                    deleted_at=100,
+                    local_delete_seq=1,
+                    last_known_path="Notes/A.md",
+                ),
+                TombstoneRecord(
+                    file_id="file_skip",
+                    deleted_revision=None,
+                    deleted_at=300,
+                    local_delete_seq=5,
+                    last_known_path="Notes/B.md",
+                ),
+            ]
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[4, 6],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=19,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=2,
+                        created_at=150,
+                        updated_at=150,
+                    ),
+                )
+
+                recovered = recover_submitted_commit_flow(
+                    connection,
+                    ledger_path=ledger_path,
+                    vault_id="vault_pkb_001",
+                    local_tombstones=tombstones,
+                    matched_revision=8,
+                    observed_head_revision=10,
+                    normalized_at=200,
+                    matched_manifest=None,
+                )
+
+                self.assertIsInstance(recovered, SubmittedRecoveryResult)
+                self.assertTrue(recovered.requires_full_pull)
+                self.assertEqual(recovered.state.last_manifest_summary_status, "stale")
+                self.assertIsNone(recovered.state.last_manifest_summary)
+                self.assertEqual(recovered.state.pending_ack_to_server, [4, 6])
+                self.assertEqual(
+                    [(item.file_id, item.deleted_revision) for item in load_tombstone_ledger(ledger_path)],
+                    [("file_seq_hit", 8), ("file_skip", None)],
+                )
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_recover_submitted_commit_flow_with_legacy_journal_uses_deleted_at_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ledger_path = root / "tombstone-ledger.jsonl"
+            db_path = root / "state.sqlite3"
+            tombstones = [
+                TombstoneRecord(
+                    file_id="file_legacy_hit",
+                    deleted_revision=None,
+                    deleted_at=100,
+                    local_delete_seq=5,
+                    last_known_path="Notes/A.md",
+                ),
+                TombstoneRecord(
+                    file_id="file_skip",
+                    deleted_revision=None,
+                    deleted_at=300,
+                    local_delete_seq=1,
+                    last_known_path="Notes/B.md",
+                ),
+            ]
+            matched_manifest = ManifestRecord(
+                vault_id="vault_pkb_001",
+                revision=8,
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                created_at=180,
+                summary_hash="placeholder",
+                files=[],
+                tombstones=[],
+            )
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[4],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=19,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_legacy",
+                        intent_manifest_hash="sha256:intent_legacy",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="acknowledged",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=150,
+                        updated_at=150,
+                    ),
+                )
+
+                recovered = recover_submitted_commit_flow(
+                    connection,
+                    ledger_path=ledger_path,
+                    vault_id="vault_pkb_001",
+                    local_tombstones=tombstones,
+                    matched_revision=8,
+                    observed_head_revision=8,
+                    normalized_at=200,
+                    matched_manifest=matched_manifest,
+                )
+
+                self.assertFalse(recovered.requires_full_pull)
+                self.assertEqual(
+                    recovered.state.last_manifest_summary,
+                    compute_manifest_summary_hash(matched_manifest),
+                )
+                self.assertEqual(recovered.state.pending_ack_to_server, [4])
+                self.assertEqual(
+                    [(item.file_id, item.deleted_revision) for item in load_tombstone_ledger(ledger_path)],
+                    [("file_legacy_hit", 8), ("file_skip", None)],
+                )
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
 
 
 if __name__ == "__main__":
