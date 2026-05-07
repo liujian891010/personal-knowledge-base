@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import unittest
@@ -10,8 +11,10 @@ from vault_core import (
     AppliedManifestResult,
     CommitRecoveryExecutionResult,
     CommitFinalizeCleanupResult,
+    ContentSnapshotMaterializationResult,
     FileMapDocument,
     FileRecord,
+    MaterializedContentSnapshotFile,
     ManifestFileEntry,
     ManifestRecord,
     ContentSnapshotPlan,
@@ -69,6 +72,7 @@ from vault_core import (
     load_sync_apply_journal,
     load_tombstone_ledger,
     load_vault_state,
+    materialize_content_snapshot_plan,
     normalize_commit_journal_for_recovery,
     mark_deleted,
     move_conflict_orphan,
@@ -954,6 +958,218 @@ class VaultCoreStorageTests(unittest.TestCase):
                 self.assertTrue(bundle.state.commit_in_progress)
                 self.assertEqual(bundle.snapshot_plan.base_revision, 7)
                 self.assertEqual([item.file_id for item in bundle.snapshot_plan.files], ["file_live"])
+
+    def test_materialize_content_snapshot_plan_writes_snapshot_plain_files(self) -> None:
+        payload = b"# frozen snapshot\n"
+        content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018550,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018540,
+                    content_hash=content_hash,
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": len(payload),
+                        "mtime": 1770000018530,
+                    },
+                )
+            ],
+        )
+        plan = build_content_snapshot_plan(
+            document,
+            base_revision=7,
+            created_at=1770000018551,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            materialized = materialize_content_snapshot_plan(
+                root,
+                plan=plan,
+                document=document,
+                content_by_file_id={
+                    "file_live": payload,
+                    "file_unused": b"ignore me",
+                },
+            )
+
+            snapshot_path = root / ".noteapp" / "staging" / "file_live.snapshot.plain"
+            self.assertEqual(
+                materialized,
+                ContentSnapshotMaterializationResult(
+                    snapshot_plan=plan,
+                    files=[
+                        MaterializedContentSnapshotFile(
+                            file_id="file_live",
+                            snapshot_path=snapshot_path.resolve(),
+                            content_hash=content_hash,
+                            size_bytes=len(payload),
+                        )
+                    ],
+                ),
+            )
+            self.assertEqual(snapshot_path.read_bytes(), payload)
+            self.assertFalse((root / ".noteapp" / "staging" / "file_unused.snapshot.plain").exists())
+
+    def test_materialize_content_snapshot_plan_rejects_drift_before_writing(self) -> None:
+        payload = b"# frozen snapshot\n"
+        baseline = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018560,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018550,
+                    content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": len(payload),
+                        "mtime": 1770000018540,
+                    },
+                )
+            ],
+        )
+        drifted = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018561,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Renamed.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018551,
+                    content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": len(payload),
+                        "mtime": 1770000018540,
+                    },
+                )
+            ],
+        )
+        plan = build_content_snapshot_plan(
+            baseline,
+            base_revision=7,
+            created_at=1770000018562,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with self.assertRaisesRegex(ValueError, "content snapshot drift detected: file_live"):
+                materialize_content_snapshot_plan(
+                    root,
+                    plan=plan,
+                    document=drifted,
+                    content_by_file_id={"file_live": payload},
+                )
+
+            self.assertFalse((root / ".noteapp" / "staging" / "file_live.snapshot.plain").exists())
+
+    def test_materialize_content_snapshot_plan_rejects_content_hash_mismatch(self) -> None:
+        payload = b"# frozen snapshot\n"
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018570,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018560,
+                    content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": len(payload),
+                        "mtime": 1770000018550,
+                    },
+                )
+            ],
+        )
+        plan = build_content_snapshot_plan(
+            document,
+            base_revision=7,
+            created_at=1770000018571,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with self.assertRaisesRegex(ValueError, "snapshot content hash mismatch for file_id file_live"):
+                materialize_content_snapshot_plan(
+                    root,
+                    plan=plan,
+                    document=document,
+                    content_by_file_id={"file_live": b"# changed\n"},
+                )
+
+            self.assertFalse((root / ".noteapp" / "staging" / "file_live.snapshot.plain").exists())
+
+    def test_materialize_content_snapshot_plan_cleans_partial_writes_on_failure(self) -> None:
+        first_payload = b"# first\n"
+        second_payload = b"# second\n"
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018580,
+            files=[
+                FileRecord(
+                    file_id="file_first",
+                    path="Notes/First.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018570,
+                    content_hash="sha256:" + hashlib.sha256(first_payload).hexdigest(),
+                    meta={
+                        "blob_id": "blob_first",
+                        "size": len(first_payload),
+                        "mtime": 1770000018560,
+                    },
+                ),
+                FileRecord(
+                    file_id="file_second",
+                    path="Notes/Second.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018571,
+                    content_hash="sha256:" + hashlib.sha256(second_payload).hexdigest(),
+                    meta={
+                        "blob_id": "blob_second",
+                        "size": len(second_payload),
+                        "mtime": 1770000018561,
+                    },
+                ),
+            ],
+        )
+        plan = build_content_snapshot_plan(
+            document,
+            base_revision=7,
+            created_at=1770000018581,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with self.assertRaisesRegex(ValueError, "snapshot content hash mismatch for file_id file_second"):
+                materialize_content_snapshot_plan(
+                    root,
+                    plan=plan,
+                    document=document,
+                    content_by_file_id={
+                        "file_first": first_payload,
+                        "file_second": b"# drifted second\n",
+                    },
+                )
+
+            self.assertFalse((root / ".noteapp" / "staging" / "file_first.snapshot.plain").exists())
+            self.assertFalse((root / ".noteapp" / "staging" / "file_second.snapshot.plain").exists())
 
     def test_cleanup_commit_staging_artifacts_removes_only_snapshot_and_blob_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
