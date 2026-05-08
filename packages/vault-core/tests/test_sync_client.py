@@ -11,6 +11,7 @@ from vault_core import (
     BlobDownloadCapability,
     BlobDownloadInitExecutionResult,
     BlobDownloadInitResponsePayload,
+    BlobDownloadSessionResult,
     BlobUploadCapability,
     BlobUploadInitRequestPayload,
     BlobUploadInitResponsePayload,
@@ -24,6 +25,7 @@ from vault_core import (
     CommitSnapshotTable,
     CommitSubmissionBundle,
     FileMapDocument,
+    PullSyncSessionResult,
     ResolveCommitIntentExecutionResult,
     ResolveCommitIntentResponsePayload,
     PullReconcileSessionResult,
@@ -38,6 +40,7 @@ from vault_core import (
     TombstoneRecord,
     VaultHeadResponsePayload,
     VaultStateRecord,
+    VaultSyncSession,
     bootstrap_database,
     compute_manifest_summary_hash,
     load_commit_intent_journal,
@@ -47,13 +50,16 @@ from vault_core import (
     upsert_commit_intent_journal,
     upsert_vault_state,
     execute_ack_revisions,
+    execute_ack_pending_revisions,
     execute_blob_download_init,
+    execute_blob_download_session,
     execute_blob_downloads,
     execute_blob_uploads,
     execute_commit_preflight,
     execute_create_commit,
     execute_commit_submission,
     execute_pull_reconcile_session,
+    execute_pull_sync_session,
     execute_resolve_commit_intent,
     execute_submitted_recovery_via_resolve_intent,
 )
@@ -447,6 +453,53 @@ class SyncClientTests(unittest.TestCase):
         )
         self.assertEqual([call[0] for call in transport.calls], ["blob_download_init"])
         self.assertEqual([capability.blob_id for capability in downloader.calls], ["blob_a", "blob_b"])
+
+    def test_execute_blob_download_session_composes_init_and_download(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            blob_download_init=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "downloads": [
+                        {
+                            "blob_id": "blob_a",
+                            "download_url": "https://example.com/download/blob_a",
+                            "encrypted_size": 32,
+                            "expires_at": "2026-05-08T12:00:00Z",
+                        }
+                    ]
+                },
+            ),
+        )
+        downloader = FakeSyncBlobDownloader()
+
+        result = execute_blob_download_session(
+            transport,
+            downloader,
+            vault_id="vault_pkb_001",
+            blob_ids=["blob_a"],
+        )
+
+        self.assertEqual(
+            result,
+            BlobDownloadSessionResult(
+                init=BlobDownloadInitExecutionResult(
+                    request=result.init.request,
+                    response=BlobDownloadInitResponsePayload(
+                        downloads=[
+                            BlobDownloadCapability(
+                                blob_id="blob_a",
+                                download_url="https://example.com/download/blob_a",
+                                encrypted_size=32,
+                                expires_at="2026-05-08T12:00:00Z",
+                            )
+                        ]
+                    ),
+                ),
+                downloaded_blobs={"blob_a": b"downloaded:blob_a"},
+            ),
+        )
+        self.assertEqual([call[0] for call in transport.calls], ["blob_download_init"])
 
     def test_execute_create_commit_parses_success_and_conflict(self) -> None:
         request = CreateCommitRequestPayload(
@@ -966,6 +1019,25 @@ class SyncClientTests(unittest.TestCase):
         self.assertEqual([call[0] for call in transport.calls], ["post_ack"])
         self.assertEqual(transport.calls[0][2]["revisions"], [8, 10])
 
+    def test_execute_ack_pending_revisions_skips_when_queue_is_empty(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+        )
+        state = VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=7,
+            remote_head_revision=7,
+            acked_revision=7,
+            pending_ack_to_server=[],
+            commit_in_progress=False,
+            last_manifest_summary="sha256:head7",
+            last_manifest_summary_status="valid",
+            local_delete_sequence=0,
+        )
+
+        self.assertIsNone(execute_ack_pending_revisions(transport, state))
+        self.assertEqual(transport.calls, [])
+
     def test_execute_pull_reconcile_session_fetches_manifest_when_head_advances(self) -> None:
         transport = FakeSyncCommitTransport(
             blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
@@ -1097,6 +1169,124 @@ class SyncClientTests(unittest.TestCase):
                 self.assertIsNone(result.reconcile.applied)
                 self.assertEqual(result.reconcile.state, current_state)
                 self.assertEqual([call[0] for call in transport.calls], ["get_vault_head"])
+
+    def test_execute_pull_sync_session_acknowledges_reconciled_revisions(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            head=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "vault_id": "vault_pkb_001",
+                    "head_revision": 8,
+                    "manifest_summary": "sha256:head8",
+                },
+            ),
+            manifest=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "vault_id": "vault_pkb_001",
+                    "revision": 8,
+                    "base_revision": 7,
+                    "created_by_device": "desktop-shanghai",
+                    "created_at": 1770000021000,
+                    "summary_hash": "sha256:head8",
+                    "files": [],
+                    "tombstones": [],
+                },
+            ),
+            ack=SyncHttpJsonResponse(
+                status_code=200,
+                payload={"max_acked_revision": 8},
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            filemap_path = root / "filemap.json"
+            ledger_path = root / "tombstone-ledger.jsonl"
+            db_path = root / "state.sqlite3"
+            current_document = FileMapDocument(
+                vault_id="vault_pkb_001",
+                updated_at=1770000020000,
+                files=[],
+            )
+            current_state = VaultStateRecord(
+                vault_id="vault_pkb_001",
+                last_applied_revision=7,
+                remote_head_revision=7,
+                acked_revision=7,
+                pending_ack_to_server=[],
+                commit_in_progress=False,
+                last_manifest_summary="sha256:head7",
+                last_manifest_summary_status="valid",
+                local_delete_sequence=0,
+            )
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(connection, current_state)
+
+                result = execute_pull_sync_session(
+                    transport,
+                    connection,
+                    filemap_path=filemap_path,
+                    ledger_path=ledger_path,
+                    current_document=current_document,
+                    current_state=current_state,
+                    local_tombstones=[],
+                    rewritten_at=1770000021001,
+                )
+
+                self.assertIsInstance(result, PullSyncSessionResult)
+                self.assertIsNotNone(result.ack)
+                self.assertEqual(result.ack.response.max_acked_revision, 8)
+                self.assertEqual(
+                    [call[0] for call in transport.calls],
+                    ["get_vault_head", "get_manifest", "post_ack"],
+                )
+
+    def test_vault_sync_session_submit_commit_allows_commit_without_uploader_when_no_uploads_needed(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "existing_blob_ids": ["blob_a", "blob_b"],
+                    "missing_blob_ids": [],
+                },
+            ),
+            create_commit=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "vault_id": "vault_pkb_001",
+                    "new_revision": 8,
+                    "head_manifest_summary": "sha256:head8",
+                    "acked_revision_for_device": 8,
+                },
+            ),
+        )
+        session = VaultSyncSession(transport=transport)
+
+        result = session.submit_commit(
+            _build_submission(),
+            snapshot_table=_build_snapshot_table(),
+        )
+
+        self.assertEqual(result.commit.status, "committed")
+        self.assertEqual(result.uploaded_blob_ids, [])
+        self.assertEqual(
+            [call[0] for call in transport.calls],
+            ["blob_check", "create_commit"],
+        )
+
+    def test_vault_sync_session_download_blobs_requires_downloader(self) -> None:
+        session = VaultSyncSession(
+            transport=FakeSyncCommitTransport(
+                blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            )
+        )
+
+        with self.assertRaisesRegex(ValueError, "blob downloader is required"):
+            session.download_blobs(vault_id="vault_pkb_001", blob_ids=["blob_a"])
 
 
 if __name__ == "__main__":
