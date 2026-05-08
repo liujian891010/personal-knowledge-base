@@ -29,6 +29,12 @@ from .sync_runtime import (
     DesktopSyncRuntime,
     build_desktop_sync_runtime,
 )
+from .worker_state import (
+    DesktopSyncWorkerHealth,
+    DesktopSyncWorkerStateRecord,
+    build_desktop_sync_worker_health,
+    load_desktop_sync_worker_state,
+)
 
 STATE_DB_FILENAME = "state.sqlite3"
 SYNC_WORKER_STATE_FILENAME = "sync-worker-state.json"
@@ -161,6 +167,12 @@ class DesktopVaultWorkspace:
             vault_id=self.vault_id,
             blob_ids=blob_ids,
         )
+
+    def load_worker_state(self) -> DesktopSyncWorkerStateRecord:
+        return load_desktop_sync_worker_state(self.paths.worker_state_path)
+
+    def load_worker_health(self) -> DesktopSyncWorkerHealth:
+        return build_desktop_sync_worker_health(self.load_worker_state())
 
     def _open_connection(self):
         connection = open_database(self.paths.db_path)

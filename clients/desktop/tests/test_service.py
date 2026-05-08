@@ -11,6 +11,7 @@ from urllib.request import Request
 
 from clients.desktop import DesktopSyncHttpConfig, build_desktop_sync_service
 from clients.desktop.crypto import build_placeholder_encrypted_blob_payload
+from clients.desktop.worker import write_desktop_sync_worker_state
 from vault_core import (
     FileMapDocument,
     FileRecord,
@@ -331,6 +332,68 @@ class DesktopSyncServiceTests(unittest.TestCase):
             )
             self.assertEqual(blob_opener.calls[0][2], encrypted_payload)
             self.assertEqual((Path(tmpdir) / "Notes" / "Live.md").read_bytes(), payload)
+
+    def test_load_worker_state_and_health_routes_workspace_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            write_desktop_sync_worker_state(
+                service.workspace.paths.worker_state_path,
+                type(
+                    "FakeResult",
+                    (),
+                    {
+                        "started_at_ms": 1770000031000,
+                        "finished_at_ms": 1770000031001,
+                        "effective_step_ms": 0,
+                        "state_path": service.workspace.paths.worker_state_path,
+                        "config": type(
+                            "FakeConfig",
+                            (),
+                            {
+                                "iterations": 1,
+                                "interval_seconds": 30.0,
+                                "step_ms": None,
+                                "continue_on_error": True,
+                                "init_now_ms": None,
+                                "recovery_normalized_at": None,
+                                "submit_created_at": None,
+                                "submit_file_ids": None,
+                                "commit_intent_id": None,
+                                "cleanup_normalized_at": None,
+                                "pull_rewritten_at": None,
+                                "encrypted_blob_by_file_id": None,
+                            },
+                        )(),
+                        "time_plan": type(
+                            "FakePlan",
+                            (),
+                            {
+                                "base_now_ms": 1770000031000,
+                                "init_now_ms": 1770000031000,
+                                "recovery_normalized_at": 1770000031010,
+                                "submit_created_at": None,
+                                "cleanup_normalized_at": None,
+                                "pull_rewritten_at": 1770000031020,
+                            },
+                        )(),
+                        "loop": type(
+                            "FakeLoop",
+                            (),
+                            {
+                                "success_count": 1,
+                                "failure_count": 0,
+                                "stopped_early": False,
+                                "iterations": [],
+                            },
+                        )(),
+                    },
+                )(),
+            )
+
+            state = service.load_worker_state()
+            health = service.load_worker_health()
+            self.assertEqual(state.started_at_ms, 1770000031000)
+            self.assertEqual(health.status, "healthy")
 
 
 if __name__ == "__main__":

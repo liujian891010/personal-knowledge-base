@@ -113,6 +113,8 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
 
 After each worker run, the desktop client also writes the latest worker summary to `.noteapp/sync-worker-state.json` inside the vault.
 
+Use `worker-state` to read the persisted local worker summary, and `worker-health` to read a condensed local health view derived from that state file.
+
 `submit-commit` payload files use `file_id -> base64 bytes` JSON objects:
 
 ```json

@@ -124,6 +124,8 @@ def create_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--now-ms", type=int)
 
     subparsers.add_parser("status")
+    subparsers.add_parser("worker-state")
+    subparsers.add_parser("worker-health")
 
     pull_parser = subparsers.add_parser("pull")
     pull_parser.add_argument("--rewritten-at", type=int, required=True)
@@ -237,6 +239,10 @@ def run_cli(
         result = service.ensure_initialized(now_ms=args.now_ms)
     elif args.command == "status":
         result = service.load_snapshot()
+    elif args.command == "worker-state":
+        result = service.load_worker_state()
+    elif args.command == "worker-health":
+        result = service.load_worker_health()
     elif args.command == "pull":
         result = service.pull_and_ack(rewritten_at=args.rewritten_at)
     elif args.command == "recover":

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from pathlib import Path
 from math import ceil
-from typing import Any, Callable, Optional, Sequence
+from pathlib import Path
+from typing import Callable, Optional
 
 from .runner import DesktopSyncRunner
 from .scheduler import (
@@ -13,50 +12,22 @@ from .scheduler import (
     DesktopSyncScheduler,
 )
 from .timing import DesktopSyncTimePlan, resolve_desktop_sync_time_plan
+from .worker_state import (
+    DesktopSyncWorkerConfig,
+    DesktopSyncWorkerFailureRecord,
+    DesktopSyncWorkerHealth,
+    DesktopSyncWorkerStateRecord,
+    build_desktop_sync_worker_health,
+    build_desktop_sync_worker_state_record,
+    load_desktop_sync_worker_state,
+    write_desktop_sync_worker_state,
+)
 
 
 def _default_worker_step_ms(interval_seconds: float, iterations: int) -> int:
     if iterations < 2:
         return 0
     return max(1, int(ceil(interval_seconds * 1000)))
-
-
-def _to_jsonable(value: Any) -> Any:
-    if hasattr(value, "__dataclass_fields__"):
-        return {key: _to_jsonable(getattr(value, key)) for key in value.__dataclass_fields__}
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(key): _to_jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_to_jsonable(item) for item in value]
-    return value
-
-
-def _write_text_atomic(path: Path, payload: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(path.name + ".tmp")
-    try:
-        temp_path.write_text(payload, encoding="utf-8")
-        temp_path.replace(path)
-    finally:
-        temp_path.unlink(missing_ok=True)
-
-
-@dataclass(frozen=True)
-class DesktopSyncWorkerConfig:
-    iterations: int
-    interval_seconds: float = 30.0
-    step_ms: Optional[int] = None
-    continue_on_error: bool = True
-    init_now_ms: Optional[int] = None
-    recovery_normalized_at: Optional[int] = None
-    submit_created_at: Optional[int] = None
-    submit_file_ids: Optional[list[str]] = None
-    commit_intent_id: Optional[str] = None
-    cleanup_normalized_at: Optional[int] = None
-    pull_rewritten_at: Optional[int] = None
-    encrypted_blob_by_file_id: Optional[dict[str, bytes]] = None
 
 
 @dataclass(frozen=True)
@@ -68,47 +39,6 @@ class DesktopSyncWorkerResult:
     effective_step_ms: int
     loop: DesktopSyncCycleLoopResult
     state_path: Optional[Path] = None
-
-
-@dataclass(frozen=True)
-class DesktopSyncWorkerStateRecord:
-    started_at_ms: int
-    finished_at_ms: int
-    effective_step_ms: int
-    success_count: int
-    failure_count: int
-    stopped_early: bool
-    state_path: Optional[str]
-    config: DesktopSyncWorkerConfig
-    time_plan: DesktopSyncTimePlan
-
-
-def build_desktop_sync_worker_state_record(
-    result: DesktopSyncWorkerResult,
-) -> DesktopSyncWorkerStateRecord:
-    return DesktopSyncWorkerStateRecord(
-        started_at_ms=result.started_at_ms,
-        finished_at_ms=result.finished_at_ms,
-        effective_step_ms=result.effective_step_ms,
-        success_count=result.loop.success_count,
-        failure_count=result.loop.failure_count,
-        stopped_early=result.loop.stopped_early,
-        state_path=None if result.state_path is None else str(result.state_path),
-        config=result.config,
-        time_plan=result.time_plan,
-    )
-
-
-def write_desktop_sync_worker_state(
-    path: Path,
-    result: DesktopSyncWorkerResult,
-) -> DesktopSyncWorkerStateRecord:
-    record = build_desktop_sync_worker_state_record(result)
-    _write_text_atomic(
-        path,
-        json.dumps(_to_jsonable(record), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-    )
-    return record
 
 
 @dataclass(frozen=True)

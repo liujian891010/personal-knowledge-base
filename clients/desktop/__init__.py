@@ -35,10 +35,16 @@ from .service import (
 from .timing import DesktopSyncTimePlan, resolve_desktop_sync_time_plan
 from .worker import (
     DesktopSyncWorker,
-    DesktopSyncWorkerConfig,
     DesktopSyncWorkerResult,
+)
+from .worker_state import (
+    DesktopSyncWorkerFailureRecord,
+    DesktopSyncWorkerHealth,
+    DesktopSyncWorkerConfig,
     DesktopSyncWorkerStateRecord,
+    build_desktop_sync_worker_health,
     build_desktop_sync_worker_state_record,
+    load_desktop_sync_worker_state,
     write_desktop_sync_worker_state,
 )
 from .workspace import (
@@ -68,6 +74,8 @@ __all__ = [
     "DesktopSyncService",
     "DesktopSyncWorker",
     "DesktopSyncWorkerConfig",
+    "DesktopSyncWorkerFailureRecord",
+    "DesktopSyncWorkerHealth",
     "DesktopSyncWorkerResult",
     "DesktopSyncWorkerStateRecord",
     "build_desktop_sync_runner",
@@ -83,7 +91,9 @@ __all__ = [
     "build_desktop_sync_runtime",
     "build_desktop_sync_session",
     "build_desktop_vault_workspace",
+    "build_desktop_sync_worker_health",
     "build_desktop_sync_worker_state_record",
+    "load_desktop_sync_worker_state",
     "resolve_desktop_sync_time_plan",
     "write_desktop_sync_worker_state",
 ]
