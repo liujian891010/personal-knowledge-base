@@ -521,6 +521,24 @@ class DesktopSyncPanelModel:
 
 
 @dataclass(frozen=True)
+class DesktopSyncCenterCard:
+    card_id: str
+    kind: str
+    level: str
+    title: str
+    body: str
+    badge_count: int
+    actions: list[DesktopSyncPanelAction]
+
+
+@dataclass(frozen=True)
+class DesktopSyncCenterModel:
+    cards: list[DesktopSyncCenterCard]
+    panel: DesktopSyncPanelModel
+    summary: DesktopVaultSummary
+
+
+@dataclass(frozen=True)
 class DesktopPullApplySessionResult:
     pull: PullSyncSessionResult
     plan: DesktopPullApplyPlan
@@ -1696,6 +1714,169 @@ class DesktopSyncService:
                 emphasis="primary",
             ),
             secondary_actions=secondary_actions,
+            summary=summary,
+        )
+
+    def build_sync_center_model(self, *, now_ms: Optional[int] = None) -> DesktopSyncCenterModel:
+        resolved_now_ms = (
+            int(datetime.now(timezone.utc).timestamp() * 1000)
+            if now_ms is None
+            else now_ms
+        )
+        panel = self.build_sync_panel_model(now_ms=resolved_now_ms)
+        summary = panel.summary
+        cards: list[DesktopSyncCenterCard] = []
+        conflict_badge_count = panel.conflict_badge_count
+        change_badge_count = panel.change_badge_count
+
+        if summary.commit_gate.has_active_sync_apply_journal:
+            cards.append(
+                DesktopSyncCenterCard(
+                    card_id="pull-recovery",
+                    kind="recovery",
+                    level="danger",
+                    title="Pull/apply recovery is blocking the vault",
+                    body="A sync apply journal is still active. Resume pull recovery before any new sync or commit work.",
+                    badge_count=1,
+                    actions=[panel.primary_action],
+                )
+            )
+        elif summary.commit_gate.has_active_commit_journal or summary.state.commit_in_progress:
+            cards.append(
+                DesktopSyncCenterCard(
+                    card_id="commit-recovery",
+                    kind="recovery",
+                    level="danger",
+                    title="Commit recovery is blocking the vault",
+                    body="A previous commit still needs recovery confirmation before the next submit can start.",
+                    badge_count=1,
+                    actions=[panel.primary_action],
+                )
+            )
+
+        if conflict_badge_count > 0:
+            cards.append(
+                DesktopSyncCenterCard(
+                    card_id="conflicts",
+                    kind="conflicts",
+                    level="warning",
+                    title=f"{conflict_badge_count} unresolved local conflict artifacts",
+                    body="Conflict copies and orphan conflict files must be reviewed or cleared before commit submission can reopen.",
+                    badge_count=conflict_badge_count,
+                    actions=[
+                        self._build_panel_action(
+                            action_id="list-conflicts",
+                            label="Review Conflicts",
+                            command="list-conflicts",
+                            emphasis="primary",
+                        ),
+                        self._build_panel_action(
+                            action_id="resolve-conflicts-all",
+                            label="Resolve All Local Artifacts",
+                            command="resolve-conflicts",
+                            argv=panel.secondary_actions[-1].argv if panel.secondary_actions else [],
+                            enabled=any(action.action_id == "resolve-conflicts-all" for action in panel.secondary_actions),
+                            emphasis="warning",
+                            reason="Deletes all listed local conflict-copy artifacts after user confirmation.",
+                            requires_confirmation=True,
+                        ),
+                    ],
+                )
+            )
+
+        if summary.commit_gate.requires_full_pull:
+            cards.append(
+                DesktopSyncCenterCard(
+                    card_id="baseline",
+                    kind="baseline",
+                    level="warning",
+                    title="Local sync baseline must be rebuilt",
+                    body="The current manifest summary is stale. Run a full pull/reconcile before creating a new commit.",
+                    badge_count=1,
+                    actions=[
+                        self._build_panel_action(
+                            action_id="pull",
+                            label="Run Pull",
+                            command="pull",
+                            argv=["--rewritten-at", str(resolved_now_ms)],
+                            emphasis="primary",
+                        )
+                    ],
+                )
+            )
+
+        if change_badge_count > 0:
+            cards.append(
+                DesktopSyncCenterCard(
+                    card_id="local-changes",
+                    kind="changes",
+                    level="info",
+                    title=f"{change_badge_count} local changes are waiting",
+                    body="Tracked modifications, missing files, or untracked files are ready for the next submit or sync cycle.",
+                    badge_count=change_badge_count,
+                    actions=[
+                        self._build_panel_action(
+                            action_id="detect-local-changes",
+                            label="Inspect Local Changes",
+                            command="detect-local-changes",
+                        ),
+                        self._build_panel_action(
+                            action_id="submit-detected-commit",
+                            label="Submit Local Changes",
+                            command="submit-detected-commit",
+                            argv=["--created-at", str(resolved_now_ms)],
+                            enabled=summary.commit_gate.can_submit_commit,
+                            emphasis="primary",
+                            reason=None if summary.commit_gate.can_submit_commit else ", ".join(summary.commit_gate.blocking_reasons),
+                        ),
+                    ],
+                )
+            )
+
+        if summary.worker_health is not None and summary.worker_health.status != "healthy":
+            cards.append(
+                DesktopSyncCenterCard(
+                    card_id="worker-health",
+                    kind="background-sync",
+                    level="warning",
+                    title="Background sync worker needs attention",
+                    body="The latest worker run reported failures or stopped early. Review health before relying on background sync.",
+                    badge_count=summary.worker_health.failure_count,
+                    actions=[
+                        self._build_panel_action(
+                            action_id="worker-health",
+                            label="Inspect Worker Health",
+                            command="worker-health",
+                            emphasis="primary",
+                        )
+                    ],
+                )
+            )
+
+        if not cards:
+            cards.append(
+                DesktopSyncCenterCard(
+                    card_id="healthy",
+                    kind="overview",
+                    level="success",
+                    title="Vault sync center is clear",
+                    body="No unresolved conflicts, no blocked recovery state, and no pending local changes were detected.",
+                    badge_count=0,
+                    actions=[
+                        self._build_panel_action(
+                            action_id="pull",
+                            label="Check For Remote Changes",
+                            command="pull",
+                            argv=panel.primary_action.argv,
+                            emphasis="primary",
+                        )
+                    ],
+                )
+            )
+
+        return DesktopSyncCenterModel(
+            cards=cards,
+            panel=panel,
             summary=summary,
         )
 

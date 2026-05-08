@@ -579,6 +579,78 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertGreaterEqual(panel.change_badge_count, 1)
             self.assertEqual(panel.conflict_badge_count, 0)
 
+    def test_build_sync_center_model_collects_multiple_cards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, payload, _ = self._seed_workspace(root)
+            conflict_path = root / "Notes" / "Live (conflict 2026-04-29 Desktop-Win).md"
+            conflict_path.write_bytes(payload + b" conflict")
+            conflict_hash = "sha256:" + hashlib.sha256(conflict_path.read_bytes()).hexdigest()
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                FileMapDocument(
+                    vault_id="vault-001",
+                    updated_at=1770000040100,
+                    files=[
+                        FileRecord(
+                            file_id="file-live",
+                            path="Notes/Live.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000030090,
+                            content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                            meta={
+                                "blob_id": "blob-live",
+                                "size": len(payload),
+                                "mtime": 1770000030080,
+                                "mime_type": "text/markdown",
+                            },
+                        ),
+                        FileRecord(
+                            file_id="file-conflict",
+                            path="Notes/Live (conflict 2026-04-29 Desktop-Win).md",
+                            type="note",
+                            status="conflict_copy",
+                            updated_at=1770000040100,
+                            content_hash=conflict_hash,
+                            conflict_source_file_id="file-live",
+                        ),
+                    ],
+                ),
+            )
+            live_path = root / "Notes" / "Live.md"
+            live_path.write_bytes(payload + b" modified")
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                state = load_vault_state(connection, "vault-001")
+                self.assertIsNotNone(state)
+                upsert_vault_state(
+                    connection,
+                    replace(state, last_manifest_summary=None, last_manifest_summary_status="stale"),
+                )
+
+            center = service.build_sync_center_model(now_ms=1770000040999)
+
+            self.assertEqual(center.panel.level, "warning")
+            self.assertEqual(
+                [card.card_id for card in center.cards],
+                ["conflicts", "baseline", "local-changes"],
+            )
+            self.assertEqual(center.cards[0].actions[0].command, "list-conflicts")
+            self.assertEqual(center.cards[1].actions[0].argv, ["--rewritten-at", "1770000040999"])
+            self.assertEqual(center.cards[2].actions[1].argv, ["--created-at", "1770000040999"])
+
+    def test_build_sync_center_model_returns_healthy_overview_card(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            center = service.build_sync_center_model(now_ms=1770000040999)
+
+            self.assertEqual(len(center.cards), 1)
+            self.assertEqual(center.cards[0].card_id, "healthy")
+            self.assertEqual(center.cards[0].level, "success")
+            self.assertEqual(center.cards[0].actions[0].argv, ["--rewritten-at", "1770000040999"])
+
     def test_load_workspace_content_rejects_workspace_snapshot_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
