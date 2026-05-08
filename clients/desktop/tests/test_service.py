@@ -11,6 +11,10 @@ from pathlib import Path
 from urllib.request import Request
 
 from clients.desktop import (
+    DesktopPullApplyDeleteFile,
+    DesktopPullApplyMoveFile,
+    DesktopPullApplyPlan,
+    DesktopPullApplyWriteFile,
     DesktopPullApplyStagingResult,
     DesktopPullRequiredBlobFile,
     DesktopPullRequiredBlobPlan,
@@ -815,6 +819,52 @@ class DesktopSyncServiceTests(unittest.TestCase):
             with closing(open_database(service.workspace.paths.db_path)) as connection:
                 self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
 
+    def test_stage_pull_required_plaintext_for_apply_creates_journal_for_move_only_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            pull = self._build_pull_result(required_blob_ids=[], manifest_files=[])
+            resolved = DesktopPullRequiredBlobResult(
+                pull=pull,
+                plan=DesktopPullRequiredBlobPlan(
+                    vault_id="vault-001",
+                    revision=8,
+                    blob_ids=[],
+                    files=[],
+                ),
+                download=None,
+                plaintext_by_file_id={},
+            )
+            apply_plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[],
+                moves=[
+                    DesktopPullApplyMoveFile(
+                        file_id="file-a",
+                        source_path="Notes/A-old.md",
+                        target_path="Notes/A.md",
+                        type="note",
+                        content_hash="sha256:abc",
+                    )
+                ],
+                deletes=[],
+                blocking_paths=[],
+                ops_hash="sha256:ops8",
+            )
+
+            staged = service.stage_pull_required_plaintext_for_apply(
+                resolved,
+                started_at=1770000040100,
+                apply_plan=apply_plan,
+            )
+
+            self.assertIsNotNone(staged.journal)
+            self.assertEqual(staged.journal.phase, "staging")
+            self.assertEqual(staged.journal.ops_hash, "sha256:ops8")
+            self.assertEqual(staged.written_staging_paths, {})
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertEqual(load_sync_apply_journal(connection, "vault-001"), staged.journal)
+
     def test_build_pull_apply_plan_emits_write_move_and_delete_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
@@ -960,6 +1010,117 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(plan.writes, [])
             self.assertEqual(plan.deletes, [])
             self.assertEqual(plan.blocking_paths, ["Notes/A.md", "Notes/B.md"])
+
+    def test_apply_staged_pull_plan_materializes_nonblocking_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            move_source = root / "Notes" / "Move-old.md"
+            move_source.write_bytes(b"# move\n")
+            delete_path = root / "Notes" / "Delete.md"
+            delete_path.write_bytes(b"# delete\n")
+            staging_path = root / ".noteapp" / "staging" / "file-live.staging"
+            staging_path.parent.mkdir(parents=True, exist_ok=True)
+            staging_path.write_bytes(b"# rewritten\n")
+
+            journal = SyncApplyJournalRecord(
+                vault_id="vault-001",
+                journal_id="journal-1",
+                target_revision=8,
+                target_manifest_hash="sha256:head8",
+                phase="staging",
+                ops_hash="sha256:old",
+                created_at=1770000040100,
+                updated_at=1770000040100,
+            )
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(connection, journal)
+
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[
+                    DesktopPullApplyWriteFile(
+                        file_id="file-live",
+                        target_path="Notes/Live.md",
+                        staging_path=".noteapp/staging/file-live.staging",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# rewritten\n").hexdigest(),
+                    )
+                ],
+                moves=[
+                    DesktopPullApplyMoveFile(
+                        file_id="file-move",
+                        source_path="Notes/Move-old.md",
+                        target_path="Notes/Move-new.md",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# move\n").hexdigest(),
+                    )
+                ],
+                deletes=[
+                    DesktopPullApplyDeleteFile(
+                        file_id="file-delete",
+                        path="Notes/Delete.md",
+                        reason="deleted",
+                    )
+                ],
+                blocking_paths=[],
+                ops_hash="sha256:ops8",
+            )
+            staged = DesktopPullApplyStagingResult(
+                journal=journal,
+                written_staging_paths={"file-live": staging_path},
+            )
+
+            execution = service.apply_staged_pull_plan(
+                plan,
+                staged,
+                materialized_at=1770000040200,
+            )
+
+            self.assertEqual((root / "Notes" / "Live.md").read_bytes(), b"# rewritten\n")
+            self.assertFalse(move_source.exists())
+            self.assertEqual((root / "Notes" / "Move-new.md").read_bytes(), b"# move\n")
+            self.assertFalse(delete_path.exists())
+            self.assertEqual(
+                execution.written_paths,
+                {"file-live": root / "Notes" / "Live.md"},
+            )
+            self.assertEqual(
+                execution.moved_paths,
+                {"file-move": root / "Notes" / "Move-new.md"},
+            )
+            self.assertEqual(execution.deleted_paths, [root / "Notes" / "Delete.md"])
+            self.assertEqual(execution.journal.phase, "materializing")
+            self.assertEqual(execution.journal.ops_hash, "sha256:ops8")
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                loaded_journal = load_sync_apply_journal(connection, "vault-001")
+                self.assertEqual(loaded_journal.phase, "materializing")
+                self.assertEqual(loaded_journal.ops_hash, "sha256:ops8")
+
+    def test_pull_and_apply_nonblocking_rejects_blocking_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            before_snapshot = service.load_snapshot()
+            pull = self._build_pull_result(required_blob_ids=[], manifest_files=[])
+            blocking_plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[],
+                moves=[],
+                deletes=[],
+                blocking_paths=["Notes/A.md"],
+                ops_hash="sha256:ops8",
+            )
+
+            with mock.patch.object(type(service), "_pull_and_ack_with_snapshot", return_value=(before_snapshot, pull)):
+                with mock.patch.object(type(service), "_build_pull_apply_plan", return_value=blocking_plan):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "pull apply requires a later two-phase materialization boundary for blocking paths: Notes/A.md",
+                    ):
+                        service.pull_and_apply_nonblocking(rewritten_at=1770000040100)
 
     def test_prepare_commit_rejects_active_sync_apply_journal(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
