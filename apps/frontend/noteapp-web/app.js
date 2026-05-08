@@ -1,4 +1,5 @@
 const SAMPLE_PATH = "./fixtures/sync-shell-snapshot.sample.json";
+const LIVE_SNAPSHOT_PATH = "./fixtures/live-sync-shell.json";
 const DEFAULT_ACTION_COMMAND = "pkb-desktop-sync";
 
 const state = {
@@ -19,6 +20,7 @@ const elements = {
   actionContractHelp: document.getElementById("action-contract-help"),
   payloadInput: document.getElementById("payload-input"),
   loadSampleButton: document.getElementById("load-sample-button"),
+  loadLiveButton: document.getElementById("load-live-button"),
   applyInputButton: document.getElementById("apply-input-button"),
   clearInputButton: document.getElementById("clear-input-button"),
   fileInput: document.getElementById("file-input"),
@@ -375,11 +377,29 @@ async function loadPayloadFromPath(path, sourceLabel) {
 
 function resolveInitialPayloadPath() {
   const search = new URLSearchParams(window.location.search);
-  return search.get("payload") || SAMPLE_PATH;
+  return search.get("payload");
 }
 
 async function loadSample() {
   await loadPayloadFromPath(SAMPLE_PATH, "Bundled sync shell snapshot sample");
+}
+
+async function loadLiveSnapshot() {
+  await loadPayloadFromPath(LIVE_SNAPSHOT_PATH, "Exported live sync shell snapshot");
+}
+
+async function loadInitialPayload() {
+  const explicitPath = resolveInitialPayloadPath();
+  if (explicitPath) {
+    await loadPayloadFromPath(explicitPath, `Loaded from ${explicitPath}`);
+    return;
+  }
+
+  try {
+    await loadLiveSnapshot();
+  } catch {
+    await loadSample();
+  }
 }
 
 function applyTextareaPayload() {
@@ -405,6 +425,14 @@ async function importLocalFile(file) {
 elements.loadSampleButton.addEventListener("click", async () => {
   try {
     await loadSample();
+  } catch (error) {
+    renderEmptyDashboard(error instanceof Error ? error.message : String(error));
+  }
+});
+
+elements.loadLiveButton.addEventListener("click", async () => {
+  try {
+    await loadLiveSnapshot();
   } catch (error) {
     renderEmptyDashboard(error instanceof Error ? error.message : String(error));
   }
@@ -443,9 +471,6 @@ elements.fileInput.addEventListener("change", async (event) => {
 });
 
 render();
-loadPayloadFromPath(
-  resolveInitialPayloadPath(),
-  `Loaded from ${resolveInitialPayloadPath()}`,
-).catch((error) => {
+loadInitialPayload().catch((error) => {
   renderEmptyDashboard(error instanceof Error ? error.message : String(error));
 });

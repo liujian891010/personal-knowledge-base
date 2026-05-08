@@ -30,16 +30,23 @@ The build writes files into `dist/` without external dependencies.
 Pair it with the desktop CLI:
 
 ```powershell
-$env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
-  --vault-root C:\vaults\pkb `
-  --base-url https://sync.example.com `
-  --vault-id vault-001 `
-  --device-id desktop-shanghai `
-  sync-shell-snapshot `
-  --output-json apps\frontend\noteapp-web\fixtures\live-sync-shell.json
+$env:PKB_VAULT_ROOT='C:\vaults\pkb'
+$env:PKB_BASE_URL='https://sync.example.com'
+$env:PKB_VAULT_ID='vault-001'
+$env:PKB_DEVICE_ID='desktop-shanghai'
+npm run sync:snapshot
 ```
 
-Then start the shell and point it at that exported snapshot:
+The helper writes `fixtures/live-sync-shell.json`, which is gitignored.
+
+Then start the shell. Without any query parameter it will try `live-sync-shell.json` first and fall back to the bundled sample:
+
+```powershell
+cd apps\frontend\noteapp-web
+npm run dev
+```
+
+You can still point it at any custom exported snapshot explicitly:
 
 ```text
 http://127.0.0.1:4173/?payload=./fixtures/live-sync-shell.json
