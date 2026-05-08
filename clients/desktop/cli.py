@@ -158,6 +158,11 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("worker-state")
     subparsers.add_parser("worker-health")
     subparsers.add_parser("list-conflicts")
+    export_vault_parser = subparsers.add_parser("export-vault")
+    export_vault_parser.add_argument("--output-package", required=True)
+    export_vault_parser.add_argument("--include-ai-raw", action="store_true")
+    import_vault_parser = subparsers.add_parser("import-vault")
+    import_vault_parser.add_argument("--input-package", required=True)
     resolve_conflicts_parser = subparsers.add_parser("resolve-conflicts")
     resolve_conflicts_parser.add_argument("--resolved-at", type=int, required=True)
     resolve_conflicts_parser.add_argument("--all", action="store_true", dest="resolve_all")
@@ -301,6 +306,13 @@ def run_cli(
         result = service.load_worker_state()
     elif args.command == "worker-health":
         result = service.load_worker_health()
+    elif args.command == "export-vault":
+        result = service.export_vault_package(
+            Path(args.output_package),
+            include_ai_raw=args.include_ai_raw,
+        )
+    elif args.command == "import-vault":
+        result = service.import_vault_package(Path(args.input_package))
     elif args.command == "list-conflicts":
         result = service.list_conflicts()
     elif args.command == "resolve-conflicts":

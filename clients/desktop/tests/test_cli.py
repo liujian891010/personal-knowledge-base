@@ -144,6 +144,50 @@ class FakeService:
         self.calls.append(("worker-health", None))
         return self.worker_health_payload
 
+    def export_vault_package(self, package_path: Path, *, include_ai_raw: bool = False):
+        self.calls.append(("export-vault", str(package_path), include_ai_raw))
+        return {
+            "package_path": str(package_path),
+            "vault_id": "vault-001",
+            "exported_paths": [
+                ".vaultinfo",
+                ".noteapp/filemap.json",
+                ".noteapp/tombstone-ledger.jsonl",
+                "Notes/Live.md",
+            ],
+            "included_ai_raw": include_ai_raw,
+            "included_conflict_orphans": False,
+        }
+
+    def import_vault_package(self, package_path: Path):
+        self.calls.append(("import-vault", str(package_path)))
+        return {
+            "package_path": str(package_path),
+            "vault_id": "vault-001",
+            "imported_paths": [
+                ".vaultinfo",
+                ".noteapp/filemap.json",
+                ".noteapp/tombstone-ledger.jsonl",
+                "Notes/Live.md",
+            ],
+            "restored_ai_raw": True,
+            "restored_conflict_orphans": False,
+            "state": {
+                "vault_id": "vault-001",
+                "last_applied_revision": 0,
+                "remote_head_revision": 0,
+                "acked_revision": 0,
+                "pending_ack_to_server": [],
+                "commit_in_progress": False,
+                "last_manifest_summary": None,
+                "last_manifest_summary_status": "stale",
+                "local_delete_sequence": 4,
+                "has_unresolved_conflicts": False,
+                "schema_version": "v1",
+                "meta": {"device_id": "desktop-shanghai"},
+            },
+        }
+
     def list_conflicts(self):
         self.calls.append(("list-conflicts", None))
         return {
@@ -523,6 +567,51 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "degraded")
         self.assertEqual(self.service.calls, [("worker-health", None)])
+
+    def test_export_vault_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "export-vault",
+            "--output-package",
+            "C:/exports/vault.zip",
+            "--include-ai-raw",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["included_ai_raw"])
+        self.assertEqual(
+            self.service.calls,
+            [("export-vault", "C:\\exports\\vault.zip", True)],
+        )
+
+    def test_import_vault_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "import-vault",
+            "--input-package",
+            "C:/exports/vault.zip",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["state"]["last_manifest_summary_status"], "stale")
+        self.assertEqual(
+            self.service.calls,
+            [("import-vault", "C:\\exports\\vault.zip")],
+        )
 
     def test_list_conflicts_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(

@@ -5,9 +5,10 @@ import json
 from contextlib import closing, suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable, Mapping, Optional
 from uuid import uuid4
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from vault_core import (
     allocate_conflict_copy_path,
@@ -30,7 +31,9 @@ from vault_core import (
     cleanup_commit_staging_artifacts,
     cleanup_failed_commit_submission,
     finalize_commit_submission_cleanup,
+    FileMapDocument,
     isolate_staging_orphans,
+    load_commit_intent_journal,
     load_filemap,
     load_sync_apply_journal,
     load_tombstone_ledger,
@@ -46,7 +49,15 @@ from vault_core import (
     upsert_sync_apply_journal,
     write_filemap_atomic,
 )
-from vault_core.constants import CONFLICT_ORPHANS_DIRNAME, STAGING_DIRNAME
+from vault_core.constants import (
+    CONFLICT_ORPHANS_DIRNAME,
+    FILEMAP_FILENAME,
+    NOTEAPP_DIRNAME,
+    STAGING_DIRNAME,
+    STAGING_ORPHANS_DIRNAME,
+    TOMBSTONE_LEDGER_FILENAME,
+    VAULTINFO_FILENAME,
+)
 from vault_core.sync_http import UrlopenLike
 
 from .change_detection import (
@@ -179,6 +190,73 @@ def _resolve_conflict_orphan_path(vault_root: Path, relative_path: str) -> Path:
     except ValueError as exc:
         raise ValueError(f"conflict orphan path is not inside {CONFLICT_ORPHANS_DIRNAME}: {relative_path}") from exc
     return orphan_path
+
+
+_MIGRATION_EXPORT_EXCLUDED_FILES = {
+    f"{NOTEAPP_DIRNAME}/filemap.json.tmp",
+    f"{NOTEAPP_DIRNAME}/state.sqlite3",
+    f"{NOTEAPP_DIRNAME}/sync-apply-plan.json",
+    f"{NOTEAPP_DIRNAME}/sync-worker-state.json",
+    ".ai/log.md",
+}
+_MIGRATION_EXPORT_EXCLUDED_PREFIXES = (
+    f"{NOTEAPP_DIRNAME}/drafts/",
+    f"{STAGING_DIRNAME}/",
+    f"{STAGING_ORPHANS_DIRNAME}/",
+)
+_MIGRATION_REQUIRED_FILES = {
+    VAULTINFO_FILENAME,
+    f"{NOTEAPP_DIRNAME}/{FILEMAP_FILENAME}",
+    f"{NOTEAPP_DIRNAME}/{TOMBSTONE_LEDGER_FILENAME}",
+}
+
+
+def _normalize_migration_relative_path(relative_path: str) -> str:
+    path = PurePosixPath(relative_path)
+    if not relative_path or path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"migration package path is not safe: {relative_path!r}")
+    return path.as_posix()
+
+
+def _should_skip_migration_export_path(relative_path: str, *, include_ai_raw: bool) -> bool:
+    normalized = _normalize_migration_relative_path(relative_path)
+    if normalized in _MIGRATION_EXPORT_EXCLUDED_FILES:
+        return True
+    if any(normalized.startswith(prefix) for prefix in _MIGRATION_EXPORT_EXCLUDED_PREFIXES):
+        return True
+    if normalized.startswith(".ai/raw/") and not include_ai_raw:
+        return True
+    return False
+
+
+def _is_forbidden_migration_import_path(relative_path: str) -> bool:
+    normalized = _normalize_migration_relative_path(relative_path)
+    if normalized in _MIGRATION_EXPORT_EXCLUDED_FILES:
+        return True
+    if any(normalized.startswith(prefix) for prefix in _MIGRATION_EXPORT_EXCLUDED_PREFIXES):
+        return True
+    return False
+
+
+def _list_migration_export_files(
+    vault_root: Path,
+    *,
+    include_ai_raw: bool,
+    package_path: Path,
+) -> list[tuple[str, Path]]:
+    package_target = package_path.resolve()
+    export_files: list[tuple[str, Path]] = []
+    for path in sorted(
+        (item for item in vault_root.rglob("*") if item.is_file()),
+        key=lambda item: item.relative_to(vault_root).as_posix(),
+    ):
+        if path.resolve() == package_target:
+            continue
+        relative_path = path.relative_to(vault_root).as_posix()
+        if _should_skip_migration_export_path(relative_path, include_ai_raw=include_ai_raw):
+            continue
+        export_files.append((relative_path, path))
+    return export_files
 
 
 def _serialize_pull_apply_plan(plan: "DesktopPullApplyPlan") -> bytes:
@@ -348,6 +426,25 @@ class DesktopConflictStatus:
     actual_has_unresolved_conflicts: bool
     conflict_copies: list[DesktopConflictArtifact]
     conflict_orphans: list[DesktopConflictArtifact]
+
+
+@dataclass(frozen=True)
+class DesktopVaultExportResult:
+    package_path: Path
+    vault_id: str
+    exported_paths: list[str]
+    included_ai_raw: bool
+    included_conflict_orphans: bool
+
+
+@dataclass(frozen=True)
+class DesktopVaultImportResult:
+    package_path: Path
+    vault_id: str
+    imported_paths: list[str]
+    restored_ai_raw: bool
+    restored_conflict_orphans: bool
+    state: VaultStateRecord
 
 
 @dataclass(frozen=True)
@@ -1404,6 +1501,153 @@ class DesktopSyncService:
             removed_orphan_paths=removed_orphan_paths,
             skipped_conflict_file_ids=skipped_conflict_file_ids,
             skipped_orphan_paths=skipped_orphan_paths,
+        )
+
+    def export_vault_package(
+        self,
+        package_path: Path,
+        *,
+        include_ai_raw: bool = False,
+    ) -> DesktopVaultExportResult:
+        resolved_package_path = package_path.resolve()
+        try:
+            resolved_package_path.relative_to(self.workspace.vault_root.resolve())
+        except ValueError:
+            pass
+        else:
+            raise ValueError("export-vault output package must be outside the vault root")
+        if resolved_package_path.exists() and resolved_package_path.is_dir():
+            raise ValueError("export-vault output package path must be a file")
+
+        with closing(self.workspace._open_connection()) as connection:
+            self._require_no_active_sync_apply_journal(connection, operation="export-vault")
+            snapshot = self.workspace._load_snapshot_from_connection(connection)
+            if snapshot.state.commit_in_progress:
+                raise ValueError("export-vault cannot start while commit_in_progress is true")
+            commit_journal = load_commit_intent_journal(connection, self.vault_id)
+            if commit_journal is not None:
+                raise ValueError("export-vault cannot start while commit_intent_journal is active")
+
+        export_files = _list_migration_export_files(
+            self.workspace.vault_root,
+            include_ai_raw=include_ai_raw,
+            package_path=resolved_package_path,
+        )
+        export_paths = [relative_path for relative_path, _ in export_files]
+        missing_required = sorted(_MIGRATION_REQUIRED_FILES - set(export_paths))
+        if missing_required:
+            raise ValueError(
+                "export-vault cannot build a complete migration package; missing required files: "
+                + ", ".join(missing_required)
+            )
+
+        resolved_package_path.parent.mkdir(parents=True, exist_ok=True)
+        with ZipFile(resolved_package_path, "w", compression=ZIP_DEFLATED) as archive:
+            for relative_path, source_path in export_files:
+                archive.write(source_path, arcname=relative_path)
+
+        return DesktopVaultExportResult(
+            package_path=resolved_package_path,
+            vault_id=self.vault_id,
+            exported_paths=export_paths,
+            included_ai_raw=any(path.startswith(".ai/raw/") for path in export_paths),
+            included_conflict_orphans=any(path.startswith(f"{CONFLICT_ORPHANS_DIRNAME}/") for path in export_paths),
+        )
+
+    def import_vault_package(
+        self,
+        package_path: Path,
+    ) -> DesktopVaultImportResult:
+        resolved_package_path = package_path.resolve()
+        if not resolved_package_path.exists() or not resolved_package_path.is_file():
+            raise FileNotFoundError(f"migration package not found: {resolved_package_path}")
+
+        if self.workspace.vault_root.exists():
+            if not self.workspace.vault_root.is_dir():
+                raise ValueError("import-vault target root must be a directory")
+            if any(self.workspace.vault_root.iterdir()):
+                raise ValueError("import-vault requires an empty vault root")
+        if self.workspace.paths.db_path.exists():
+            raise ValueError("import-vault requires an empty local state database path")
+
+        with ZipFile(resolved_package_path, "r") as archive:
+            archive_entries: dict[str, str] = {}
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                normalized = _normalize_migration_relative_path(info.filename)
+                if _is_forbidden_migration_import_path(normalized):
+                    raise ValueError(f"migration package contains unsupported runtime entry: {normalized}")
+                existing = archive_entries.get(normalized)
+                if existing is not None and existing != info.filename:
+                    raise ValueError(f"migration package contains duplicate entry: {normalized}")
+                archive_entries[normalized] = info.filename
+
+            missing_required = sorted(_MIGRATION_REQUIRED_FILES - set(archive_entries))
+            if missing_required:
+                raise ValueError(
+                    "migration package is missing required files: " + ", ".join(missing_required)
+                )
+
+            filemap_payload = archive.read(archive_entries[f"{NOTEAPP_DIRNAME}/{FILEMAP_FILENAME}"])
+            package_document = FileMapDocument.from_dict(json.loads(filemap_payload.decode("utf-8")))
+            if package_document.vault_id != self.vault_id:
+                raise ValueError(
+                    "migration package vault_id does not match desktop config: "
+                    f"expected {self.vault_id}, got {package_document.vault_id}"
+                )
+
+            self.workspace.vault_root.mkdir(parents=True, exist_ok=True)
+            for relative_path in sorted(archive_entries):
+                target_path = _resolve_workspace_file_path(self.workspace.vault_root, relative_path)
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                _write_bytes_atomic(target_path, archive.read(archive_entries[relative_path]))
+
+        tombstones = load_tombstone_ledger(self.workspace.paths.ledger_path)
+        local_delete_sequence = max((record.local_delete_seq for record in tombstones), default=0)
+        has_unresolved_conflicts = (
+            _has_conflict_copy_records(package_document)
+            or _has_conflict_orphan_files(self.workspace.vault_root)
+        )
+
+        with closing(self.workspace._open_connection()) as connection:
+            imported_state = replace(
+                load_vault_state(connection, self.vault_id)
+                or VaultStateRecord(
+                    vault_id=self.vault_id,
+                    last_applied_revision=0,
+                    remote_head_revision=0,
+                    acked_revision=0,
+                    pending_ack_to_server=[],
+                    commit_in_progress=False,
+                    last_manifest_summary=None,
+                    last_manifest_summary_status="stale",
+                    local_delete_sequence=local_delete_sequence,
+                    has_unresolved_conflicts=has_unresolved_conflicts,
+                    meta={"device_id": self.config.device_id},
+                ),
+                last_applied_revision=0,
+                remote_head_revision=0,
+                acked_revision=0,
+                pending_ack_to_server=[],
+                commit_in_progress=False,
+                last_manifest_summary=None,
+                last_manifest_summary_status="stale",
+                local_delete_sequence=local_delete_sequence,
+                has_unresolved_conflicts=has_unresolved_conflicts,
+            )
+            upsert_vault_state(connection, imported_state)
+
+        imported_paths = sorted(archive_entries)
+        return DesktopVaultImportResult(
+            package_path=resolved_package_path,
+            vault_id=self.vault_id,
+            imported_paths=imported_paths,
+            restored_ai_raw=any(path.startswith(".ai/raw/") for path in imported_paths),
+            restored_conflict_orphans=any(
+                path.startswith(f"{CONFLICT_ORPHANS_DIRNAME}/") for path in imported_paths
+            ),
+            state=imported_state,
         )
 
     def load_workspace_content(self, file_ids: Iterable[str]) -> dict[str, bytes]:
