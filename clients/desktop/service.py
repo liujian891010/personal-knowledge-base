@@ -788,13 +788,34 @@ class DesktopSyncService:
         if actual_hash == expected_content_hash:
             return None
 
+        current_document = load_filemap(self.workspace.paths.filemap_path)
+        for record in current_document.files:
+            if record.status != "conflict_copy":
+                continue
+            if record.conflict_source_file_id != source_file_id:
+                continue
+            if record.content_hash != actual_hash:
+                continue
+            conflict_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            if not conflict_path.exists() or not conflict_path.is_file():
+                _write_bytes_atomic(conflict_path, payload)
+            else:
+                existing_hash = _compute_content_hash(conflict_path.read_bytes())
+                if existing_hash != actual_hash:
+                    _write_bytes_atomic(conflict_path, payload)
+            state = load_vault_state(connection, self.vault_id)
+            if state is None:
+                raise KeyError(f"vault_state not found: {self.vault_id}")
+            if not state.has_unresolved_conflicts:
+                upsert_vault_state(connection, replace(state, has_unresolved_conflicts=True))
+            return conflict_path
+
         conflict_path = self._allocate_pull_conflict_copy_path(
             original_relative_path=original_relative_path,
             materialized_at=materialized_at,
         )
         _write_bytes_atomic(conflict_path, payload)
 
-        current_document = load_filemap(self.workspace.paths.filemap_path)
         conflict_relative_path = _relative_vault_path(self.workspace.vault_root, conflict_path)
         updated_document = register_conflict_copy(
             current_document,

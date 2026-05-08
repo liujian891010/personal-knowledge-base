@@ -1288,6 +1288,41 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertIn("(conflict 2026-02-02", conflict_records[0].path)
             self.assertEqual((root / conflict_records[0].path).read_bytes(), dirty_payload)
 
+    def test_preserve_dirty_pull_conflict_copy_reuses_existing_conflict_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, payload, _ = self._seed_workspace(root)
+            live_path = root / "Notes" / "Live.md"
+            dirty_payload = payload + b"dirty\n"
+            live_path.write_bytes(dirty_payload)
+
+            first_path = None
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                first_path = service._preserve_dirty_pull_conflict_copy(
+                    connection,
+                    source_file_id="file-live",
+                    live_path=live_path,
+                    original_relative_path="Notes/Live.md",
+                    expected_content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                    materialized_at=1770000040200,
+                )
+                second_path = service._preserve_dirty_pull_conflict_copy(
+                    connection,
+                    source_file_id="file-live",
+                    live_path=live_path,
+                    original_relative_path="Notes/Live.md",
+                    expected_content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                    materialized_at=1770000040200,
+                )
+
+            self.assertIsNotNone(first_path)
+            self.assertEqual(second_path, first_path)
+            snapshot = service.load_snapshot()
+            conflict_records = [record for record in snapshot.document.files if record.status == "conflict_copy"]
+            self.assertEqual(len(conflict_records), 1)
+            self.assertTrue(snapshot.state.has_unresolved_conflicts)
+            self.assertEqual((root / conflict_records[0].path).read_bytes(), dirty_payload)
+
     def test_apply_staged_pull_plan_materializes_blocking_path_swap(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
