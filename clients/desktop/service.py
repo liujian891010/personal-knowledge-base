@@ -4,11 +4,13 @@ import hashlib
 import json
 from contextlib import closing, suppress
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Optional
 from uuid import uuid4
 
 from vault_core import (
+    allocate_conflict_copy_path,
     BlobDownloadSessionResult,
     BlobStagingMaterializationResult,
     CommitFinalizeCleanupResult,
@@ -29,6 +31,7 @@ from vault_core import (
     cleanup_failed_commit_submission,
     finalize_commit_submission_cleanup,
     isolate_staging_orphans,
+    load_filemap,
     load_sync_apply_journal,
     load_tombstone_ledger,
     load_vault_state,
@@ -36,11 +39,13 @@ from vault_core import (
     move_staging_orphan,
     materialize_content_snapshot_plan,
     prepare_commit_submission,
+    register_conflict_copy,
     recover_sync_apply_finalizing_state,
     upsert_vault_state,
     upsert_sync_apply_journal,
+    write_filemap_atomic,
 )
-from vault_core.constants import STAGING_DIRNAME
+from vault_core.constants import CONFLICT_ORPHANS_DIRNAME, STAGING_DIRNAME
 from vault_core.sync_http import UrlopenLike
 
 from .change_detection import (
@@ -110,6 +115,8 @@ def _build_pull_apply_plan_ops_hash(plan: "DesktopPullApplyPlan") -> str:
                 "staging_path": item.staging_path,
                 "type": item.type,
                 "content_hash": item.content_hash,
+                "previous_path": item.previous_path,
+                "expected_previous_content_hash": item.expected_previous_content_hash,
             }
             for item in plan.writes
         ],
@@ -128,6 +135,7 @@ def _build_pull_apply_plan_ops_hash(plan: "DesktopPullApplyPlan") -> str:
                 "file_id": item.file_id,
                 "path": item.path,
                 "reason": item.reason,
+                "expected_content_hash": item.expected_content_hash,
             }
             for item in plan.deletes
         ],
@@ -145,6 +153,10 @@ def _build_pull_apply_staging_relative_path(file_id: str) -> str:
 
 def _resolve_pull_apply_staging_path(vault_root: Path, file_id: str) -> Path:
     return vault_root / Path(_build_pull_apply_staging_relative_path(file_id))
+
+
+def _relative_vault_path(vault_root: Path, path: Path) -> str:
+    return path.relative_to(vault_root).as_posix()
 
 
 def _serialize_pull_apply_plan(plan: "DesktopPullApplyPlan") -> bytes:
@@ -225,6 +237,8 @@ class DesktopPullApplyWriteFile:
     staging_path: str
     type: str
     content_hash: str
+    previous_path: Optional[str] = None
+    expected_previous_content_hash: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -241,6 +255,7 @@ class DesktopPullApplyDeleteFile:
     file_id: str
     path: str
     reason: str
+    expected_content_hash: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -704,6 +719,76 @@ class DesktopSyncService:
             written_staging_paths=written_staging_paths,
         )
 
+    def _allocate_pull_conflict_copy_path(
+        self,
+        *,
+        original_relative_path: str,
+        materialized_at: int,
+    ) -> Path:
+        original_path = _resolve_workspace_file_path(self.workspace.vault_root, original_relative_path)
+        conflict_date = datetime.fromtimestamp(materialized_at / 1000, tz=timezone.utc).date()
+        if original_path.parent.exists():
+            return allocate_conflict_copy_path(
+                original_path,
+                conflict_date=conflict_date,
+                device_name=self.config.device_id,
+            )
+
+        orphan_root = self.workspace.vault_root / CONFLICT_ORPHANS_DIRNAME
+        orphan_root.mkdir(parents=True, exist_ok=True)
+        return allocate_conflict_copy_path(
+            orphan_root / original_path.name,
+            conflict_date=conflict_date,
+            device_name=self.config.device_id,
+        )
+
+    def _preserve_dirty_pull_conflict_copy(
+        self,
+        connection,
+        *,
+        source_file_id: str,
+        live_path: Path,
+        original_relative_path: str,
+        expected_content_hash: Optional[str],
+        materialized_at: int,
+    ) -> Optional[Path]:
+        if expected_content_hash is None:
+            return None
+        if not live_path.exists() or not live_path.is_file():
+            return None
+
+        payload = live_path.read_bytes()
+        actual_hash = _compute_content_hash(payload)
+        if actual_hash == expected_content_hash:
+            return None
+
+        conflict_path = self._allocate_pull_conflict_copy_path(
+            original_relative_path=original_relative_path,
+            materialized_at=materialized_at,
+        )
+        _write_bytes_atomic(conflict_path, payload)
+
+        current_document = load_filemap(self.workspace.paths.filemap_path)
+        conflict_relative_path = _relative_vault_path(self.workspace.vault_root, conflict_path)
+        updated_document = register_conflict_copy(
+            current_document,
+            source_file_id=source_file_id,
+            conflict_file_id=self.file_id_builder(
+                f"pull-conflict:{source_file_id}:{conflict_relative_path}:{materialized_at}"
+            ),
+            conflict_path=conflict_relative_path,
+            updated_at=materialized_at,
+            content_hash=actual_hash,
+        )
+        write_filemap_atomic(self.workspace.paths.filemap_path, updated_document)
+
+        state = load_vault_state(connection, self.vault_id)
+        if state is None:
+            raise KeyError(f"vault_state not found: {self.vault_id}")
+        if not state.has_unresolved_conflicts:
+            upsert_vault_state(connection, replace(state, has_unresolved_conflicts=True))
+        return conflict_path
+
     def apply_staged_pull_plan(
         self,
         plan: DesktopPullApplyPlan,
@@ -769,6 +854,14 @@ class DesktopSyncService:
                 if item.path not in blocking_paths:
                     continue
                 delete_path = _resolve_workspace_file_path(self.workspace.vault_root, item.path)
+                self._preserve_dirty_pull_conflict_copy(
+                    connection,
+                    source_file_id=item.file_id,
+                    live_path=delete_path,
+                    original_relative_path=item.path,
+                    expected_content_hash=item.expected_content_hash,
+                    materialized_at=materialized_at,
+                )
                 if not delete_path.exists():
                     continue
                 delete_path.unlink(missing_ok=True)
@@ -786,6 +879,15 @@ class DesktopSyncService:
                         f"expected {item.content_hash}, got {actual_hash}"
                     )
                 output_path = _resolve_workspace_file_path(self.workspace.vault_root, item.target_path)
+                if item.previous_path == item.target_path:
+                    self._preserve_dirty_pull_conflict_copy(
+                        connection,
+                        source_file_id=item.file_id,
+                        live_path=output_path,
+                        original_relative_path=item.target_path,
+                        expected_content_hash=item.expected_previous_content_hash,
+                        materialized_at=materialized_at,
+                    )
                 _write_bytes_atomic(output_path, payload)
                 written_paths[item.file_id] = output_path
 
@@ -816,6 +918,14 @@ class DesktopSyncService:
                 if item.path in blocking_paths:
                     continue
                 delete_path = _resolve_workspace_file_path(self.workspace.vault_root, item.path)
+                self._preserve_dirty_pull_conflict_copy(
+                    connection,
+                    source_file_id=item.file_id,
+                    live_path=delete_path,
+                    original_relative_path=item.path,
+                    expected_content_hash=item.expected_content_hash,
+                    materialized_at=materialized_at,
+                )
                 if not delete_path.exists():
                     continue
                 delete_path.unlink(missing_ok=True)
@@ -895,6 +1005,10 @@ class DesktopSyncService:
                         staging_path=_build_pull_apply_staging_relative_path(entry.file_id),
                         type=entry.type,
                         content_hash=entry.content_hash,
+                        previous_path=None if before_record is None else before_record.path,
+                        expected_previous_content_hash=(
+                            None if before_record is None else before_record.content_hash
+                        ),
                     )
                 )
                 if before_record is not None and before_record.path != entry.path:
@@ -903,6 +1017,7 @@ class DesktopSyncService:
                             file_id=entry.file_id,
                             path=before_record.path,
                             reason="replaced_old_path",
+                            expected_content_hash=before_record.content_hash,
                         )
                     )
                 continue
@@ -926,6 +1041,7 @@ class DesktopSyncService:
                     file_id=record.file_id,
                     path=record.path,
                     reason="deleted",
+                    expected_content_hash=record.content_hash,
                 )
             )
 

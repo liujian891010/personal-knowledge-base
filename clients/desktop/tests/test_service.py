@@ -1104,6 +1104,144 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 self.assertEqual(loaded_journal.phase, "materializing")
                 self.assertEqual(loaded_journal.ops_hash, "sha256:ops8")
 
+    def test_apply_staged_pull_plan_preserves_dirty_overwrite_as_conflict_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, payload, _ = self._seed_workspace(root)
+            live_path = root / "Notes" / "Live.md"
+            live_path.write_bytes(payload + b"dirty\n")
+            staging_path = root / ".noteapp" / "staging" / "file-live.staging"
+            staging_path.parent.mkdir(parents=True, exist_ok=True)
+            staging_path.write_bytes(b"# rewritten\n")
+
+            journal = SyncApplyJournalRecord(
+                vault_id="vault-001",
+                journal_id="journal-1",
+                target_revision=8,
+                target_manifest_hash="sha256:head8",
+                phase="staging",
+                ops_hash="sha256:old",
+                created_at=1770000040100,
+                updated_at=1770000040100,
+            )
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(connection, journal)
+
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[
+                    DesktopPullApplyWriteFile(
+                        file_id="file-live",
+                        target_path="Notes/Live.md",
+                        staging_path=".noteapp/staging/file-live.staging",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# rewritten\n").hexdigest(),
+                        previous_path="Notes/Live.md",
+                        expected_previous_content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                    )
+                ],
+                moves=[],
+                deletes=[],
+                blocking_paths=[],
+                ops_hash="sha256:ops8",
+            )
+            staged = DesktopPullApplyStagingResult(
+                journal=journal,
+                written_staging_paths={"file-live": staging_path},
+            )
+
+            service.apply_staged_pull_plan(
+                plan,
+                staged,
+                materialized_at=1770000040200,
+            )
+            snapshot = service.load_snapshot()
+            conflict_records = [record for record in snapshot.document.files if record.status == "conflict_copy"]
+
+            self.assertEqual(live_path.read_bytes(), b"# rewritten\n")
+            self.assertTrue(snapshot.state.has_unresolved_conflicts)
+            self.assertEqual(len(conflict_records), 1)
+            self.assertEqual(conflict_records[0].conflict_source_file_id, "file-live")
+            self.assertIn("(conflict 2026-02-02", conflict_records[0].path)
+            self.assertEqual((root / conflict_records[0].path).read_bytes(), payload + b"dirty\n")
+
+    def test_apply_staged_pull_plan_preserves_dirty_delete_as_conflict_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            delete_path = root / "Notes" / "Delete.md"
+            clean_payload = b"# delete-clean\n"
+            dirty_payload = b"# delete-dirty\n"
+            delete_path.write_bytes(dirty_payload)
+
+            snapshot = service.load_snapshot()
+            document = snapshot.document.replace_files(
+                [
+                    *snapshot.document.files,
+                    FileRecord(
+                        file_id="file-delete",
+                        path="Notes/Delete.md",
+                        type="note",
+                        status="deleted",
+                        updated_at=1770000040150,
+                        content_hash="sha256:" + hashlib.sha256(clean_payload).hexdigest(),
+                        last_known_revision=8,
+                    ),
+                ],
+                updated_at=1770000040150,
+            )
+            write_filemap_atomic(service.workspace.paths.filemap_path, document)
+
+            journal = SyncApplyJournalRecord(
+                vault_id="vault-001",
+                journal_id="journal-1",
+                target_revision=8,
+                target_manifest_hash="sha256:head8",
+                phase="staging",
+                ops_hash="sha256:old",
+                created_at=1770000040100,
+                updated_at=1770000040100,
+            )
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(connection, journal)
+
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[],
+                moves=[],
+                deletes=[
+                    DesktopPullApplyDeleteFile(
+                        file_id="file-delete",
+                        path="Notes/Delete.md",
+                        reason="deleted",
+                        expected_content_hash="sha256:" + hashlib.sha256(clean_payload).hexdigest(),
+                    )
+                ],
+                blocking_paths=[],
+                ops_hash="sha256:ops8",
+            )
+            staged = DesktopPullApplyStagingResult(
+                journal=journal,
+                written_staging_paths={},
+            )
+
+            service.apply_staged_pull_plan(
+                plan,
+                staged,
+                materialized_at=1770000040200,
+            )
+            snapshot = service.load_snapshot()
+            conflict_records = [record for record in snapshot.document.files if record.status == "conflict_copy"]
+
+            self.assertFalse(delete_path.exists())
+            self.assertTrue(snapshot.state.has_unresolved_conflicts)
+            self.assertEqual(len(conflict_records), 1)
+            self.assertEqual(conflict_records[0].conflict_source_file_id, "file-delete")
+            self.assertIn("(conflict 2026-02-02", conflict_records[0].path)
+            self.assertEqual((root / conflict_records[0].path).read_bytes(), dirty_payload)
+
     def test_apply_staged_pull_plan_materializes_blocking_path_swap(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
