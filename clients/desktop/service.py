@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import closing, suppress
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Optional
 from uuid import uuid4
@@ -142,6 +142,23 @@ def _resolve_pull_apply_staging_path(vault_root: Path, file_id: str) -> Path:
     return vault_root / Path(_build_pull_apply_staging_relative_path(file_id))
 
 
+def _serialize_pull_apply_plan(plan: "DesktopPullApplyPlan") -> bytes:
+    return json.dumps(asdict(plan), sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _deserialize_pull_apply_plan(payload: bytes) -> "DesktopPullApplyPlan":
+    data = json.loads(payload.decode("utf-8"))
+    return DesktopPullApplyPlan(
+        vault_id=data["vault_id"],
+        revision=data["revision"],
+        writes=[DesktopPullApplyWriteFile(**item) for item in data.get("writes", [])],
+        moves=[DesktopPullApplyMoveFile(**item) for item in data.get("moves", [])],
+        deletes=[DesktopPullApplyDeleteFile(**item) for item in data.get("deletes", [])],
+        blocking_paths=list(data.get("blocking_paths", [])),
+        ops_hash=data["ops_hash"],
+    )
+
+
 @dataclass(frozen=True)
 class DesktopPreparedCommit:
     snapshot: DesktopWorkspaceSnapshot
@@ -250,6 +267,7 @@ class DesktopPullApplyExecutionResult:
 class DesktopPullApplyFinalizeResult:
     state: VaultStateRecord
     removed_staging_paths: list[Path]
+    removed_plan_path: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -258,6 +276,7 @@ class DesktopPullApplyRecoveryResult:
     journal_phase: Optional[str]
     state: Optional[VaultStateRecord]
     removed_staging_paths: list[Path]
+    removed_plan_path: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -380,8 +399,36 @@ class DesktopSyncService:
                     journal_phase=None,
                     state=None,
                     removed_staging_paths=[],
+                    removed_plan_path=None,
                 )
-            if journal.phase in {"filemap_rewrite", "finalizing"}:
+            materialized_snapshot = None
+            if journal.phase == "materializing":
+                materialized_snapshot = self.workspace._load_snapshot_from_connection(connection)
+
+        plan = self._load_pull_apply_plan_file()
+        if plan is not None:
+            self._validate_recovery_pull_apply_plan(plan, journal=journal)
+            staged = DesktopPullApplyStagingResult(journal=journal, written_staging_paths={})
+            execution = self.apply_staged_pull_plan(
+                plan,
+                staged,
+                materialized_at=normalized_at,
+            )
+            finalized = self.finalize_applied_pull_plan(
+                plan,
+                execution,
+                staged,
+                finalized_at=normalized_at,
+            )
+            return DesktopPullApplyRecoveryResult(
+                mode="replayed",
+                journal_phase=journal.phase,
+                state=None if finalized is None else finalized.state,
+                removed_staging_paths=[] if finalized is None else finalized.removed_staging_paths,
+                removed_plan_path=None if finalized is None else finalized.removed_plan_path,
+            )
+        if journal.phase in {"filemap_rewrite", "finalizing"}:
+            with closing(self.workspace._open_connection()) as connection:
                 finalizing_journal = (
                     journal
                     if journal.phase == "finalizing"
@@ -390,32 +437,34 @@ class DesktopSyncService:
                 if finalizing_journal != journal:
                     upsert_sync_apply_journal(connection, finalizing_journal)
                 state = recover_sync_apply_finalizing_state(connection, self.vault_id)
-                removed = self._cleanup_pull_apply_staging_artifacts()
-                return DesktopPullApplyRecoveryResult(
-                    mode="finalized",
-                    journal_phase=finalizing_journal.phase,
-                    state=state,
-                    removed_staging_paths=removed,
+            removed = self._cleanup_pull_apply_staging_artifacts()
+            return DesktopPullApplyRecoveryResult(
+                mode="finalized",
+                journal_phase=finalizing_journal.phase,
+                state=state,
+                removed_staging_paths=removed,
+                removed_plan_path=self._cleanup_pull_apply_plan_file(),
+            )
+        if journal.phase == "materializing":
+            if materialized_snapshot is None or not self._workspace_matches_document(materialized_snapshot.document):
+                raise ValueError(
+                    "pull apply recovery requires a fully materialized workspace before finalization"
                 )
-            if journal.phase == "materializing":
-                snapshot = self.workspace._load_snapshot_from_connection(connection)
-                if not self._workspace_matches_document(snapshot.document):
-                    raise ValueError(
-                        "pull apply recovery requires a fully materialized workspace before finalization"
-                    )
+            with closing(self.workspace._open_connection()) as connection:
                 upsert_sync_apply_journal(
                     connection,
                     replace(journal, phase="finalizing", updated_at=normalized_at),
                 )
                 state = recover_sync_apply_finalizing_state(connection, self.vault_id)
-                removed = self._cleanup_pull_apply_staging_artifacts()
-                return DesktopPullApplyRecoveryResult(
-                    mode="finalized",
-                    journal_phase="materializing",
-                    state=state,
-                    removed_staging_paths=removed,
-                )
-            raise ValueError(f"pull apply recovery is not supported for journal phase: {journal.phase}")
+            removed = self._cleanup_pull_apply_staging_artifacts()
+            return DesktopPullApplyRecoveryResult(
+                mode="finalized",
+                journal_phase="materializing",
+                state=state,
+                removed_staging_paths=removed,
+                removed_plan_path=self._cleanup_pull_apply_plan_file(),
+            )
+        raise ValueError(f"pull apply recovery is not supported for journal phase: {journal.phase}")
 
     def download_blobs(self, blob_ids: Iterable[str]) -> BlobDownloadSessionResult:
         return self.workspace.download_blobs(blob_ids)
@@ -589,6 +638,8 @@ class DesktopSyncService:
             self._require_no_active_sync_apply_journal(connection, operation="stage pull apply")
             upsert_sync_apply_journal(connection, journal)
             try:
+                if apply_plan is not None:
+                    self._write_pull_apply_plan_file(apply_plan)
                 for file_id, staging_path, plaintext in staged_files:
                     _write_bytes_atomic(staging_path, plaintext)
                     written_staging_paths[file_id] = staging_path
@@ -599,6 +650,8 @@ class DesktopSyncService:
                     staging_path.unlink(missing_ok=True)
                 with suppress(Exception):
                     clear_sync_apply_journal(connection, resolved.plan.vault_id)
+                with suppress(Exception):
+                    self._cleanup_pull_apply_plan_file()
                 raise
 
         return DesktopPullApplyStagingResult(
@@ -758,16 +811,13 @@ class DesktopSyncService:
             upsert_sync_apply_journal(connection, finalizing_journal)
             state = recover_sync_apply_finalizing_state(connection, self.vault_id)
 
-        removed_staging_paths: list[Path] = []
-        for staging_path in staged.written_staging_paths.values():
-            if not staging_path.exists():
-                continue
-            staging_path.unlink(missing_ok=True)
-            removed_staging_paths.append(staging_path)
+        removed_staging_paths = self._cleanup_pull_apply_staging_artifacts()
+        removed_plan_path = self._cleanup_pull_apply_plan_file()
 
         return DesktopPullApplyFinalizeResult(
             state=state,
             removed_staging_paths=removed_staging_paths,
+            removed_plan_path=removed_plan_path,
         )
 
     def _build_pull_apply_plan(
@@ -1103,6 +1153,38 @@ class DesktopSyncService:
             f"{operation} is blocked while sync_apply_journal is active: "
             f"{journal.journal_id} ({journal.phase})"
         )
+
+    def _write_pull_apply_plan_file(self, plan: DesktopPullApplyPlan) -> None:
+        _write_bytes_atomic(
+            self.workspace.paths.sync_apply_plan_path,
+            _serialize_pull_apply_plan(plan),
+        )
+
+    def _load_pull_apply_plan_file(self) -> Optional[DesktopPullApplyPlan]:
+        path = self.workspace.paths.sync_apply_plan_path
+        if not path.exists() or not path.is_file():
+            return None
+        return _deserialize_pull_apply_plan(path.read_bytes())
+
+    def _cleanup_pull_apply_plan_file(self) -> Optional[Path]:
+        path = self.workspace.paths.sync_apply_plan_path
+        if not path.exists():
+            return None
+        path.unlink(missing_ok=True)
+        return path
+
+    def _validate_recovery_pull_apply_plan(
+        self,
+        plan: DesktopPullApplyPlan,
+        *,
+        journal: SyncApplyJournalRecord,
+    ) -> None:
+        if plan.vault_id != journal.vault_id:
+            raise ValueError("recovery pull apply plan vault_id does not match sync_apply_journal")
+        if plan.revision != journal.target_revision:
+            raise ValueError("recovery pull apply plan revision does not match sync_apply_journal")
+        if plan.ops_hash != journal.ops_hash:
+            raise ValueError("recovery pull apply plan ops_hash does not match sync_apply_journal")
 
     def _workspace_matches_document(self, document) -> bool:
         for record in document.files:
