@@ -13,8 +13,9 @@
           <p class="eyebrow">Local-first shell prototype</p>
           <h1>Desktop Sync Center</h1>
           <p class="hero-text">
-            A static shell that consumes the current <code>sync-center</code> and
-            <code>sync-activity</code> contracts without rebuilding desktop logic.
+            A static shell that consumes the current <code>sync-shell-snapshot</code>,
+            <code>sync-center</code>, and <code>sync-activity</code> contracts without
+            rebuilding desktop logic.
           </p>
         </div>
         <div class="hero-status" id="hero-status">
@@ -41,7 +42,7 @@
             <textarea
               id="payload-input"
               spellcheck="false"
-              placeholder='Paste a `sync-center` or `sync-activity` JSON payload here'
+              placeholder='Paste a `sync-shell-snapshot`, `sync-center`, or `sync-activity` JSON payload here'
             ></textarea>
             <div class="control-actions">
               <button id="apply-input-button" class="solid">Apply JSON</button>

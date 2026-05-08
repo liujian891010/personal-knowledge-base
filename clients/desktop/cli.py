@@ -48,6 +48,16 @@ def _write_downloaded_blobs(output_dir: Path, downloaded_blobs: dict[str, bytes]
     return written_paths
 
 
+def _write_text_atomic(path: Path, payload: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(path.name + ".tmp")
+    try:
+        temp_path.write_text(payload, encoding="utf-8", newline="\n")
+        temp_path.replace(path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 def _extract_required_blob_ids_from_pull_result(result: Any) -> list[str]:
     payload = _to_jsonable(result)
     if not isinstance(payload, dict):
@@ -172,6 +182,10 @@ def create_parser() -> argparse.ArgumentParser:
     sync_panel_parser.add_argument("--now-ms", type=int)
     sync_center_parser = subparsers.add_parser("sync-center")
     sync_center_parser.add_argument("--now-ms", type=int)
+    sync_shell_snapshot_parser = subparsers.add_parser("sync-shell-snapshot")
+    sync_shell_snapshot_parser.add_argument("--now-ms", type=int)
+    sync_shell_snapshot_parser.add_argument("--activity-limit", type=int, default=20)
+    sync_shell_snapshot_parser.add_argument("--output-json")
     sync_activity_parser = subparsers.add_parser("sync-activity")
     sync_activity_parser.add_argument("--limit", type=int, default=20)
     execute_action_parser = subparsers.add_parser("execute-sync-action")
@@ -349,6 +363,11 @@ def run_cli(
         result = service.build_sync_panel_model(now_ms=args.now_ms)
     elif args.command == "sync-center":
         result = service.build_sync_center_model(now_ms=args.now_ms)
+    elif args.command == "sync-shell-snapshot":
+        result = service.build_sync_shell_snapshot(
+            now_ms=args.now_ms,
+            activity_limit=args.activity_limit,
+        )
     elif args.command == "sync-activity":
         result = service.list_sync_activity(limit=args.limit)
     elif args.command == "execute-sync-action":
@@ -721,7 +740,10 @@ def run_cli(
     else:
         raise ValueError(f"unsupported command: {args.command}")
 
-    stdout.write(json.dumps(_to_jsonable(result), ensure_ascii=False, indent=2, sort_keys=True))
+    rendered = json.dumps(_to_jsonable(result), ensure_ascii=False, indent=2, sort_keys=True)
+    if getattr(args, "output_json", None):
+        _write_text_atomic(Path(args.output_json), rendered + "\n")
+    stdout.write(rendered)
     stdout.write("\n")
     return 0
 

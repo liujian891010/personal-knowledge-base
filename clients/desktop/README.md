@@ -176,6 +176,20 @@ Use `sync-center` when a shell wants a richer multi-card experience instead of a
 
 Use `sync-activity --limit <n>` to read that persisted action feed directly. Records are returned in append order, expose a total activity count alongside the latest window, and currently cover `execute-sync-action` dispatch results such as executed pulls, disabled worker-health reads, and unsupported shell actions.
 
+Use `sync-shell-snapshot` when a shell wants one file-oriented contract instead of stitching multiple CLI calls together. The snapshot includes generation metadata (`generated_at_ms`, `vault_id`, `device_id`, `vault_root`), the full `sync_center` presentation model, and a separately requested `activity_feed` window for timeline rendering or local caching.
+
+```powershell
+$env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
+  --vault-root C:\vaults\pkb `
+  --base-url https://sync.example.com `
+  --vault-id vault-001 `
+  --device-id desktop-shanghai `
+  sync-shell-snapshot `
+  --now-ms 1770002040555 `
+  --activity-limit 20 `
+  --output-json apps\frontend\noteapp-web\fixtures\live-sync-shell.json
+```
+
 Use `execute-sync-action --action-id <id>` when a shell wants to execute one of those action contracts without re-implementing command dispatch. The current boundary can directly run recovery, pull, conflict listing/clearing, local-change scan, worker-health readout, and detected-change submit from the previously generated action ids.
 
 Use `detect-local-changes` to scan the current vault root for tracked file modifications, missing tracked files, and untracked local files before wiring automatic submit flows. A local rename still appears as a `missing + untracked` pair at scan time. `.ai/raw/` and `.ai/log.md` stay outside the regular sync set and are ignored by this scan.

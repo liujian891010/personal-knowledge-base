@@ -1,9 +1,10 @@
-const SAMPLE_PATH = "./fixtures/sync-center.sample.json";
+const SAMPLE_PATH = "./fixtures/sync-shell-snapshot.sample.json";
 const DEFAULT_ACTION_COMMAND = "pkb-desktop-sync";
 
 const state = {
   syncCenter: null,
   activityFeed: null,
+  snapshotMetadata: null,
   sourceLabel: "Not loaded",
 };
 
@@ -48,6 +49,16 @@ function detectPayloadKind(payload) {
   if (
     payload &&
     typeof payload === "object" &&
+    payload.sync_center &&
+    payload.activity_feed &&
+    typeof payload.generated_at_ms === "number"
+  ) {
+    return "sync-shell-snapshot";
+  }
+
+  if (
+    payload &&
+    typeof payload === "object" &&
     Array.isArray(payload.cards) &&
     payload.panel &&
     payload.summary
@@ -64,7 +75,9 @@ function detectPayloadKind(payload) {
     return "sync-activity";
   }
 
-  throw new Error("Unsupported payload shape. Expected sync-center or sync-activity JSON.");
+  throw new Error(
+    "Unsupported payload shape. Expected sync-shell-snapshot, sync-center, or sync-activity JSON.",
+  );
 }
 
 function setSelectedAction(action, source = "manual selection") {
@@ -281,14 +294,27 @@ function renderEmptyDashboard(message) {
   setSelectedAction(null);
 }
 
+function buildPayloadDetail() {
+  if (!state.snapshotMetadata) {
+    return state.sourceLabel;
+  }
+
+  const { generated_at_ms, vault_id, device_id, vault_root } = state.snapshotMetadata;
+  return `${state.sourceLabel} | ${vault_id} | ${device_id} | ${vault_root} | ${formatDateTime(generated_at_ms)}`;
+}
+
 function render() {
   if (!state.syncCenter && !state.activityFeed) {
     renderEmptyDashboard("Load the sample contract or paste your own JSON.");
     return;
   }
 
-  elements.payloadKind.textContent = state.syncCenter ? "sync-center" : "sync-activity";
-  elements.payloadDetail.textContent = state.sourceLabel;
+  elements.payloadKind.textContent = state.snapshotMetadata
+    ? "sync-shell-snapshot"
+    : state.syncCenter
+      ? "sync-center"
+      : "sync-activity";
+  elements.payloadDetail.textContent = buildPayloadDetail();
 
   if (state.syncCenter) {
     renderPanel(state.syncCenter);
@@ -314,10 +340,21 @@ function applyPayload(payload, sourceLabel) {
   const kind = detectPayloadKind(payload);
   state.sourceLabel = sourceLabel;
 
-  if (kind === "sync-center") {
+  if (kind === "sync-shell-snapshot") {
+    state.snapshotMetadata = {
+      generated_at_ms: payload.generated_at_ms,
+      vault_id: payload.vault_id,
+      device_id: payload.device_id,
+      vault_root: payload.vault_root,
+    };
+    state.syncCenter = payload.sync_center;
+    state.activityFeed = payload.activity_feed || payload.sync_center.recent_activity || null;
+  } else if (kind === "sync-center") {
+    state.snapshotMetadata = null;
     state.syncCenter = payload;
     state.activityFeed = payload.recent_activity || null;
   } else {
+    state.snapshotMetadata = null;
     state.syncCenter = null;
     state.activityFeed = payload;
   }
@@ -325,21 +362,32 @@ function applyPayload(payload, sourceLabel) {
   render();
 }
 
-async function loadSample() {
-  const response = await fetch(SAMPLE_PATH);
+async function loadPayloadFromPath(path, sourceLabel) {
+  const response = await fetch(path);
   if (!response.ok) {
-    throw new Error(`Unable to load sample payload: ${response.status}`);
+    throw new Error(`Unable to load payload ${path}: ${response.status}`);
   }
 
   const payload = await response.json();
   elements.payloadInput.value = JSON.stringify(payload, null, 2);
-  applyPayload(payload, "Bundled sync-center sample");
+  applyPayload(payload, sourceLabel);
+}
+
+function resolveInitialPayloadPath() {
+  const search = new URLSearchParams(window.location.search);
+  return search.get("payload") || SAMPLE_PATH;
+}
+
+async function loadSample() {
+  await loadPayloadFromPath(SAMPLE_PATH, "Bundled sync shell snapshot sample");
 }
 
 function applyTextareaPayload() {
   const raw = elements.payloadInput.value.trim();
   if (!raw) {
-    renderEmptyDashboard("Paste a sync-center or sync-activity JSON payload first.");
+    renderEmptyDashboard(
+      "Paste a sync-shell-snapshot, sync-center, or sync-activity JSON payload first.",
+    );
     return;
   }
 
@@ -374,6 +422,7 @@ elements.clearInputButton.addEventListener("click", () => {
   elements.payloadInput.value = "";
   state.syncCenter = null;
   state.activityFeed = null;
+  state.snapshotMetadata = null;
   state.sourceLabel = "Not loaded";
   render();
 });
@@ -394,6 +443,9 @@ elements.fileInput.addEventListener("change", async (event) => {
 });
 
 render();
-loadSample().catch((error) => {
+loadPayloadFromPath(
+  resolveInitialPayloadPath(),
+  `Loaded from ${resolveInitialPayloadPath()}`,
+).catch((error) => {
   renderEmptyDashboard(error instanceof Error ? error.message : String(error));
 });

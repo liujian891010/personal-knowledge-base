@@ -582,6 +582,16 @@ class DesktopSyncCenterModel:
 
 
 @dataclass(frozen=True)
+class DesktopSyncShellSnapshot:
+    generated_at_ms: int
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    sync_center: DesktopSyncCenterModel
+    activity_feed: DesktopSyncActivityFeed
+
+
+@dataclass(frozen=True)
 class DesktopSyncActionExecutionResult:
     action: DesktopSyncPanelAction
     source: str
@@ -2042,6 +2052,27 @@ class DesktopSyncService:
             panel=panel,
             summary=summary,
             recent_activity=recent_activity,
+        )
+
+    def build_sync_shell_snapshot(
+        self,
+        *,
+        now_ms: Optional[int] = None,
+        activity_limit: int = 20,
+    ) -> DesktopSyncShellSnapshot:
+        resolved_now_ms = (
+            int(datetime.now(timezone.utc).timestamp() * 1000)
+            if now_ms is None
+            else now_ms
+        )
+        sync_center = self.build_sync_center_model(now_ms=resolved_now_ms)
+        return DesktopSyncShellSnapshot(
+            generated_at_ms=resolved_now_ms,
+            vault_id=self.workspace.vault_id,
+            device_id=self.workspace.config.device_id,
+            vault_root=self.workspace.vault_root,
+            sync_center=sync_center,
+            activity_feed=self.list_sync_activity(limit=activity_limit),
         )
 
     def _find_sync_action(
