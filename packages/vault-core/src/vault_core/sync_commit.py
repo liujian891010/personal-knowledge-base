@@ -810,8 +810,6 @@ def build_commit_snapshot_table(
 
 def build_blob_check_request(snapshot_table: CommitSnapshotTable) -> BlobCheckRequest:
     blob_ids = sorted({entry.blob_id for entry in snapshot_table.entries})
-    if not blob_ids:
-        raise ValueError("commit snapshot table does not contain any blob entries")
     return BlobCheckRequest(blob_ids=blob_ids)
 
 

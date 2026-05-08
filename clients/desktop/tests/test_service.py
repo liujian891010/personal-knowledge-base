@@ -448,6 +448,23 @@ class DesktopSyncServiceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unsupported items"):
                 service.submit_detected_changes(created_at=1770000030200)
 
+    def test_submit_detected_changes_commits_missing_tracked_file_as_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, _, _ = self._seed_workspace(Path(tmpdir))
+            (Path(tmpdir) / "Notes" / "Live.md").unlink()
+
+            result = service.submit_detected_changes(
+                created_at=1770000030200,
+                commit_intent_id="intent-delete-001",
+            )
+
+            self.assertEqual(result.network.commit.status, "committed")
+            self.assertEqual([call[0] for call in api_opener.calls], ["POST"])
+            self.assertEqual(api_opener.calls[0][1], "https://sync.example.com/vaults/vault-001/commits")
+            self.assertEqual(blob_opener.calls, [])
+            self.assertEqual(result.prepared.submission.manifest.files, [])
+            self.assertEqual(len(result.prepared.submission.manifest.tombstones), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

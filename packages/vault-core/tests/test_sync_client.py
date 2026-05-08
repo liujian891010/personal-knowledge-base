@@ -358,6 +358,78 @@ class SyncClientTests(unittest.TestCase):
         self.assertEqual([call[0] for call in transport.calls], ["blob_check", "blob_upload_init"])
         self.assertEqual(transport.calls[1][2]["blobs"][0]["blob_id"], "blob_a")
 
+    def test_execute_commit_preflight_allows_delete_only_commit_without_blob_preflight(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "existing_blob_ids": [],
+                    "missing_blob_ids": [],
+                },
+            )
+        )
+        submission = CommitSubmissionBundle(
+            manifest=ManifestRecord(
+                vault_id="vault_pkb_001",
+                revision=0,
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                created_at=1770000019200,
+                summary_hash="pending",
+                files=[],
+                tombstones=[
+                    TombstoneRecord(
+                        file_id="file_a",
+                        deleted_revision=None,
+                        deleted_at=1770000019199,
+                        local_delete_seq=5,
+                        last_known_path="Notes/A.md",
+                        deleted_by_device="desktop-shanghai",
+                    )
+                ],
+            ),
+            intent_manifest_hash="sha256:intent-delete",
+            journal=CommitIntentJournalRecord(
+                vault_id="vault_pkb_001",
+                commit_intent_id="intent_delete_1",
+                intent_manifest_hash="sha256:intent-delete",
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                status="submitted",
+                intent_delete_seq_upper_bound=5,
+                created_at=1770000019200,
+                updated_at=1770000019201,
+            ),
+            state=VaultStateRecord(
+                vault_id="vault_pkb_001",
+                last_applied_revision=7,
+                remote_head_revision=7,
+                acked_revision=7,
+                pending_ack_to_server=[],
+                commit_in_progress=True,
+                last_manifest_summary="sha256:head7",
+                last_manifest_summary_status="valid",
+                local_delete_sequence=5,
+            ),
+        )
+
+        result = execute_commit_preflight(
+            transport,
+            submission,
+            snapshot_table=CommitSnapshotTable(
+                vault_id="vault_pkb_001",
+                base_revision=7,
+                created_at=1770000019200,
+                entries=[],
+            ),
+        )
+
+        self.assertEqual([call[0] for call in transport.calls], [])
+        self.assertEqual(result.network_plan.blob_check.requested_blob_ids, [])
+        self.assertEqual(result.network_plan.blob_uploads.entries, [])
+        self.assertIsNone(result.upload_init_request)
+        self.assertIsNone(result.upload_init_response)
+
     def test_execute_blob_uploads_rejects_duplicate_capabilities(self) -> None:
         with self.assertRaisesRegex(ValueError, "duplicate blob_ids"):
             execute_blob_uploads(
