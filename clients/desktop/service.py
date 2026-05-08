@@ -97,6 +97,29 @@ def _compute_content_hash(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def _append_jsonl_record(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        handle.write("\n")
+
+
+def _load_jsonl_records(path: Path) -> list[dict[str, object]]:
+    if not path.exists() or not path.is_file():
+        return []
+    records: list[dict[str, object]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            records.append(payload)
+    return records
+
+
 def _build_pull_apply_ops_hash(plan: "DesktopPullRequiredBlobPlan") -> str:
     payload = {
         "vault_id": plan.vault_id,
@@ -536,6 +559,7 @@ class DesktopSyncCenterModel:
     cards: list[DesktopSyncCenterCard]
     panel: DesktopSyncPanelModel
     summary: DesktopVaultSummary
+    recent_activity: DesktopSyncActivityFeed
 
 
 @dataclass(frozen=True)
@@ -545,6 +569,24 @@ class DesktopSyncActionExecutionResult:
     status: str
     payload: object | None
     message: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class DesktopSyncActivityRecord:
+    activity_id: str
+    occurred_at_ms: int
+    level: str
+    action_id: str
+    command: str
+    status: str
+    source: str
+    message: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class DesktopSyncActivityFeed:
+    records: list[DesktopSyncActivityRecord]
+    total_count: int
 
 
 @dataclass(frozen=True)
@@ -1500,6 +1542,67 @@ class DesktopSyncService:
     def load_worker_health(self) -> DesktopSyncWorkerHealth:
         return self.workspace.load_worker_health()
 
+    def _record_sync_activity(
+        self,
+        *,
+        occurred_at_ms: int,
+        action: DesktopSyncPanelAction,
+        source: str,
+        status: str,
+        message: Optional[str],
+    ) -> DesktopSyncActivityRecord:
+        level = "success" if status == "executed" else ("warning" if status == "disabled" else "danger")
+        record = DesktopSyncActivityRecord(
+            activity_id=str(uuid4()),
+            occurred_at_ms=occurred_at_ms,
+            level=level,
+            action_id=action.action_id,
+            command=action.command,
+            status=status,
+            source=source,
+            message=message,
+        )
+        _append_jsonl_record(
+            self.workspace.paths.sync_activity_log_path,
+            {
+                "activity_id": record.activity_id,
+                "occurred_at_ms": record.occurred_at_ms,
+                "level": record.level,
+                "action_id": record.action_id,
+                "command": record.command,
+                "status": record.status,
+                "source": record.source,
+                "message": record.message,
+            },
+        )
+        return record
+
+    def list_sync_activity(self, *, limit: int = 20) -> DesktopSyncActivityFeed:
+        all_payloads = _load_jsonl_records(self.workspace.paths.sync_activity_log_path)
+        if limit <= 0:
+            payloads = []
+        elif len(all_payloads) <= limit:
+            payloads = all_payloads
+        else:
+            payloads = all_payloads[-limit:]
+        records = [
+            DesktopSyncActivityRecord(
+                activity_id=str(payload["activity_id"]),
+                occurred_at_ms=int(payload["occurred_at_ms"]),
+                level=str(payload["level"]),
+                action_id=str(payload["action_id"]),
+                command=str(payload["command"]),
+                status=str(payload["status"]),
+                source=str(payload["source"]),
+                message=None if payload.get("message") is None else str(payload["message"]),
+            )
+            for payload in payloads
+        ]
+        return DesktopSyncActivityFeed(
+            records=records,
+            total_count=len(all_payloads),
+        )
+
     def _build_panel_action(
         self,
         *,
@@ -1887,6 +1990,7 @@ class DesktopSyncService:
             cards=cards,
             panel=panel,
             summary=summary,
+            recent_activity=self.list_sync_activity(limit=5),
         )
 
     def _find_sync_action(
@@ -1918,13 +2022,21 @@ class DesktopSyncService:
         )
         action, source = self._find_sync_action(action_id, now_ms=resolved_now_ms)
         if not action.enabled:
-            return DesktopSyncActionExecutionResult(
+            result = DesktopSyncActionExecutionResult(
                 action=action,
                 source=source,
                 status="disabled",
                 payload=None,
                 message=action.reason or "action is currently disabled",
             )
+            self._record_sync_activity(
+                occurred_at_ms=resolved_now_ms,
+                action=action,
+                source=source,
+                status=result.status,
+                message=result.message,
+            )
+            return result
 
         payload: object | None
         if action.command == "vault-summary":
@@ -1952,21 +2064,37 @@ class DesktopSyncService:
                 cleanup_normalized_at=resolved_now_ms,
             )
         else:
-            return DesktopSyncActionExecutionResult(
+            result = DesktopSyncActionExecutionResult(
                 action=action,
                 source=source,
                 status="unsupported",
                 payload=None,
                 message=f"unsupported sync action command: {action.command}",
             )
+            self._record_sync_activity(
+                occurred_at_ms=resolved_now_ms,
+                action=action,
+                source=source,
+                status=result.status,
+                message=result.message,
+            )
+            return result
 
-        return DesktopSyncActionExecutionResult(
+        result = DesktopSyncActionExecutionResult(
             action=action,
             source=source,
             status="executed",
             payload=payload,
             message=None,
         )
+        self._record_sync_activity(
+            occurred_at_ms=resolved_now_ms,
+            action=action,
+            source=source,
+            status=result.status,
+            message=result.message,
+        )
+        return result
 
     def list_conflicts(self) -> DesktopConflictStatus:
         snapshot = self._promote_unresolved_conflict_state_if_needed(self.load_snapshot())
