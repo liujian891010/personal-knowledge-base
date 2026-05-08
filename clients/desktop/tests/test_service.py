@@ -1,0 +1,262 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import tempfile
+import unittest
+from contextlib import closing
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.request import Request
+
+from clients.desktop import DesktopSyncHttpConfig, build_desktop_sync_service
+from vault_core import (
+    FileMapDocument,
+    FileRecord,
+    VaultStateRecord,
+    load_commit_intent_journal,
+    load_vault_state,
+    open_database,
+    upsert_vault_state,
+    write_filemap_atomic,
+)
+
+
+@dataclass
+class FakeHttpResponse:
+    status_code: int
+    body: bytes
+
+    def read(self) -> bytes:
+        return self.body
+
+    def getcode(self) -> int:
+        return self.status_code
+
+    def close(self) -> None:
+        return None
+
+
+class RecordingApiOpener:
+    def __init__(self, *, conflict: bool = False) -> None:
+        self.conflict = conflict
+        self.calls: list[tuple[str, str, object | None, float]] = []
+
+    def __call__(self, request: Request, timeout: float) -> FakeHttpResponse:
+        body = None if request.data is None else json.loads(request.data.decode("utf-8"))
+        self.calls.append((request.get_method(), request.full_url, body, timeout))
+
+        if request.get_method() == "POST" and request.full_url.endswith("/vaults/vault-001/blobs/check"):
+            return self._json_response({"existing_blob_ids": [], "missing_blob_ids": ["blob-live"]})
+        if request.get_method() == "POST" and request.full_url.endswith("/vaults/vault-001/blobs/upload-init"):
+            return self._json_response(
+                {
+                    "uploads": [
+                        {
+                            "blob_id": "blob-live",
+                            "upload_url": "https://blob.example.com/upload/blob-live",
+                            "expires_at": "2026-05-08T12:00:00Z",
+                            "headers": {"x-upload-token": "upload-1"},
+                        }
+                    ]
+                }
+            )
+        if request.get_method() == "POST" and request.full_url.endswith("/vaults/vault-001/commits"):
+            if self.conflict:
+                return self._json_response(
+                    {
+                        "code": "base_revision_conflict",
+                        "current_head_revision": 9,
+                        "current_manifest_summary": "sha256:head9",
+                    },
+                    status_code=409,
+                )
+            return self._json_response(
+                {
+                    "vault_id": "vault-001",
+                    "new_revision": 8,
+                    "head_manifest_summary": "sha256:head8",
+                    "acked_revision_for_device": 8,
+                }
+            )
+        raise AssertionError(f"unexpected API request: {request.get_method()} {request.full_url}")
+
+    def _json_response(self, payload: dict[str, object], *, status_code: int = 200) -> FakeHttpResponse:
+        return FakeHttpResponse(
+            status_code=status_code,
+            body=json.dumps(payload).encode("utf-8"),
+        )
+
+
+class RecordingBlobOpener:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, bytes | None, dict[str, str], float]] = []
+
+    def __call__(self, request: Request, timeout: float) -> FakeHttpResponse:
+        headers = {key.lower(): value for key, value in request.header_items()}
+        self.calls.append((request.get_method(), request.full_url, request.data, headers, timeout))
+        return FakeHttpResponse(status_code=200, body=b"")
+
+
+class DesktopSyncServiceTests(unittest.TestCase):
+    def _seed_workspace(self, root: Path, *, conflict: bool = False):
+        api_opener = RecordingApiOpener(conflict=conflict)
+        blob_opener = RecordingBlobOpener()
+        service = build_desktop_sync_service(
+            DesktopSyncHttpConfig(
+                base_url="https://sync.example.com",
+                vault_id="vault-001",
+                device_id="desktop-shanghai",
+            ),
+            root,
+            api_opener=api_opener,
+            blob_opener=blob_opener,
+        )
+        service.ensure_initialized(now_ms=1770000030000)
+
+        payload = b"# Live note\n"
+        encrypted_payload = b"x" * (len(payload) + 16)
+        document = FileMapDocument(
+            vault_id="vault-001",
+            updated_at=1770000030100,
+            files=[
+                FileRecord(
+                    file_id="file-live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000030090,
+                    content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                    meta={
+                        "blob_id": "blob-live",
+                        "size": len(payload),
+                        "mtime": 1770000030080,
+                        "mime_type": "text/markdown",
+                    },
+                )
+            ],
+        )
+        write_filemap_atomic(service.workspace.paths.filemap_path, document)
+
+        with closing(open_database(service.workspace.paths.db_path)) as connection:
+            current = load_vault_state(connection, "vault-001")
+            self.assertIsNotNone(current)
+            upsert_vault_state(
+                connection,
+                VaultStateRecord(
+                    vault_id="vault-001",
+                    last_applied_revision=7,
+                    remote_head_revision=7,
+                    acked_revision=7,
+                    pending_ack_to_server=[],
+                    commit_in_progress=False,
+                    last_manifest_summary="sha256:head7",
+                    last_manifest_summary_status="valid",
+                    local_delete_sequence=1,
+                    meta=current.meta,
+                ),
+            )
+
+        return service, api_opener, blob_opener, payload, encrypted_payload
+
+    def test_prepare_commit_materializes_snapshot_and_blob_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, payload, encrypted_payload = self._seed_workspace(Path(tmpdir))
+
+            prepared = service.prepare_commit(
+                created_at=1770000030200,
+                commit_intent_id="intent-001",
+                content_by_file_id={"file-live": payload},
+                encrypted_blob_by_file_id={"file-live": encrypted_payload},
+            )
+
+            self.assertEqual(prepared.submission.journal.commit_intent_id, "intent-001")
+            self.assertEqual(prepared.snapshot_table.entries[0].blob_id, "blob-live")
+            self.assertTrue(prepared.snapshot_materialization.files[0].snapshot_path.exists())
+            self.assertTrue(prepared.blob_staging_materialization.files[0].blob_staging_path.exists())
+
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                journal = load_commit_intent_journal(connection, "vault-001")
+                self.assertIsNotNone(journal)
+                self.assertEqual(journal.status, "submitted")
+
+    def test_submit_commit_success_finalizes_state_and_cleans_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, payload, encrypted_payload = self._seed_workspace(Path(tmpdir))
+
+            result = service.submit_commit(
+                created_at=1770000030200,
+                commit_intent_id="intent-001",
+                content_by_file_id={"file-live": payload},
+                encrypted_blob_by_file_id={"file-live": encrypted_payload},
+            )
+
+            self.assertEqual(result.network.commit.status, "committed")
+            self.assertIsNotNone(result.finalized)
+            self.assertIsNone(result.cleanup)
+            self.assertEqual(result.finalized.finalized.state.last_applied_revision, 8)
+            self.assertFalse(result.finalized.finalized.state.commit_in_progress)
+            self.assertEqual(
+                [call[0:2] for call in api_opener.calls],
+                [
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/check"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/upload-init"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/commits"),
+                ],
+            )
+            self.assertEqual(
+                [call[0:2] for call in blob_opener.calls],
+                [("PUT", "https://blob.example.com/upload/blob-live")],
+            )
+            self.assertEqual(blob_opener.calls[0][2], encrypted_payload)
+            self.assertEqual(blob_opener.calls[0][3]["x-upload-token"], "upload-1")
+            self.assertFalse((Path(tmpdir) / ".noteapp" / "staging" / "file-live.snapshot.plain").exists())
+            self.assertFalse((Path(tmpdir) / ".noteapp" / "staging" / "blob-live.blob.staging").exists())
+
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertIsNone(load_commit_intent_journal(connection, "vault-001"))
+                state = load_vault_state(connection, "vault-001")
+                self.assertIsNotNone(state)
+                self.assertEqual(state.last_applied_revision, 8)
+
+    def test_submit_commit_conflict_cleans_journal_state_and_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, payload, encrypted_payload = self._seed_workspace(
+                Path(tmpdir),
+                conflict=True,
+            )
+
+            result = service.submit_commit(
+                created_at=1770000030200,
+                commit_intent_id="intent-001",
+                cleanup_normalized_at=1770000030300,
+                content_by_file_id={"file-live": payload},
+                encrypted_blob_by_file_id={"file-live": encrypted_payload},
+            )
+
+            self.assertEqual(result.network.commit.status, "conflict")
+            self.assertIsNone(result.finalized)
+            self.assertIsNotNone(result.cleanup)
+            self.assertFalse(result.cleanup.state.commit_in_progress)
+            self.assertEqual(
+                [call[0:2] for call in api_opener.calls],
+                [
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/check"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/upload-init"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/commits"),
+                ],
+            )
+            self.assertEqual(len(blob_opener.calls), 1)
+            self.assertFalse((Path(tmpdir) / ".noteapp" / "staging" / "file-live.snapshot.plain").exists())
+            self.assertFalse((Path(tmpdir) / ".noteapp" / "staging" / "blob-live.blob.staging").exists())
+
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertIsNone(load_commit_intent_journal(connection, "vault-001"))
+                state = load_vault_state(connection, "vault-001")
+                self.assertIsNotNone(state)
+                self.assertEqual(state.last_applied_revision, 7)
+                self.assertFalse(state.commit_in_progress)
+
+
+if __name__ == "__main__":
+    unittest.main()

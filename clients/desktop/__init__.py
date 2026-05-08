@@ -4,6 +4,13 @@ from .sync_runtime import (
     build_desktop_sync_runtime,
     build_desktop_sync_session,
 )
+from .service import (
+    DesktopCommitCleanupResult,
+    DesktopCommitSessionResult,
+    DesktopPreparedCommit,
+    DesktopSyncService,
+    build_desktop_sync_service,
+)
 from .workspace import (
     DesktopVaultPaths,
     DesktopVaultWorkspace,
@@ -14,9 +21,14 @@ from .workspace import (
 __all__ = [
     "DesktopSyncHttpConfig",
     "DesktopSyncRuntime",
+    "DesktopCommitCleanupResult",
+    "DesktopCommitSessionResult",
+    "DesktopPreparedCommit",
+    "DesktopSyncService",
     "DesktopVaultPaths",
     "DesktopVaultWorkspace",
     "DesktopWorkspaceSnapshot",
+    "build_desktop_sync_service",
     "build_desktop_sync_runtime",
     "build_desktop_sync_session",
     "build_desktop_vault_workspace",
