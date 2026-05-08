@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Mapping, Optional
 
 from vault_core.sync_http import UrlopenLike
 
@@ -15,6 +15,15 @@ from .workspace import DesktopWorkspaceSnapshot
 class DesktopSyncRunOnceResult:
     initialized: DesktopWorkspaceSnapshot
     recovery: object
+    pull: object
+    final_snapshot: DesktopWorkspaceSnapshot
+
+
+@dataclass(frozen=True)
+class DesktopSyncCycleResult:
+    initialized: DesktopWorkspaceSnapshot
+    recovery: object
+    submitted: Optional[object]
     pull: object
     final_snapshot: DesktopWorkspaceSnapshot
 
@@ -39,6 +48,51 @@ class DesktopSyncRunner:
         return DesktopSyncRunOnceResult(
             initialized=initialized,
             recovery=recovery,
+            pull=pull,
+            final_snapshot=final_snapshot,
+        )
+
+    def run_cycle(
+        self,
+        *,
+        recovery_normalized_at: int,
+        pull_rewritten_at: int,
+        init_now_ms: Optional[int] = None,
+        submit_created_at: Optional[int] = None,
+        submit_file_ids: Optional[Iterable[str]] = None,
+        encrypted_blob_by_file_id: Optional[Mapping[str, bytes]] = None,
+        commit_intent_id: Optional[str] = None,
+        cleanup_normalized_at: Optional[int] = None,
+    ) -> DesktopSyncCycleResult:
+        initialized = self.service.ensure_initialized(now_ms=init_now_ms)
+        recovery = self.service.resume_commit_recovery(
+            normalized_at=recovery_normalized_at,
+        )
+
+        resolved_submit_file_ids = None if submit_file_ids is None else list(submit_file_ids)
+        if submit_created_at is None:
+            if resolved_submit_file_ids or encrypted_blob_by_file_id is not None:
+                raise ValueError("submit file_ids and encrypted payloads require submit_created_at")
+            submitted = None
+        else:
+            if not resolved_submit_file_ids:
+                raise ValueError("submit_created_at requires at least one submit file_id")
+            if encrypted_blob_by_file_id is None:
+                raise ValueError("submit_created_at requires encrypted blob payloads")
+            submitted = self.service.submit_workspace_commit(
+                created_at=submit_created_at,
+                file_ids=resolved_submit_file_ids,
+                encrypted_blob_by_file_id=encrypted_blob_by_file_id,
+                commit_intent_id=commit_intent_id,
+                cleanup_normalized_at=cleanup_normalized_at,
+            )
+
+        pull = self.service.pull_and_ack(rewritten_at=pull_rewritten_at)
+        final_snapshot = self.service.load_snapshot()
+        return DesktopSyncCycleResult(
+            initialized=initialized,
+            recovery=recovery,
+            submitted=submitted,
             pull=pull,
             final_snapshot=final_snapshot,
         )

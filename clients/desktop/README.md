@@ -53,6 +53,23 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   --interval-seconds 2
 ```
 
+`sync-cycle` adds an optional local workspace commit step between recovery and pull:
+
+```powershell
+$env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
+  --vault-root C:\vaults\pkb `
+  --base-url https://sync.example.com `
+  --vault-id vault-001 `
+  --device-id desktop-shanghai `
+  sync-cycle `
+  --now-ms 1770000100000 `
+  --normalized-at 1770000100100 `
+  --submit-created-at 1770000100150 `
+  --file-id file-live `
+  --encrypted-dir .\encrypted-blobs `
+  --rewritten-at 1770000100200
+```
+
 `submit-commit` payload files use `file_id -> base64 bytes` JSON objects:
 
 ```json

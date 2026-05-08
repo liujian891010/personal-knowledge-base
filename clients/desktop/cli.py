@@ -84,6 +84,23 @@ def _load_payload_dir(file_ids: Sequence[str], path: Path, *, suffix: str) -> di
     return decoded
 
 
+def _load_encrypted_blob_payloads(
+    file_ids: Sequence[str],
+    *,
+    encrypted_map: Optional[str],
+    encrypted_dir: Optional[str],
+) -> dict[str, bytes]:
+    if encrypted_map:
+        return _load_base64_payload_map(Path(encrypted_map))
+    if encrypted_dir:
+        return _load_payload_dir(
+            file_ids,
+            Path(encrypted_dir),
+            suffix=".blob",
+        )
+    raise ValueError("encrypted payload source is required")
+
+
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pkb-desktop-sync")
     parser.add_argument("--vault-root", required=True)
@@ -117,6 +134,17 @@ def create_parser() -> argparse.ArgumentParser:
     sync_loop_parser.add_argument("--interval-seconds", type=float, default=0.0)
     sync_loop_parser.add_argument("--step-ms", type=int, default=0)
     sync_loop_parser.add_argument("--now-ms", type=int)
+
+    sync_cycle_parser = subparsers.add_parser("sync-cycle")
+    sync_cycle_parser.add_argument("--normalized-at", type=int, required=True)
+    sync_cycle_parser.add_argument("--rewritten-at", type=int, required=True)
+    sync_cycle_parser.add_argument("--now-ms", type=int)
+    sync_cycle_parser.add_argument("--submit-created-at", type=int)
+    sync_cycle_parser.add_argument("--file-id", action="append", dest="file_ids")
+    sync_cycle_parser.add_argument("--commit-intent-id")
+    sync_cycle_parser.add_argument("--cleanup-normalized-at", type=int)
+    sync_cycle_parser.add_argument("--encrypted-map")
+    sync_cycle_parser.add_argument("--encrypted-dir")
 
     download_parser = subparsers.add_parser("download-blobs")
     download_parser.add_argument("--blob-id", action="append", dest="blob_ids", required=True)
@@ -186,6 +214,39 @@ def run_cli(
                 step_ms=args.step_ms,
             )
         )
+    elif args.command == "sync-cycle":
+        should_submit = any(
+            value is not None
+            for value in (
+                args.submit_created_at,
+                args.file_ids,
+                args.commit_intent_id,
+                args.cleanup_normalized_at,
+                args.encrypted_map,
+                args.encrypted_dir,
+            )
+        )
+        encrypted_blob_by_file_id = None
+        if should_submit:
+            if args.submit_created_at is None:
+                raise ValueError("sync-cycle submit step requires --submit-created-at")
+            if not args.file_ids:
+                raise ValueError("sync-cycle submit step requires at least one --file-id")
+            encrypted_blob_by_file_id = _load_encrypted_blob_payloads(
+                args.file_ids,
+                encrypted_map=args.encrypted_map,
+                encrypted_dir=args.encrypted_dir,
+            )
+        result = DesktopSyncRunner(service).run_cycle(
+            init_now_ms=args.now_ms,
+            recovery_normalized_at=args.normalized_at,
+            pull_rewritten_at=args.rewritten_at,
+            submit_created_at=args.submit_created_at,
+            submit_file_ids=args.file_ids,
+            encrypted_blob_by_file_id=encrypted_blob_by_file_id,
+            commit_intent_id=args.commit_intent_id,
+            cleanup_normalized_at=args.cleanup_normalized_at,
+        )
     elif args.command == "download-blobs":
         result = service.download_blobs(args.blob_ids)
         if args.output_dir:
@@ -205,20 +266,16 @@ def run_cli(
             encrypted_blob_by_file_id=_load_base64_payload_map(Path(args.encrypted_map)),
         )
     elif args.command == "submit-workspace-commit":
-        if args.encrypted_map:
-            encrypted_blob_by_file_id = _load_base64_payload_map(Path(args.encrypted_map))
-        else:
-            encrypted_blob_by_file_id = _load_payload_dir(
-                args.file_ids,
-                Path(args.encrypted_dir),
-                suffix=".blob",
-            )
         result = service.submit_workspace_commit(
             created_at=args.created_at,
             file_ids=args.file_ids,
             commit_intent_id=args.commit_intent_id,
             cleanup_normalized_at=args.cleanup_normalized_at,
-            encrypted_blob_by_file_id=encrypted_blob_by_file_id,
+            encrypted_blob_by_file_id=_load_encrypted_blob_payloads(
+                args.file_ids,
+                encrypted_map=args.encrypted_map,
+                encrypted_dir=args.encrypted_dir,
+            ),
         )
     else:
         raise ValueError(f"unsupported command: {args.command}")

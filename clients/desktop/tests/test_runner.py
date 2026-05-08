@@ -21,6 +21,36 @@ class FakeService:
         self.calls.append(("pull", rewritten_at))
         return {"step": "pull", "rewritten_at": rewritten_at}
 
+    def submit_workspace_commit(
+        self,
+        *,
+        created_at: int,
+        file_ids,
+        encrypted_blob_by_file_id,
+        commit_intent_id=None,
+        cleanup_normalized_at=None,
+    ):
+        self.calls.append(
+            (
+                "submit",
+                created_at,
+                list(file_ids),
+                encrypted_blob_by_file_id,
+                commit_intent_id,
+                cleanup_normalized_at,
+            )
+        )
+        return {
+            "step": "submit",
+            "created_at": created_at,
+            "file_ids": list(file_ids),
+            "encrypted_blob_sizes": {
+                key: len(value) for key, value in encrypted_blob_by_file_id.items()
+            },
+            "commit_intent_id": commit_intent_id,
+            "cleanup_normalized_at": cleanup_normalized_at,
+        }
+
     def load_snapshot(self):
         self.calls.append(("status", None))
         return {"step": "status"}
@@ -55,6 +85,49 @@ class DesktopSyncRunnerTests(unittest.TestCase):
                 ("init", 1770000050000),
                 ("recover", 1770000050100),
                 ("pull", 1770000050200),
+                ("status", None),
+            ],
+        )
+
+    def test_run_cycle_submits_workspace_commit_before_pull(self) -> None:
+        service = FakeService()
+
+        result = DesktopSyncRunner(service).run_cycle(
+            init_now_ms=1770000051000,
+            recovery_normalized_at=1770000051010,
+            submit_created_at=1770000051020,
+            submit_file_ids=["file-a"],
+            encrypted_blob_by_file_id={"file-a": b"blob-a"},
+            commit_intent_id="intent-003",
+            cleanup_normalized_at=1770000051021,
+            pull_rewritten_at=1770000051030,
+        )
+
+        self.assertEqual(
+            result.submitted,
+            {
+                "step": "submit",
+                "created_at": 1770000051020,
+                "file_ids": ["file-a"],
+                "encrypted_blob_sizes": {"file-a": 6},
+                "commit_intent_id": "intent-003",
+                "cleanup_normalized_at": 1770000051021,
+            },
+        )
+        self.assertEqual(
+            service.calls,
+            [
+                ("init", 1770000051000),
+                ("recover", 1770000051010),
+                (
+                    "submit",
+                    1770000051020,
+                    ["file-a"],
+                    {"file-a": b"blob-a"},
+                    "intent-003",
+                    1770000051021,
+                ),
+                ("pull", 1770000051030),
                 ("status", None),
             ],
         )
