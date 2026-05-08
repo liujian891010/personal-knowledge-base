@@ -9,6 +9,7 @@ class FakeService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, int | None]] = []
         self.skip_detected_submit = False
+        self.commit_recovery_result = None
         self.pull_apply_recovery_result = None
 
     def ensure_initialized(self, *, now_ms=None):
@@ -17,6 +18,8 @@ class FakeService:
 
     def resume_commit_recovery(self, *, normalized_at: int):
         self.calls.append(("recover", normalized_at))
+        if self.commit_recovery_result is not None:
+            return self.commit_recovery_result
         return {"step": "recover", "normalized_at": normalized_at}
 
     def resume_pull_apply_recovery(self, *, normalized_at: int):
@@ -307,6 +310,42 @@ class DesktopSyncRunnerTests(unittest.TestCase):
                 ("recover-pull-apply", 1770000051410),
                 ("pull-and-apply", 1770000051430),
                 ("submit", 1770000051431, ["file-a"], None, None, None),
+                ("status", None),
+            ],
+        )
+
+    def test_run_cycle_pulls_before_submit_when_commit_recovery_requires_full_pull(self) -> None:
+        service = FakeService()
+        service.commit_recovery_result = {
+            "mode": "submitted_confirmation",
+            "submitted": {
+                "recovery": {
+                    "requires_full_pull": True,
+                    "state": {
+                        "last_manifest_summary_status": "stale",
+                    },
+                },
+            },
+        }
+
+        result = DesktopSyncRunner(service).run_cycle(
+            init_now_ms=1770000051500,
+            recovery_normalized_at=1770000051510,
+            submit_created_at=1770000051520,
+            submit_file_ids=["file-a"],
+            cleanup_normalized_at=1770000051521,
+            pull_rewritten_at=1770000051530,
+        )
+
+        self.assertEqual(result.pull["step"], "pull-and-apply")
+        self.assertEqual(
+            service.calls,
+            [
+                ("init", 1770000051500),
+                ("recover", 1770000051510),
+                ("recover-pull-apply", 1770000051510),
+                ("pull-and-apply", 1770000051530),
+                ("submit", 1770000051531, ["file-a"], None, None, 1770000051532),
                 ("status", None),
             ],
         )
