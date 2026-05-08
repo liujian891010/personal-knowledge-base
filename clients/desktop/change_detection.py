@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import mimetypes
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Optional
 
 from vault_core import FileMapDocument, FileRecord
 from vault_core.constants import NOTEAPP_DIRNAME, VAULTINFO_FILENAME
+
+from .crypto import build_placeholder_blob_id
 
 
 def _normalize_relative_path(value: str) -> str:
@@ -70,6 +73,13 @@ class DesktopWorkspaceChangeSet:
     modified_file_ids: list[str]
     missing_file_ids: list[str]
     changes: list[DesktopWorkspaceChangeRecord]
+
+
+@dataclass(frozen=True)
+class DesktopTrackedChangeCommitPlan:
+    change_set: DesktopWorkspaceChangeSet
+    document: FileMapDocument
+    content_by_file_id: dict[str, bytes]
 
 
 def _build_modified_record(
@@ -159,4 +169,83 @@ def detect_local_workspace_changes(
         modified_file_ids=sorted(modified_file_ids),
         missing_file_ids=sorted(missing_file_ids),
         changes=changes,
+    )
+
+
+def _resolve_mime_type(record: FileRecord, relative_path: str) -> Optional[str]:
+    meta = record.meta or {}
+    mime_type = meta.get("mime_type")
+    if isinstance(mime_type, str):
+        return mime_type
+    guessed, _ = mimetypes.guess_type(relative_path)
+    return guessed
+
+
+def build_tracked_change_commit_plan(
+    vault_root: Path,
+    document: FileMapDocument,
+) -> DesktopTrackedChangeCommitPlan:
+    change_set = detect_local_workspace_changes(vault_root, document)
+    unsupported = [
+        change
+        for change in change_set.changes
+        if change.kind != "modified" or change.record_status != "active" or change.file_id is None
+    ]
+    if unsupported:
+        unsupported_kinds = ", ".join(
+            sorted({f"{item.kind}:{item.record_status or 'none'}" for item in unsupported})
+        )
+        raise ValueError(
+            "detected local changes include unsupported items for tracked submit: "
+            + unsupported_kinds
+        )
+    if not change_set.modified_file_ids:
+        raise ValueError("no modified tracked files detected")
+
+    modified_file_id_set = set(change_set.modified_file_ids)
+    updated_files: list[FileRecord] = []
+    content_by_file_id: dict[str, bytes] = {}
+    latest_updated_at = document.updated_at
+
+    for record in document.files:
+        if record.file_id not in modified_file_id_set:
+            updated_files.append(record)
+            continue
+
+        relative_path = _normalize_relative_path(record.path)
+        path = _resolve_workspace_file_path(vault_root, relative_path)
+        payload = path.read_bytes()
+        stat = path.stat()
+        content_hash = _compute_content_hash(payload)
+        size_bytes = len(payload)
+        mtime_ms = stat.st_mtime_ns // 1_000_000
+        meta = dict(record.meta or {})
+        meta.update(
+            {
+                "blob_id": build_placeholder_blob_id(content_hash),
+                "size": size_bytes,
+                "mtime": mtime_ms,
+                "mime_type": _resolve_mime_type(record, relative_path),
+            }
+        )
+        updated_files.append(
+            FileRecord(
+                file_id=record.file_id,
+                path=record.path,
+                type=record.type,
+                status=record.status,
+                updated_at=mtime_ms,
+                content_hash=content_hash,
+                last_known_revision=record.last_known_revision,
+                conflict_source_file_id=record.conflict_source_file_id,
+                meta=meta,
+            )
+        )
+        content_by_file_id[record.file_id] = payload
+        latest_updated_at = max(latest_updated_at, mtime_ms)
+
+    return DesktopTrackedChangeCommitPlan(
+        change_set=change_set,
+        document=document.replace_files(updated_files, updated_at=latest_updated_at),
+        content_by_file_id=content_by_file_id,
     )

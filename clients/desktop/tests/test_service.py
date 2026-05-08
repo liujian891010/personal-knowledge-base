@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.request import Request
 
 from clients.desktop import DesktopSyncHttpConfig, build_desktop_sync_service
-from clients.desktop.crypto import build_placeholder_encrypted_blob_payload
+from clients.desktop.crypto import build_placeholder_blob_id, build_placeholder_encrypted_blob_payload
 from clients.desktop.worker import write_desktop_sync_worker_state
 from vault_core import (
     FileMapDocument,
@@ -49,17 +49,20 @@ class RecordingApiOpener:
         self.calls.append((request.get_method(), request.full_url, body, timeout))
 
         if request.get_method() == "POST" and request.full_url.endswith("/vaults/vault-001/blobs/check"):
-            return self._json_response({"existing_blob_ids": [], "missing_blob_ids": ["blob-live"]})
+            blob_ids = [] if body is None else list(body.get("blob_ids", []))
+            return self._json_response({"existing_blob_ids": [], "missing_blob_ids": blob_ids})
         if request.get_method() == "POST" and request.full_url.endswith("/vaults/vault-001/blobs/upload-init"):
+            blobs = [] if body is None else list(body.get("blobs", []))
             return self._json_response(
                 {
                     "uploads": [
                         {
-                            "blob_id": "blob-live",
-                            "upload_url": "https://blob.example.com/upload/blob-live",
+                            "blob_id": item["blob_id"],
+                            "upload_url": f"https://blob.example.com/upload/{item['blob_id']}",
                             "expires_at": "2026-05-08T12:00:00Z",
                             "headers": {"x-upload-token": "upload-1"},
                         }
+                        for item in blobs
                     ]
                 }
             )
@@ -404,6 +407,46 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             self.assertEqual(changes.modified_file_ids, ["file-live"])
             self.assertEqual(changes.change_count, 1)
+
+    def test_submit_detected_changes_commits_modified_tracked_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, payload, _ = self._seed_workspace(Path(tmpdir))
+            updated_payload = payload + b"updated"
+            updated_hash = "sha256:" + hashlib.sha256(updated_payload).hexdigest()
+            updated_blob_id = build_placeholder_blob_id(updated_hash)
+            (Path(tmpdir) / "Notes" / "Live.md").write_bytes(updated_payload)
+
+            result = service.submit_detected_changes(
+                created_at=1770000030200,
+                commit_intent_id="intent-detected-001",
+            )
+
+            self.assertEqual(result.network.commit.status, "committed")
+            self.assertEqual(
+                [call[0:2] for call in api_opener.calls],
+                [
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/check"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/upload-init"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/commits"),
+                ],
+            )
+            self.assertEqual(
+                [call[0:2] for call in blob_opener.calls],
+                [("PUT", f"https://blob.example.com/upload/{updated_blob_id}")],
+            )
+            self.assertEqual(
+                blob_opener.calls[0][2],
+                build_placeholder_encrypted_blob_payload(updated_payload),
+            )
+
+    def test_submit_detected_changes_rejects_unsupported_untracked_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            extra_path = Path(tmpdir) / "Notes" / "Extra.md"
+            extra_path.write_text("# extra\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "unsupported items"):
+                service.submit_detected_changes(created_at=1770000030200)
 
 
 if __name__ == "__main__":

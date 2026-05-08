@@ -208,6 +208,11 @@ def create_parser() -> argparse.ArgumentParser:
     encrypted_group = submit_workspace_parser.add_mutually_exclusive_group(required=False)
     encrypted_group.add_argument("--encrypted-map")
     encrypted_group.add_argument("--encrypted-dir")
+
+    submit_detected_parser = subparsers.add_parser("submit-detected-commit")
+    submit_detected_parser.add_argument("--created-at", type=int, required=True)
+    submit_detected_parser.add_argument("--commit-intent-id")
+    submit_detected_parser.add_argument("--cleanup-normalized-at", type=int)
     return parser
 
 
@@ -439,6 +444,12 @@ def run_cli(
                 if args.encrypted_map or args.encrypted_dir
                 else None
             ),
+        )
+    elif args.command == "submit-detected-commit":
+        result = service.submit_detected_changes(
+            created_at=args.created_at,
+            commit_intent_id=args.commit_intent_id,
+            cleanup_normalized_at=args.cleanup_normalized_at,
         )
     else:
         raise ValueError(f"unsupported command: {args.command}")
