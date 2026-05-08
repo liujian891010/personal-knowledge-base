@@ -163,6 +163,7 @@ def create_parser() -> argparse.ArgumentParser:
     pull_parser.add_argument("--download-required-blobs", action="store_true")
     pull_parser.add_argument("--decrypt-required-blobs", action="store_true")
     pull_parser.add_argument("--output-dir")
+    pull_parser.add_argument("--plaintext-output-dir")
 
     recover_parser = subparsers.add_parser("recover")
     recover_parser.add_argument("--normalized-at", type=int, required=True)
@@ -295,9 +296,29 @@ def run_cli(
             raise ValueError("pull --output-dir cannot be combined with --decrypt-required-blobs")
         if args.output_dir and not args.download_required_blobs:
             raise ValueError("pull --output-dir requires --download-required-blobs")
+        if args.plaintext_output_dir and not args.decrypt_required_blobs:
+            raise ValueError("pull --plaintext-output-dir requires --decrypt-required-blobs")
         if args.download_required_blobs:
             if args.decrypt_required_blobs:
-                result = service.download_and_decrypt_pull_required_blobs(result)
+                decrypted_result = service.download_and_decrypt_pull_required_blobs(result)
+                if args.plaintext_output_dir:
+                    result = {
+                        "pull": _to_jsonable(decrypted_result.pull),
+                        "plan": _to_jsonable(decrypted_result.plan),
+                        "download": (
+                            None
+                            if decrypted_result.download is None
+                            else _to_jsonable(decrypted_result.download)
+                        ),
+                        "written_plaintext_paths": _to_jsonable(
+                            service.materialize_pull_required_plaintext(
+                                decrypted_result,
+                                Path(args.plaintext_output_dir),
+                            )
+                        ),
+                    }
+                else:
+                    result = decrypted_result
             else:
                 required_blob_ids = _extract_required_blob_ids_from_pull_result(result)
                 download_result = None

@@ -54,6 +54,16 @@ def _resolve_workspace_file_path(vault_root: Path, relative_path: str) -> Path:
     return vault_root / path
 
 
+def _write_bytes_atomic(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(path.name + ".tmp")
+    try:
+        temp_path.write_bytes(payload)
+        temp_path.replace(path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 @dataclass(frozen=True)
 class DesktopPreparedCommit:
     snapshot: DesktopWorkspaceSnapshot
@@ -232,6 +242,20 @@ class DesktopSyncService:
             download=download,
             plaintext_by_file_id=plaintext_by_file_id,
         )
+
+    def materialize_pull_required_plaintext(
+        self,
+        resolved: DesktopPullRequiredBlobResult,
+        output_root: Path,
+    ) -> dict[str, Path]:
+        written_paths: dict[str, Path] = {}
+        for item in resolved.plan.files:
+            if item.file_id not in resolved.plaintext_by_file_id:
+                raise KeyError(f"plaintext payload not found for file_id: {item.file_id}")
+            output_path = _resolve_workspace_file_path(output_root, item.path)
+            _write_bytes_atomic(output_path, resolved.plaintext_by_file_id[item.file_id])
+            written_paths[item.file_id] = output_path
+        return written_paths
 
     def detect_local_changes(self) -> DesktopWorkspaceChangeSet:
         return self.workspace.detect_local_changes()
