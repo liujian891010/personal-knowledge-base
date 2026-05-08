@@ -263,7 +263,27 @@ class FakeService:
                             "requires_confirmation": False,
                         }
                     ],
-                }
+                },
+                {
+                    "card_id": "activity",
+                    "kind": "activity",
+                    "level": "info",
+                    "title": "1 recent sync actions recorded",
+                    "body": "Latest action `list-conflicts` finished with status `executed` from `card:conflicts`.",
+                    "badge_count": 1,
+                    "actions": [
+                        {
+                            "action_id": "sync-activity",
+                            "label": "Open Activity Feed",
+                            "enabled": True,
+                            "emphasis": "primary",
+                            "command": "sync-activity",
+                            "argv": ["--limit", "20"],
+                            "reason": None,
+                            "requires_confirmation": False,
+                        }
+                    ],
+                },
             ],
             "panel": self.build_sync_panel_model(now_ms=now_ms),
             "summary": self.summarize_vault(),
@@ -794,6 +814,7 @@ class DesktopCliTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["cards"][0]["card_id"], "conflicts")
+        self.assertEqual(payload["cards"][1]["card_id"], "activity")
         self.assertEqual(payload["panel"]["primary_action"]["action_id"], "list-conflicts")
         self.assertEqual(payload["recent_activity"]["records"][0]["action_id"], "list-conflicts")
         self.assertEqual(
