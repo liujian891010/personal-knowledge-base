@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import closing, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Iterable, Mapping, Optional
+from typing import Callable, Iterable, Mapping, Optional
 from uuid import uuid4
 
 from vault_core import (
@@ -80,6 +80,7 @@ class DesktopCommitSessionResult:
 class DesktopSyncService:
     workspace: DesktopVaultWorkspace
     blob_crypto_provider: DesktopBlobCryptoProvider
+    file_id_builder: Callable[[str], str]
 
     @property
     def config(self) -> DesktopSyncHttpConfig:
@@ -140,6 +141,7 @@ class DesktopSyncService:
             tombstones=snapshot.tombstones,
             current_local_delete_sequence=snapshot.state.local_delete_sequence,
             deleted_by_device=self.config.device_id,
+            file_id_builder=self.file_id_builder,
             blob_id_builder=self.blob_crypto_provider.build_blob_id,
         )
 
@@ -308,6 +310,7 @@ class DesktopSyncService:
             tombstones=snapshot.tombstones,
             current_local_delete_sequence=snapshot.state.local_delete_sequence,
             deleted_by_device=self.config.device_id,
+            file_id_builder=self.file_id_builder,
             blob_id_builder=self.blob_crypto_provider.build_blob_id,
         )
         return self._submit_tracked_change_plan(
@@ -339,6 +342,7 @@ class DesktopSyncService:
             tombstones=snapshot.tombstones,
             current_local_delete_sequence=snapshot.state.local_delete_sequence,
             deleted_by_device=self.config.device_id,
+            file_id_builder=self.file_id_builder,
             blob_id_builder=self.blob_crypto_provider.build_blob_id,
         )
         return self._submit_tracked_change_plan(
@@ -430,7 +434,10 @@ def build_desktop_sync_service(
     api_opener: Optional[UrlopenLike] = None,
     blob_opener: Optional[UrlopenLike] = None,
     blob_crypto_provider: Optional[DesktopBlobCryptoProvider] = None,
+    file_id_builder: Optional[Callable[[str], str]] = None,
 ) -> DesktopSyncService:
+    from .change_detection import build_generated_file_id
+
     return DesktopSyncService(
         workspace=build_desktop_vault_workspace(
             config,
@@ -444,4 +451,5 @@ def build_desktop_sync_service(
             if blob_crypto_provider is None
             else blob_crypto_provider
         ),
+        file_id_builder=build_generated_file_id if file_id_builder is None else file_id_builder,
     )

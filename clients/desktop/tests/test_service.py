@@ -119,7 +119,14 @@ class CustomBlobCryptoProvider:
 
 
 class DesktopSyncServiceTests(unittest.TestCase):
-    def _seed_workspace(self, root: Path, *, conflict: bool = False, blob_crypto_provider=None):
+    def _seed_workspace(
+        self,
+        root: Path,
+        *,
+        conflict: bool = False,
+        blob_crypto_provider=None,
+        file_id_builder=None,
+    ):
         api_opener = RecordingApiOpener(conflict=conflict)
         blob_opener = RecordingBlobOpener()
         service = build_desktop_sync_service(
@@ -132,6 +139,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             api_opener=api_opener,
             blob_opener=blob_opener,
             blob_crypto_provider=blob_crypto_provider,
+            file_id_builder=file_id_builder,
         )
         service.ensure_initialized(now_ms=1770000030000)
 
@@ -603,6 +611,30 @@ class DesktopSyncServiceTests(unittest.TestCase):
                     ("POST", "https://sync.example.com/vaults/vault-001/blobs/upload-init"),
                     ("POST", "https://sync.example.com/vaults/vault-001/commits"),
                 ],
+            )
+            self.assertEqual(len(blob_opener.calls), 1)
+            self.assertEqual(blob_opener.calls[0][2], build_placeholder_encrypted_blob_payload(new_payload))
+
+    def test_submit_detected_changes_uses_injected_file_id_builder_for_untracked_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, _, _ = self._seed_workspace(
+                Path(tmpdir),
+                file_id_builder=lambda _: "11111111-1111-1111-1111-111111111111",
+            )
+            (Path(tmpdir) / "Notes" / "Live.md").unlink()
+            new_payload = b"# New note\n"
+            new_path = Path(tmpdir) / "Notes" / "New.md"
+            new_path.write_bytes(new_payload)
+
+            result = service.submit_detected_changes(
+                created_at=1770000030200,
+                commit_intent_id="intent-add-provider-001",
+            )
+
+            self.assertEqual(result.network.commit.status, "committed")
+            self.assertEqual(
+                result.prepared.submission.manifest.files[0].file_id,
+                "11111111-1111-1111-1111-111111111111",
             )
             self.assertEqual(len(blob_opener.calls), 1)
             self.assertEqual(blob_opener.calls[0][2], build_placeholder_encrypted_blob_payload(new_payload))
