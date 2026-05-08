@@ -172,6 +172,9 @@ def create_parser() -> argparse.ArgumentParser:
     recover_parser = subparsers.add_parser("recover")
     recover_parser.add_argument("--normalized-at", type=int, required=True)
 
+    recover_pull_parser = subparsers.add_parser("recover-pull-apply")
+    recover_pull_parser.add_argument("--normalized-at", type=int, required=True)
+
     sync_once_parser = subparsers.add_parser("sync-once")
     sync_once_parser.add_argument("--normalized-at", type=int)
     sync_once_parser.add_argument("--rewritten-at", type=int)
@@ -410,6 +413,8 @@ def run_cli(
                     }
     elif args.command == "recover":
         result = service.resume_commit_recovery(normalized_at=args.normalized_at)
+    elif args.command == "recover-pull-apply":
+        result = service.resume_pull_apply_recovery(normalized_at=args.normalized_at)
     elif args.command == "sync-once":
         time_plan = resolve_desktop_sync_time_plan(
             base_now_ms=resolved_now_ms_provider(),

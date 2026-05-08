@@ -1368,6 +1368,88 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertIs(session.execution, execution)
             self.assertIs(session.finalized, finalized)
 
+    def test_resume_pull_apply_recovery_returns_idle_without_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+
+            recovered = service.resume_pull_apply_recovery(normalized_at=1770000040200)
+
+            self.assertEqual(recovered.mode, "idle")
+            self.assertIsNone(recovered.journal_phase)
+            self.assertIsNone(recovered.state)
+            self.assertEqual(recovered.removed_staging_paths, [])
+
+    def test_resume_pull_apply_recovery_finalizes_finalizing_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            staging_path = root / ".noteapp" / "staging" / "file-live.staging"
+            staging_path.parent.mkdir(parents=True, exist_ok=True)
+            staging_path.write_bytes(b"# rewritten\n")
+
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(
+                    connection,
+                    SyncApplyJournalRecord(
+                        vault_id="vault-001",
+                        journal_id="journal-1",
+                        target_revision=8,
+                        target_manifest_hash="sha256:head8",
+                        phase="finalizing",
+                        ops_hash="sha256:ops8",
+                        created_at=1770000040100,
+                        updated_at=1770000040200,
+                    ),
+                )
+
+            recovered = service.resume_pull_apply_recovery(normalized_at=1770000040300)
+
+            self.assertEqual(recovered.mode, "finalized")
+            self.assertEqual(recovered.journal_phase, "finalizing")
+            self.assertEqual(recovered.state.last_applied_revision, 8)
+            self.assertEqual(recovered.state.pending_ack_to_server, [8])
+            self.assertEqual(recovered.removed_staging_paths, [staging_path])
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
+
+    def test_resume_pull_apply_recovery_rejects_unmaterialized_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            snapshot = service.load_snapshot()
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                snapshot.document.replace_files(
+                    [
+                        replace(
+                            snapshot.document.files[0],
+                            content_hash="sha256:not-materialized",
+                        )
+                    ],
+                    updated_at=1770000040250,
+                ),
+            )
+
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(
+                    connection,
+                    SyncApplyJournalRecord(
+                        vault_id="vault-001",
+                        journal_id="journal-1",
+                        target_revision=8,
+                        target_manifest_hash="sha256:head8",
+                        phase="materializing",
+                        ops_hash="sha256:ops8",
+                        created_at=1770000040100,
+                        updated_at=1770000040200,
+                    ),
+                )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "pull apply recovery requires a fully materialized workspace before finalization",
+            ):
+                service.resume_pull_apply_recovery(normalized_at=1770000040300)
+
     def test_prepare_commit_rejects_active_sync_apply_journal(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, payload, encrypted_payload = self._seed_workspace(Path(tmpdir))
