@@ -254,6 +254,25 @@ class FakeService:
             "summary": self.summarize_vault(),
         }
 
+    def execute_sync_action(self, action_id: str, *, now_ms=None):
+        self.calls.append(("execute-sync-action", action_id, now_ms))
+        return {
+            "action": {
+                "action_id": action_id,
+                "label": "Review Conflicts",
+                "enabled": True,
+                "emphasis": "primary",
+                "command": "list-conflicts",
+                "argv": [],
+                "reason": None,
+                "requires_confirmation": False,
+            },
+            "source": "card:conflicts",
+            "status": "executed",
+            "payload": self.list_conflicts(),
+            "message": None,
+        }
+
     def export_vault_package(self, package_path: Path, *, include_ai_raw: bool = False):
         self.calls.append(("export-vault", str(package_path), include_ai_raw))
         return {
@@ -763,6 +782,34 @@ class DesktopCliTests(unittest.TestCase):
                 ("sync-panel", 1770000040456),
                 ("vault-summary", None),
                 ("vault-summary", None),
+            ],
+        )
+
+    def test_execute_sync_action_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "execute-sync-action",
+            "--action-id",
+            "list-conflicts",
+            "--now-ms",
+            "1770000040666",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["status"], "executed")
+        self.assertEqual(payload["action"]["action_id"], "list-conflicts")
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("execute-sync-action", "list-conflicts", 1770000040666),
+                ("list-conflicts", None),
             ],
         )
 

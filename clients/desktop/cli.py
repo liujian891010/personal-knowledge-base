@@ -172,6 +172,9 @@ def create_parser() -> argparse.ArgumentParser:
     sync_panel_parser.add_argument("--now-ms", type=int)
     sync_center_parser = subparsers.add_parser("sync-center")
     sync_center_parser.add_argument("--now-ms", type=int)
+    execute_action_parser = subparsers.add_parser("execute-sync-action")
+    execute_action_parser.add_argument("--action-id", required=True)
+    execute_action_parser.add_argument("--now-ms", type=int)
     inspect_vault_parser = subparsers.add_parser("inspect-vault-package")
     inspect_vault_parser.add_argument("--input-package", required=True)
     subparsers.add_parser("list-conflicts")
@@ -344,6 +347,8 @@ def run_cli(
         result = service.build_sync_panel_model(now_ms=args.now_ms)
     elif args.command == "sync-center":
         result = service.build_sync_center_model(now_ms=args.now_ms)
+    elif args.command == "execute-sync-action":
+        result = service.execute_sync_action(args.action_id, now_ms=args.now_ms)
     elif args.command == "export-vault":
         result = service.export_vault_package(
             Path(args.output_package),
