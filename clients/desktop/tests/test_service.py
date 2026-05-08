@@ -740,10 +740,13 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             center = service.build_sync_center_model(now_ms=1770000040999)
 
+            self.assertEqual([card.card_id for card in center.cards], ["healthy", "activity"])
             self.assertEqual(center.recent_activity.total_count, 1)
             self.assertEqual(len(center.recent_activity.records), 1)
             self.assertEqual(center.recent_activity.records[0].action_id, "show-vault-summary")
             self.assertEqual(center.recent_activity.records[0].status, "executed")
+            self.assertEqual(center.cards[-1].actions[0].action_id, "sync-activity")
+            self.assertEqual(center.cards[-1].actions[0].command, "sync-activity")
 
     def test_execute_sync_action_records_unsupported_activity(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -768,6 +771,24 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 feed.records[0].message,
                 "unsupported sync action command: open-shell-debug",
             )
+
+    def test_execute_sync_action_can_return_sync_activity_feed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            service.execute_sync_action("show-vault-summary", now_ms=1770000040901)
+
+            result = service.execute_sync_action("sync-activity", now_ms=1770000040902)
+
+            self.assertEqual(result.status, "executed")
+            self.assertEqual(result.action.command, "sync-activity")
+            self.assertEqual(result.payload.total_count, 1)
+            self.assertEqual(len(result.payload.records), 1)
+            self.assertEqual(result.payload.records[0].action_id, "show-vault-summary")
+
+            feed = service.list_sync_activity(limit=5)
+            self.assertEqual(feed.total_count, 2)
+            self.assertEqual(feed.records[-1].action_id, "sync-activity")
 
     def test_load_workspace_content_rejects_workspace_snapshot_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

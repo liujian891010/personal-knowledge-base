@@ -172,7 +172,7 @@ Use `sync-panel` when a shell or future Tauri UI wants a direct presentation mod
 
 Use `sync-center` when a shell wants a richer multi-card experience instead of a single top-level panel. The response groups recovery, conflict, baseline rebuild, local-change, and worker-health concerns into separate cards, each with its own severity and executable actions, while still carrying the underlying `sync-panel` and `vault-summary`.
 
-`sync-center` now also includes a `recent_activity` feed sourced from `.noteapp/sync-activity.log.jsonl`, so a shell can render the latest executed, disabled, or unsupported sync actions without watching stdout or reconstructing command history itself.
+`sync-center` now also includes a `recent_activity` feed sourced from `.noteapp/sync-activity.log.jsonl`, and when that feed is non-empty it adds a dedicated `activity` card with an executable `sync-activity` action contract. A shell can therefore render the latest executed, disabled, or unsupported sync actions without watching stdout or reconstructing command history itself.
 
 Use `sync-activity --limit <n>` to read that persisted action feed directly. Records are returned in append order, expose a total activity count alongside the latest window, and currently cover `execute-sync-action` dispatch results such as executed pulls, disabled worker-health reads, and unsupported shell actions.
 

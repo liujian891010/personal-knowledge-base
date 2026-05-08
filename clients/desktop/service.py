@@ -120,6 +120,25 @@ def _load_jsonl_records(path: Path) -> list[dict[str, object]]:
     return records
 
 
+def _resolve_sync_activity_limit(argv: list[str]) -> int:
+    for index, item in enumerate(argv):
+        if item != "--limit" or index + 1 >= len(argv):
+            continue
+        try:
+            return int(argv[index + 1])
+        except ValueError:
+            return 20
+    return 20
+
+
+def _resolve_activity_feed_level(feed: "DesktopSyncActivityFeed") -> str:
+    if any(record.level == "danger" for record in feed.records):
+        return "danger"
+    if any(record.level == "warning" for record in feed.records):
+        return "warning"
+    return "info"
+
+
 def _build_pull_apply_ops_hash(plan: "DesktopPullRequiredBlobPlan") -> str:
     payload = {
         "vault_id": plan.vault_id,
@@ -1837,6 +1856,7 @@ class DesktopSyncService:
         )
         panel = self.build_sync_panel_model(now_ms=resolved_now_ms)
         summary = panel.summary
+        recent_activity = self.list_sync_activity(limit=5)
         cards: list[DesktopSyncCenterCard] = []
         conflict_badge_count = panel.conflict_badge_count
         change_badge_count = panel.change_badge_count
@@ -1986,11 +2006,42 @@ class DesktopSyncService:
                 )
             )
 
+        if recent_activity.total_count > 0:
+            latest_record = recent_activity.records[-1]
+            cards.append(
+                DesktopSyncCenterCard(
+                    card_id="activity",
+                    kind="activity",
+                    level=_resolve_activity_feed_level(recent_activity),
+                    title=f"{recent_activity.total_count} recent sync actions recorded",
+                    body=(
+                        f"Latest action `{latest_record.action_id}` finished with status "
+                        f"`{latest_record.status}` from `{latest_record.source}`."
+                        if latest_record.message is None
+                        else (
+                            f"Latest action `{latest_record.action_id}` finished with status "
+                            f"`{latest_record.status}` from `{latest_record.source}`: "
+                            f"{latest_record.message}"
+                        )
+                    ),
+                    badge_count=recent_activity.total_count,
+                    actions=[
+                        self._build_panel_action(
+                            action_id="sync-activity",
+                            label="Open Activity Feed",
+                            command="sync-activity",
+                            argv=["--limit", "20"],
+                            emphasis="primary",
+                        )
+                    ],
+                )
+            )
+
         return DesktopSyncCenterModel(
             cards=cards,
             panel=panel,
             summary=summary,
-            recent_activity=self.list_sync_activity(limit=5),
+            recent_activity=recent_activity,
         )
 
     def _find_sync_action(
@@ -2047,6 +2098,8 @@ class DesktopSyncService:
             payload = self.load_worker_health()
         elif action.command == "detect-local-changes":
             payload = self.detect_local_changes()
+        elif action.command == "sync-activity":
+            payload = self.list_sync_activity(limit=_resolve_sync_activity_limit(action.argv))
         elif action.command == "resolve-conflicts":
             payload = self.resolve_conflicts(
                 resolved_at=resolved_now_ms,
