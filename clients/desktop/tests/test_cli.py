@@ -1657,6 +1657,7 @@ class DesktopCliTests(unittest.TestCase):
             "kind": "recover-pull-apply",
             "normalized_at": 1770000040540,
             "mode": "degraded",
+            "requires_full_pull": True,
             "state": {
                 "last_manifest_summary_status": "stale",
             },
@@ -1700,6 +1701,7 @@ class DesktopCliTests(unittest.TestCase):
     def test_sync_cycle_command_pulls_before_submit_when_commit_recovery_requires_full_pull(self) -> None:
         self.service.commit_recovery_payload = {
             "mode": "submitted_confirmation",
+            "requires_full_pull": True,
             "submitted": {
                 "recovery": {
                     "requires_full_pull": True,

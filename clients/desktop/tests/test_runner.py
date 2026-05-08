@@ -288,6 +288,7 @@ class DesktopSyncRunnerTests(unittest.TestCase):
             "step": "recover-pull-apply",
             "normalized_at": 1770000051410,
             "mode": "degraded",
+            "requires_full_pull": True,
             "state": {
                 "last_manifest_summary_status": "stale",
             },
@@ -318,6 +319,7 @@ class DesktopSyncRunnerTests(unittest.TestCase):
         service = FakeService()
         service.commit_recovery_result = {
             "mode": "submitted_confirmation",
+            "requires_full_pull": True,
             "submitted": {
                 "recovery": {
                     "requires_full_pull": True,

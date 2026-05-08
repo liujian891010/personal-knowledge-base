@@ -7,6 +7,7 @@ from typing import Iterable, Mapping, Optional, Protocol
 
 from .models import CommitIntentJournalRecord, FileMapDocument, ManifestRecord, TombstoneRecord, VaultStateRecord
 from .sqlite_store import load_commit_intent_journal, load_vault_state, recover_submitted_commit_miss
+from .recovery import requires_full_pull
 from .sync_apply import SubmittedRecoveryResult, recover_submitted_commit_flow
 from .sync_api import (
     AckRequestPayload,
@@ -208,6 +209,7 @@ class PullSyncSessionResult:
 @dataclass(frozen=True)
 class CommitRecoverySessionResult:
     mode: str
+    requires_full_pull: bool = False
     local: Optional[LocalCommitRecoveryResult] = None
     submitted: Optional[SubmittedResolveIntentRecoveryExecutionResult] = None
 
@@ -769,6 +771,7 @@ def execute_commit_recovery_session(
         )
         return CommitRecoverySessionResult(
             mode=plan.mode,
+            requires_full_pull=requires_full_pull(local.state),
             local=local,
             submitted=None,
         )
@@ -785,6 +788,7 @@ def execute_commit_recovery_session(
     )
     return CommitRecoverySessionResult(
         mode=plan.mode,
+        requires_full_pull=submitted.recovery.requires_full_pull,
         local=None,
         submitted=submitted,
     )

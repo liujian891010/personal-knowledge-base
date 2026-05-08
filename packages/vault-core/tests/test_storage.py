@@ -4124,11 +4124,13 @@ class VaultCoreStorageTests(unittest.TestCase):
                     resumed,
                     CommitRecoveryExecutionResult(
                         mode="idle",
+                        requires_full_pull=False,
                         local=resumed.local,
                         submitted=None,
                     ),
                 )
                 self.assertIsNotNone(resumed.local)
+                self.assertFalse(resumed.requires_full_pull)
                 self.assertEqual(resumed.local.plan.mode, "idle")
                 self.assertEqual(resumed.local.moved_staging_paths, [])
 
@@ -4194,6 +4196,7 @@ class VaultCoreStorageTests(unittest.TestCase):
                 )
 
                 self.assertEqual(resumed.mode, "submitted_confirmation")
+                self.assertFalse(resumed.requires_full_pull)
                 self.assertIsNone(resumed.local)
                 self.assertIsNotNone(resumed.submitted)
                 self.assertEqual(resumed.submitted.plan.mode, "head_match")
@@ -4264,6 +4267,7 @@ class VaultCoreStorageTests(unittest.TestCase):
                 )
 
                 self.assertEqual(resumed.mode, "submitted_confirmation")
+                self.assertFalse(resumed.requires_full_pull)
                 self.assertIsNotNone(resumed.submitted)
                 self.assertEqual(resumed.submitted.plan.mode, "head_match")
                 self.assertEqual(resumed.submitted.recovery.state.last_applied_revision, 8)

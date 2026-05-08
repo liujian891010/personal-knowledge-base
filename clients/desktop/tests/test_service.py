@@ -1383,6 +1383,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             recovered = service.resume_pull_apply_recovery(normalized_at=1770000040200)
 
             self.assertEqual(recovered.mode, "idle")
+            self.assertFalse(recovered.requires_full_pull)
             self.assertIsNone(recovered.journal_phase)
             self.assertIsNone(recovered.state)
             self.assertEqual(recovered.removed_staging_paths, [])
@@ -1403,6 +1404,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             recovered = service.resume_pull_apply_recovery(normalized_at=1770000040200)
 
             self.assertEqual(recovered.mode, "orphaned")
+            self.assertTrue(recovered.requires_full_pull)
             self.assertIsNone(recovered.journal_phase)
             self.assertEqual(recovered.state.last_manifest_summary_status, "stale")
             self.assertIsNone(recovered.state.last_manifest_summary)
@@ -1425,6 +1427,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             recovered = service.resume_pull_apply_recovery(normalized_at=1770000040200)
 
             self.assertEqual(recovered.mode, "idle")
+            self.assertFalse(recovered.requires_full_pull)
             self.assertIsNone(recovered.journal_phase)
             self.assertIsNone(recovered.state)
             self.assertEqual(recovered.removed_staging_paths, [])
