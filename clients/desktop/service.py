@@ -253,6 +253,14 @@ class DesktopPullApplyFinalizeResult:
 
 
 @dataclass(frozen=True)
+class DesktopPullApplyRecoveryResult:
+    mode: str
+    journal_phase: Optional[str]
+    state: Optional[VaultStateRecord]
+    removed_staging_paths: list[Path]
+
+
+@dataclass(frozen=True)
 class DesktopPullApplySessionResult:
     pull: PullSyncSessionResult
     plan: DesktopPullApplyPlan
@@ -362,6 +370,52 @@ class DesktopSyncService:
 
     def resume_commit_recovery(self, *, normalized_at: int) -> CommitRecoverySessionResult:
         return self.workspace.resume_commit_recovery(normalized_at=normalized_at)
+
+    def resume_pull_apply_recovery(self, *, normalized_at: int) -> DesktopPullApplyRecoveryResult:
+        with closing(self.workspace._open_connection()) as connection:
+            journal = load_sync_apply_journal(connection, self.vault_id)
+            if journal is None:
+                return DesktopPullApplyRecoveryResult(
+                    mode="idle",
+                    journal_phase=None,
+                    state=None,
+                    removed_staging_paths=[],
+                )
+            if journal.phase in {"filemap_rewrite", "finalizing"}:
+                finalizing_journal = (
+                    journal
+                    if journal.phase == "finalizing"
+                    else replace(journal, phase="finalizing", updated_at=normalized_at)
+                )
+                if finalizing_journal != journal:
+                    upsert_sync_apply_journal(connection, finalizing_journal)
+                state = recover_sync_apply_finalizing_state(connection, self.vault_id)
+                removed = self._cleanup_pull_apply_staging_artifacts()
+                return DesktopPullApplyRecoveryResult(
+                    mode="finalized",
+                    journal_phase=finalizing_journal.phase,
+                    state=state,
+                    removed_staging_paths=removed,
+                )
+            if journal.phase == "materializing":
+                snapshot = self.workspace._load_snapshot_from_connection(connection)
+                if not self._workspace_matches_document(snapshot.document):
+                    raise ValueError(
+                        "pull apply recovery requires a fully materialized workspace before finalization"
+                    )
+                upsert_sync_apply_journal(
+                    connection,
+                    replace(journal, phase="finalizing", updated_at=normalized_at),
+                )
+                state = recover_sync_apply_finalizing_state(connection, self.vault_id)
+                removed = self._cleanup_pull_apply_staging_artifacts()
+                return DesktopPullApplyRecoveryResult(
+                    mode="finalized",
+                    journal_phase="materializing",
+                    state=state,
+                    removed_staging_paths=removed,
+                )
+            raise ValueError(f"pull apply recovery is not supported for journal phase: {journal.phase}")
 
     def download_blobs(self, blob_ids: Iterable[str]) -> BlobDownloadSessionResult:
         return self.workspace.download_blobs(blob_ids)
@@ -1049,6 +1103,34 @@ class DesktopSyncService:
             f"{operation} is blocked while sync_apply_journal is active: "
             f"{journal.journal_id} ({journal.phase})"
         )
+
+    def _workspace_matches_document(self, document) -> bool:
+        for record in document.files:
+            if record.status != "active":
+                continue
+            content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            if not content_path.exists() or not content_path.is_file():
+                return False
+            if _compute_content_hash(content_path.read_bytes()) != record.content_hash:
+                return False
+        return True
+
+    def _cleanup_pull_apply_staging_artifacts(self) -> list[Path]:
+        staging_root = self.workspace.vault_root / STAGING_DIRNAME
+        if not staging_root.exists():
+            return []
+        removed_paths: list[Path] = []
+        for staging_path in sorted(
+            (
+                path
+                for path in staging_root.rglob("*")
+                if path.is_file() and path.name.endswith(".staging") and not path.name.endswith(".blob.staging")
+            ),
+            key=lambda item: str(item.relative_to(staging_root)),
+        ):
+            staging_path.unlink(missing_ok=True)
+            removed_paths.append(staging_path)
+        return removed_paths
 
     def _submit_prepared_commit(
         self,

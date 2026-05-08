@@ -34,6 +34,8 @@ Add `--apply-nonblocking` to execute the fast-path live-vault apply boundary in 
 
 Add `--apply` to run the fuller pull apply boundary, including the current two-phase staging path for `blocking_paths` such as path swaps and rename cycles.
 
+Use `recover-pull-apply --normalized-at ...` when a previous pull apply left `sync_apply_journal` behind. The current recovery fast-path finalizes journals already in `materializing`, `filemap_rewrite`, or `finalizing` when the workspace content already matches the target filemap state.
+
 `sync-once` is the current one-shot automation boundary:
 
 ```powershell

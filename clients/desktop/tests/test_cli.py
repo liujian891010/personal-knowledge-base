@@ -42,6 +42,7 @@ class FakeService:
         self.download_and_decrypt_pull_payload = None
         self.materialize_pull_required_plaintext_payload = None
         self.stage_pull_required_plaintext_payload = None
+        self.pull_apply_recovery_payload = None
         self.detect_local_changes_payload = {
             "vault_id": "vault-001",
             "tracked_record_count": 2,
@@ -172,6 +173,12 @@ class FakeService:
         if recover_count in self.fail_recover_at_calls:
             raise RuntimeError(f"recover failed at call {recover_count}")
         return {"kind": "recover", "normalized_at": normalized_at}
+
+    def resume_pull_apply_recovery(self, *, normalized_at: int):
+        self.calls.append(("recover-pull-apply", normalized_at))
+        if self.pull_apply_recovery_payload is not None:
+            return self.pull_apply_recovery_payload
+        return {"kind": "recover-pull-apply", "normalized_at": normalized_at}
 
     def download_blobs(self, blob_ids):
         self.calls.append(("download-blobs", list(blob_ids)))
@@ -1279,6 +1286,47 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload, {"kind": "recover", "normalized_at": 1770000040200})
         self.assertEqual(self.service.calls, [("recover", 1770000040200)])
+
+    def test_recover_pull_apply_command_routes_normalized_at(self) -> None:
+        self.service.pull_apply_recovery_payload = {
+            "mode": "finalized",
+            "journal_phase": "materializing",
+            "state": {
+                "vault_id": "vault-001",
+                "last_applied_revision": 8,
+                "remote_head_revision": 8,
+                "acked_revision": 8,
+                "pending_ack_to_server": [8],
+                "commit_in_progress": False,
+                "last_manifest_summary": "sha256:head8",
+                "last_manifest_summary_status": "valid",
+                "local_delete_sequence": 1,
+                "has_unresolved_conflicts": False,
+                "schema_version": 1,
+                "meta": None,
+            },
+            "removed_staging_paths": [
+                "C:/vault/.noteapp/staging/file-a.staging",
+            ],
+        }
+
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "recover-pull-apply",
+            "--normalized-at",
+            "1770000040200",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload, self.service.pull_apply_recovery_payload)
+        self.assertEqual(self.service.calls, [("recover-pull-apply", 1770000040200)])
 
     def test_sync_once_command_routes_runner_sequence(self) -> None:
         exit_code, payload = self._run(
