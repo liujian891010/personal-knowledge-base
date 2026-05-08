@@ -38,6 +38,7 @@ class FakeService:
         self.pull_and_ack_payload = None
         self.download_and_decrypt_pull_payload = None
         self.materialize_pull_required_plaintext_payload = None
+        self.stage_pull_required_plaintext_payload = None
         self.detect_local_changes_payload = {
             "vault_id": "vault-001",
             "tracked_record_count": 2,
@@ -186,6 +187,12 @@ class FakeService:
         self.calls.append(("materialize-pull-required-plaintext", resolved, output_root))
         if self.materialize_pull_required_plaintext_payload is not None:
             return self.materialize_pull_required_plaintext_payload
+        return {}
+
+    def stage_pull_required_plaintext_for_apply(self, resolved, *, started_at: int):
+        self.calls.append(("stage-pull-required-plaintext-for-apply", resolved, started_at))
+        if self.stage_pull_required_plaintext_payload is not None:
+            return self.stage_pull_required_plaintext_payload
         return {}
 
     def submit_commit(
@@ -666,6 +673,26 @@ class DesktopCliTests(unittest.TestCase):
                     tmpdir,
                 )
 
+    def test_pull_command_rejects_stage_required_blobs_without_decrypt_flag(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "pull --stage-required-blobs requires --decrypt-required-blobs",
+        ):
+            self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "pull",
+                "--rewritten-at",
+                "1770000040100",
+                "--stage-required-blobs",
+            )
+
     def test_pull_command_can_materialize_decrypted_required_blobs(self) -> None:
         self.service.pull_and_ack_payload = {
             "pull": {
@@ -749,6 +776,116 @@ class DesktopCliTests(unittest.TestCase):
                     "pull",
                     "download-and-decrypt-pull-required-blobs",
                     "materialize-pull-required-plaintext",
+                ],
+            )
+
+    def test_pull_command_can_stage_decrypted_required_blobs_for_apply(self) -> None:
+        self.service.pull_and_ack_payload = {
+            "pull": {
+                "reconcile": {
+                    "applied": {
+                        "required_blob_ids": ["blob-a"],
+                    }
+                }
+            }
+        }
+        self.service.download_and_decrypt_pull_payload = DesktopPullRequiredBlobResult(
+            pull=self.service.pull_and_ack_payload,
+            plan=DesktopPullRequiredBlobPlan(
+                vault_id="vault-001",
+                revision=8,
+                blob_ids=["blob-a"],
+                files=[
+                    DesktopPullRequiredBlobFile(
+                        file_id="file-a",
+                        path="Notes/A.md",
+                        type="note",
+                        blob_id="blob-a",
+                        content_hash="sha256:abc",
+                    )
+                ],
+            ),
+            download=None,
+            plaintext_by_file_id={"file-a": b"# A\n"},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            staging_path = Path(tmpdir) / ".noteapp" / "staging" / "file-a.staging"
+            self.service.stage_pull_required_plaintext_payload = {
+                "journal": {
+                    "vault_id": "vault-001",
+                    "journal_id": "journal-1",
+                    "target_revision": 8,
+                    "target_manifest_hash": "sha256:head8",
+                    "phase": "staging",
+                    "ops_hash": "sha256:ops8",
+                    "created_at": 1770000040100,
+                    "updated_at": 1770000040100,
+                },
+                "written_staging_paths": {
+                    "file-a": staging_path,
+                },
+            }
+            exit_code, payload = self._run(
+                "--vault-root",
+                tmpdir,
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "pull",
+                "--rewritten-at",
+                "1770000040100",
+                "--download-required-blobs",
+                "--decrypt-required-blobs",
+                "--stage-required-blobs",
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                payload,
+                {
+                    "pull": self.service.pull_and_ack_payload,
+                    "plan": {
+                        "vault_id": "vault-001",
+                        "revision": 8,
+                        "blob_ids": ["blob-a"],
+                        "files": [
+                            {
+                                "file_id": "file-a",
+                                "path": "Notes/A.md",
+                                "type": "note",
+                                "blob_id": "blob-a",
+                                "content_hash": "sha256:abc",
+                            }
+                        ],
+                    },
+                    "download": None,
+                    "apply_staging": {
+                        "journal": {
+                            "vault_id": "vault-001",
+                            "journal_id": "journal-1",
+                            "target_revision": 8,
+                            "target_manifest_hash": "sha256:head8",
+                            "phase": "staging",
+                            "ops_hash": "sha256:ops8",
+                            "created_at": 1770000040100,
+                            "updated_at": 1770000040100,
+                        },
+                        "written_staging_paths": {
+                            "file-a": str(staging_path),
+                        },
+                    },
+                },
+            )
+            self.assertEqual(
+                [call[0] for call in self.service.calls],
+                [
+                    "pull",
+                    "download-and-decrypt-pull-required-blobs",
+                    "stage-pull-required-plaintext-for-apply",
                 ],
             )
 

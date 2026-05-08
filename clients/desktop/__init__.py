@@ -40,6 +40,7 @@ from .sync_runtime import (
 )
 from .service import (
     DesktopCommitCleanupResult,
+    DesktopPullApplyStagingResult,
     DesktopCommitSessionResult,
     DesktopPreparedCommit,
     DesktopPullRequiredBlobFile,
@@ -74,6 +75,7 @@ __all__ = [
     "DesktopSyncHttpConfig",
     "DesktopSyncRuntime",
     "DesktopCommitCleanupResult",
+    "DesktopPullApplyStagingResult",
     "DesktopCommitSessionResult",
     "DesktopPreparedCommit",
     "DesktopPullRequiredBlobFile",
