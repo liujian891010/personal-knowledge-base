@@ -36,7 +36,7 @@ from .change_detection import (
     build_tracked_change_commit_plan,
     detect_local_workspace_changes,
 )
-from .crypto import build_placeholder_encrypted_blob_map
+from .crypto import DesktopBlobCryptoProvider, build_placeholder_blob_crypto_provider
 from .sync_runtime import DesktopSyncHttpConfig
 from .worker_state import DesktopSyncWorkerHealth, DesktopSyncWorkerStateRecord
 from .workspace import (
@@ -79,6 +79,7 @@ class DesktopCommitSessionResult:
 @dataclass(frozen=True)
 class DesktopSyncService:
     workspace: DesktopVaultWorkspace
+    blob_crypto_provider: DesktopBlobCryptoProvider
 
     @property
     def config(self) -> DesktopSyncHttpConfig:
@@ -139,6 +140,7 @@ class DesktopSyncService:
             tombstones=snapshot.tombstones,
             current_local_delete_sequence=snapshot.state.local_delete_sequence,
             deleted_by_device=self.config.device_id,
+            blob_id_builder=self.blob_crypto_provider.build_blob_id,
         )
 
     def _submit_tracked_change_plan(
@@ -240,7 +242,7 @@ class DesktopSyncService:
     ) -> DesktopPreparedCommit:
         resolved_commit_intent_id = commit_intent_id or str(uuid4())
         resolved_encrypted_blob_by_file_id = (
-            build_placeholder_encrypted_blob_map(content_by_file_id)
+            self.blob_crypto_provider.build_encrypted_blob_map(content_by_file_id)
             if encrypted_blob_by_file_id is None
             else dict(encrypted_blob_by_file_id)
         )
@@ -306,6 +308,7 @@ class DesktopSyncService:
             tombstones=snapshot.tombstones,
             current_local_delete_sequence=snapshot.state.local_delete_sequence,
             deleted_by_device=self.config.device_id,
+            blob_id_builder=self.blob_crypto_provider.build_blob_id,
         )
         return self._submit_tracked_change_plan(
             snapshot,
@@ -336,6 +339,7 @@ class DesktopSyncService:
             tombstones=snapshot.tombstones,
             current_local_delete_sequence=snapshot.state.local_delete_sequence,
             deleted_by_device=self.config.device_id,
+            blob_id_builder=self.blob_crypto_provider.build_blob_id,
         )
         return self._submit_tracked_change_plan(
             snapshot,
@@ -425,6 +429,7 @@ def build_desktop_sync_service(
     db_path: Optional[Path] = None,
     api_opener: Optional[UrlopenLike] = None,
     blob_opener: Optional[UrlopenLike] = None,
+    blob_crypto_provider: Optional[DesktopBlobCryptoProvider] = None,
 ) -> DesktopSyncService:
     return DesktopSyncService(
         workspace=build_desktop_vault_workspace(
@@ -433,5 +438,10 @@ def build_desktop_sync_service(
             db_path=db_path,
             api_opener=api_opener,
             blob_opener=blob_opener,
-        )
+        ),
+        blob_crypto_provider=(
+            build_placeholder_blob_crypto_provider()
+            if blob_crypto_provider is None
+            else blob_crypto_provider
+        ),
     )

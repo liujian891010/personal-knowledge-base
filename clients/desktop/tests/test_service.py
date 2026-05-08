@@ -103,8 +103,23 @@ class RecordingBlobOpener:
         return FakeHttpResponse(status_code=200, body=b"")
 
 
+class CustomBlobCryptoProvider:
+    def build_blob_id(self, content_hash: str) -> str:
+        return "blob-custom-" + content_hash.split(":", 1)[-1][:8]
+
+    def encrypt_payload(self, payload: bytes) -> bytes:
+        tag = len(payload).to_bytes(16, "big")
+        return payload + tag
+
+    def build_encrypted_blob_map(self, content_by_file_id: dict[str, bytes]) -> dict[str, bytes]:
+        return {
+            file_id: self.encrypt_payload(payload)
+            for file_id, payload in content_by_file_id.items()
+        }
+
+
 class DesktopSyncServiceTests(unittest.TestCase):
-    def _seed_workspace(self, root: Path, *, conflict: bool = False):
+    def _seed_workspace(self, root: Path, *, conflict: bool = False, blob_crypto_provider=None):
         api_opener = RecordingApiOpener(conflict=conflict)
         blob_opener = RecordingBlobOpener()
         service = build_desktop_sync_service(
@@ -116,6 +131,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             root,
             api_opener=api_opener,
             blob_opener=blob_opener,
+            blob_crypto_provider=blob_crypto_provider,
         )
         service.ensure_initialized(now_ms=1770000030000)
 
@@ -211,6 +227,23 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 blob_path.read_bytes(),
                 build_placeholder_encrypted_blob_payload(payload),
             )
+
+    def test_prepare_commit_uses_injected_blob_crypto_provider_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            provider = CustomBlobCryptoProvider()
+            service, _, _, payload, _ = self._seed_workspace(
+                Path(tmpdir),
+                blob_crypto_provider=provider,
+            )
+
+            prepared = service.prepare_commit(
+                created_at=1770000030200,
+                commit_intent_id="intent-001",
+                content_by_file_id={"file-live": payload},
+            )
+
+            blob_path = prepared.blob_staging_materialization.files[0].blob_staging_path
+            self.assertEqual(blob_path.read_bytes(), provider.encrypt_payload(payload))
 
     def test_submit_commit_success_finalizes_state_and_cleans_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -467,6 +500,38 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 blob_opener.calls[0][2],
                 build_placeholder_encrypted_blob_payload(updated_payload),
             )
+
+    def test_submit_detected_changes_uses_injected_blob_crypto_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            provider = CustomBlobCryptoProvider()
+            service, api_opener, blob_opener, payload, _ = self._seed_workspace(
+                Path(tmpdir),
+                blob_crypto_provider=provider,
+            )
+            updated_payload = payload + b"updated"
+            updated_hash = "sha256:" + hashlib.sha256(updated_payload).hexdigest()
+            updated_blob_id = provider.build_blob_id(updated_hash)
+            (Path(tmpdir) / "Notes" / "Live.md").write_bytes(updated_payload)
+
+            result = service.submit_detected_changes(
+                created_at=1770000030200,
+                commit_intent_id="intent-detected-provider-001",
+            )
+
+            self.assertEqual(result.network.commit.status, "committed")
+            self.assertEqual(
+                [call[0:2] for call in api_opener.calls],
+                [
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/check"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/upload-init"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/commits"),
+                ],
+            )
+            self.assertEqual(
+                [call[0:2] for call in blob_opener.calls],
+                [("PUT", f"https://blob.example.com/upload/{updated_blob_id}")],
+            )
+            self.assertEqual(blob_opener.calls[0][2], provider.encrypt_payload(updated_payload))
 
     def test_submit_detected_changes_rejects_modified_conflict_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
