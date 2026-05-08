@@ -8,6 +8,7 @@ from clients.desktop.runner import DesktopSyncRunner
 class FakeService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, int | None]] = []
+        self.skip_detected_submit = False
 
     def ensure_initialized(self, *, now_ms=None):
         self.calls.append(("init", now_ms))
@@ -70,6 +71,30 @@ class FakeService:
                 cleanup_normalized_at,
             )
         )
+        return {
+            "step": "submit-detected",
+            "created_at": created_at,
+            "commit_intent_id": commit_intent_id,
+            "cleanup_normalized_at": cleanup_normalized_at,
+        }
+
+    def submit_detected_changes_if_needed(
+        self,
+        *,
+        created_at: int,
+        commit_intent_id=None,
+        cleanup_normalized_at=None,
+    ):
+        self.calls.append(
+            (
+                "submit-detected",
+                created_at,
+                commit_intent_id,
+                cleanup_normalized_at,
+            )
+        )
+        if self.skip_detected_submit:
+            return None
         return {
             "step": "submit-detected",
             "created_at": created_at,
@@ -210,6 +235,30 @@ class DesktopSyncRunnerTests(unittest.TestCase):
                 ("recover", 1770000051210),
                 ("submit-detected", 1770000051220, "intent-detected-001", 1770000051221),
                 ("pull", 1770000051230),
+                ("status", None),
+            ],
+        )
+
+    def test_run_cycle_keeps_pulling_when_detected_submit_is_a_noop(self) -> None:
+        service = FakeService()
+        service.skip_detected_submit = True
+
+        result = DesktopSyncRunner(service).run_cycle(
+            init_now_ms=1770000051300,
+            recovery_normalized_at=1770000051310,
+            submit_created_at=1770000051320,
+            submit_detected=True,
+            pull_rewritten_at=1770000051330,
+        )
+
+        self.assertIsNone(result.submitted)
+        self.assertEqual(
+            service.calls,
+            [
+                ("init", 1770000051300),
+                ("recover", 1770000051310),
+                ("submit-detected", 1770000051320, None, None),
+                ("pull", 1770000051330),
                 ("status", None),
             ],
         )

@@ -233,16 +233,21 @@ def _match_local_rename_candidates(
 def build_tracked_change_commit_plan(
     vault_root: Path,
     document: FileMapDocument,
+    change_set: Optional[DesktopWorkspaceChangeSet] = None,
     *,
     tombstones: Optional[Iterable[TombstoneRecord]] = None,
     current_local_delete_sequence: int = 0,
     deleted_by_device: Optional[str] = None,
     file_id_builder: Optional[Callable[[str], str]] = None,
 ) -> DesktopTrackedChangeCommitPlan:
-    change_set = detect_local_workspace_changes(vault_root, document)
+    resolved_change_set = (
+        detect_local_workspace_changes(vault_root, document)
+        if change_set is None
+        else change_set
+    )
     unsupported = [
         change
-        for change in change_set.changes
+        for change in resolved_change_set.changes
         if (
             change.kind in {"modified", "missing"}
             and (change.record_status != "active" or change.file_id is None)
@@ -257,10 +262,10 @@ def build_tracked_change_commit_plan(
             "detected local changes include unsupported items for tracked submit: "
             + unsupported_kinds
         )
-    if not change_set.changes:
+    if not resolved_change_set.changes:
         raise ValueError("no supported tracked changes detected")
 
-    modified_file_id_set = set(change_set.modified_file_ids)
+    modified_file_id_set = set(resolved_change_set.modified_file_ids)
     content_by_file_id: dict[str, bytes] = {}
     latest_updated_at = document.updated_at
     working_document = document
@@ -268,7 +273,7 @@ def build_tracked_change_commit_plan(
     local_delete_sequence = current_local_delete_sequence
     resolve_file_id = build_placeholder_file_id if file_id_builder is None else file_id_builder
     record_by_file_id = {record.file_id: record for record in document.files}
-    rename_targets_by_file_id = _match_local_rename_candidates(change_set, document)
+    rename_targets_by_file_id = _match_local_rename_candidates(resolved_change_set, document)
     consumed_untracked_paths = {
         change.path for change in rename_targets_by_file_id.values()
     }
@@ -378,7 +383,7 @@ def build_tracked_change_commit_plan(
         content_by_file_id[file_id] = payload
         latest_updated_at = max(latest_updated_at, renamed_at)
 
-    missing_file_id_set = set(change_set.missing_file_ids) - set(rename_targets_by_file_id)
+    missing_file_id_set = set(resolved_change_set.missing_file_ids) - set(rename_targets_by_file_id)
     for record in document.files:
         if record.file_id not in missing_file_id_set:
             continue
@@ -394,7 +399,7 @@ def build_tracked_change_commit_plan(
         )
         resolved_tombstones.append(tombstone)
 
-    for change in change_set.changes:
+    for change in resolved_change_set.changes:
         if change.kind != "untracked":
             continue
         if change.path in consumed_untracked_paths:
@@ -452,7 +457,7 @@ def build_tracked_change_commit_plan(
         content_by_file_id[record.file_id] = payload
 
     return DesktopTrackedChangeCommitPlan(
-        change_set=change_set,
+        change_set=resolved_change_set,
         document=working_document,
         content_by_file_id=content_by_file_id,
         tombstones=resolved_tombstones,

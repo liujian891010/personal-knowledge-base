@@ -34,6 +34,7 @@ from .change_detection import (
     DesktopTrackedChangeCommitPlan,
     DesktopWorkspaceChangeSet,
     build_tracked_change_commit_plan,
+    detect_local_workspace_changes,
 )
 from .crypto import build_placeholder_encrypted_blob_map
 from .sync_runtime import DesktopSyncHttpConfig
@@ -138,6 +139,66 @@ class DesktopSyncService:
             tombstones=snapshot.tombstones,
             current_local_delete_sequence=snapshot.state.local_delete_sequence,
             deleted_by_device=self.config.device_id,
+        )
+
+    def _submit_tracked_change_plan(
+        self,
+        snapshot: DesktopWorkspaceSnapshot,
+        plan: DesktopTrackedChangeCommitPlan,
+        *,
+        created_at: int,
+        commit_intent_id: Optional[str] = None,
+        cleanup_normalized_at: Optional[int] = None,
+    ) -> DesktopCommitSessionResult:
+        prepared = self._prepare_commit_with_snapshot(
+            DesktopWorkspaceSnapshot(
+                document=plan.document,
+                state=replace(
+                    snapshot.state,
+                    local_delete_sequence=plan.local_delete_sequence,
+                ),
+                tombstones=plan.tombstones,
+            ),
+            created_at=created_at,
+            content_by_file_id=plan.content_by_file_id,
+            commit_intent_id=commit_intent_id,
+        )
+        resolved_cleanup_at = created_at if cleanup_normalized_at is None else cleanup_normalized_at
+
+        try:
+            network = self.workspace.runtime.session.submit_commit(
+                prepared.submission,
+                snapshot_table=prepared.snapshot_table,
+            )
+        except Exception:
+            cleanup = self.cleanup_failed_commit(normalized_at=resolved_cleanup_at)
+            raise
+
+        if network.commit.status != "committed":
+            return DesktopCommitSessionResult(
+                prepared=prepared,
+                network=network,
+                cleanup=self.cleanup_failed_commit(normalized_at=resolved_cleanup_at),
+            )
+
+        response = network.commit.response
+        if response is None:
+            raise ValueError("committed submit_commit result must include response")
+
+        current_tombstones = load_tombstone_ledger(self.workspace.paths.ledger_path)
+        with closing(self.workspace._open_connection()) as connection:
+            finalized = finalize_commit_submission_cleanup(
+                connection,
+                vault_root=self.workspace.vault_root,
+                ledger_path=self.workspace.paths.ledger_path,
+                manifest=prepared.submission.manifest,
+                local_tombstones=current_tombstones,
+                committed_revision=response.new_revision,
+            )
+        return DesktopCommitSessionResult(
+            prepared=prepared,
+            network=network,
+            finalized=finalized,
         )
 
     def cleanup_failed_commit(self, *, normalized_at: int) -> DesktopCommitCleanupResult:
@@ -246,55 +307,42 @@ class DesktopSyncService:
             current_local_delete_sequence=snapshot.state.local_delete_sequence,
             deleted_by_device=self.config.device_id,
         )
-        prepared = self._prepare_commit_with_snapshot(
-            DesktopWorkspaceSnapshot(
-                document=plan.document,
-                state=replace(
-                    snapshot.state,
-                    local_delete_sequence=plan.local_delete_sequence,
-                ),
-                tombstones=plan.tombstones,
-            ),
+        return self._submit_tracked_change_plan(
+            snapshot,
+            plan,
             created_at=created_at,
-            content_by_file_id=plan.content_by_file_id,
             commit_intent_id=commit_intent_id,
+            cleanup_normalized_at=cleanup_normalized_at,
         )
-        resolved_cleanup_at = created_at if cleanup_normalized_at is None else cleanup_normalized_at
 
-        try:
-            network = self.workspace.runtime.session.submit_commit(
-                prepared.submission,
-                snapshot_table=prepared.snapshot_table,
-            )
-        except Exception:
-            cleanup = self.cleanup_failed_commit(normalized_at=resolved_cleanup_at)
-            raise
-
-        if network.commit.status != "committed":
-            return DesktopCommitSessionResult(
-                prepared=prepared,
-                network=network,
-                cleanup=self.cleanup_failed_commit(normalized_at=resolved_cleanup_at),
-            )
-
-        response = network.commit.response
-        if response is None:
-            raise ValueError("committed submit_commit result must include response")
-
-        current_tombstones = load_tombstone_ledger(self.workspace.paths.ledger_path)
-        with closing(self.workspace._open_connection()) as connection:
-            finalized = finalize_commit_submission_cleanup(
-                connection,
-                vault_root=self.workspace.vault_root,
-                ledger_path=self.workspace.paths.ledger_path,
-                manifest=prepared.submission.manifest,
-                local_tombstones=current_tombstones,
-                committed_revision=response.new_revision,
-            )
-        return DesktopCommitSessionResult(
-            prepared=prepared,
-            network=network,
-            finalized=finalized,
+    def submit_detected_changes_if_needed(
+        self,
+        *,
+        created_at: int,
+        commit_intent_id: Optional[str] = None,
+        cleanup_normalized_at: Optional[int] = None,
+    ) -> Optional[DesktopCommitSessionResult]:
+        snapshot = self.load_snapshot()
+        change_set = detect_local_workspace_changes(
+            self.workspace.vault_root,
+            snapshot.document,
+        )
+        if not change_set.changes:
+            return None
+        plan = build_tracked_change_commit_plan(
+            self.workspace.vault_root,
+            snapshot.document,
+            change_set,
+            tombstones=snapshot.tombstones,
+            current_local_delete_sequence=snapshot.state.local_delete_sequence,
+            deleted_by_device=self.config.device_id,
+        )
+        return self._submit_tracked_change_plan(
+            snapshot,
+            plan,
+            created_at=created_at,
+            commit_intent_id=commit_intent_id,
+            cleanup_normalized_at=cleanup_normalized_at,
         )
 
     def submit_commit(
