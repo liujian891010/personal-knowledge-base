@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Optional, Protocol
 
-from .models import CommitIntentJournalRecord, ManifestRecord, TombstoneRecord
+from .models import CommitIntentJournalRecord, FileMapDocument, ManifestRecord, TombstoneRecord, VaultStateRecord
 from .sqlite_store import load_commit_intent_journal, recover_submitted_commit_miss
 from .sync_apply import SubmittedRecoveryResult, recover_submitted_commit_flow
 from .sync_api import (
+    AckRequestPayload,
+    AckResponsePayload,
     BlobUploadCapability,
     BlobUploadInitRequestPayload,
     BlobUploadInitResponsePayload,
@@ -16,18 +18,24 @@ from .sync_api import (
     CreateCommitResponsePayload,
     ResolveCommitIntentRequestPayload,
     ResolveCommitIntentResponsePayload,
+    VaultHeadResponsePayload,
     build_blob_upload_init_request,
+    parse_ack_response,
     parse_blob_check_response,
     parse_blob_upload_init_response,
     parse_commit_conflict_response,
     parse_create_commit_response,
     parse_manifest_response,
     parse_resolve_commit_intent_response,
+    parse_vault_head_response,
+    serialize_ack_request,
     serialize_blob_check_request,
     serialize_blob_upload_init_request,
     serialize_create_commit_request,
     serialize_resolve_commit_intent_request,
 )
+from .sync_plan import plan_pull_reconcile
+from .sync_reconcile import ReconcileResult, execute_pull_reconcile
 from .sync_commit import (
     BlobUploadPlan,
     BlobUploadPlanEntry,
@@ -83,6 +91,19 @@ class SyncCommitTransport(Protocol):
     ) -> SyncHttpJsonResponse:
         ...
 
+    def get_vault_head(
+        self,
+        vault_id: str,
+    ) -> SyncHttpJsonResponse:
+        ...
+
+    def post_ack(
+        self,
+        vault_id: str,
+        payload: Mapping[str, object],
+    ) -> SyncHttpJsonResponse:
+        ...
+
 
 class SyncBlobUploader(Protocol):
     def upload_blob(
@@ -127,6 +148,19 @@ class ResolveCommitIntentExecutionResult:
 class SubmittedResolveIntentRecoveryExecutionResult:
     resolved: ResolveCommitIntentExecutionResult
     recovery: SubmittedRecoveryResult
+
+
+@dataclass(frozen=True)
+class AckExecutionResult:
+    request: AckRequestPayload
+    response: AckResponsePayload
+
+
+@dataclass(frozen=True)
+class PullReconcileSessionResult:
+    head: VaultHeadResponsePayload
+    manifest: Optional[ManifestRecord]
+    reconcile: ReconcileResult
 
 
 def _require_status(response: SyncHttpJsonResponse, expected_status: int, label: str) -> None:
@@ -326,6 +360,75 @@ def execute_submitted_recovery_via_resolve_intent(
     return SubmittedResolveIntentRecoveryExecutionResult(
         resolved=resolved,
         recovery=recovery,
+    )
+
+
+def execute_ack_revisions(
+    transport: SyncCommitTransport,
+    vault_id: str,
+    revisions: Iterable[int],
+) -> AckExecutionResult:
+    request = AckRequestPayload(revisions=list(revisions))
+    http_response = transport.post_ack(
+        vault_id,
+        serialize_ack_request(request),
+    )
+    _require_status(http_response, 200, "ack")
+    return AckExecutionResult(
+        request=request,
+        response=parse_ack_response(http_response.payload),
+    )
+
+
+def execute_pull_reconcile_session(
+    transport: SyncCommitTransport,
+    connection: sqlite3.Connection,
+    *,
+    filemap_path: Path,
+    ledger_path: Path,
+    current_document: FileMapDocument,
+    current_state: VaultStateRecord,
+    local_tombstones: Iterable[TombstoneRecord],
+    rewritten_at: int,
+) -> PullReconcileSessionResult:
+    head_http = transport.get_vault_head(current_state.vault_id)
+    _require_status(head_http, 200, "head")
+    head = parse_vault_head_response(head_http.payload)
+    if head.vault_id != current_state.vault_id:
+        raise ValueError("head response vault_id does not match current state")
+
+    reconcile_plan = plan_pull_reconcile(
+        current_state,
+        observed_head_revision=head.head_revision,
+    )
+    manifest: Optional[ManifestRecord] = None
+    if reconcile_plan.should_download_manifest:
+        manifest_http = transport.get_manifest(
+            current_state.vault_id,
+            reconcile_plan.target_revision,
+        )
+        _require_status(
+            manifest_http,
+            200,
+            f"manifests/{reconcile_plan.target_revision}",
+        )
+        manifest = parse_manifest_response(manifest_http.payload)
+
+    reconcile = execute_pull_reconcile(
+        connection,
+        filemap_path=filemap_path,
+        ledger_path=ledger_path,
+        current_document=current_document,
+        current_state=current_state,
+        local_tombstones=local_tombstones,
+        observed_head_revision=head.head_revision,
+        rewritten_at=rewritten_at,
+        manifest=manifest,
+    )
+    return PullReconcileSessionResult(
+        head=head,
+        manifest=manifest,
+        reconcile=reconcile,
     )
 
 
