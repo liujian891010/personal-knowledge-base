@@ -48,7 +48,7 @@ class DesktopSyncRunner:
         pull_apply_recovery = self.service.resume_pull_apply_recovery(
             normalized_at=recovery_normalized_at,
         )
-        pull = self.service.pull_and_ack(rewritten_at=pull_rewritten_at)
+        pull = self.service.pull_and_apply(rewritten_at=pull_rewritten_at)
         final_snapshot = self.service.load_snapshot()
         return DesktopSyncRunOnceResult(
             initialized=initialized,
@@ -114,7 +114,7 @@ class DesktopSyncRunner:
                     cleanup_normalized_at=cleanup_normalized_at,
                 )
 
-        pull = self.service.pull_and_ack(rewritten_at=pull_rewritten_at)
+        pull = self.service.pull_and_apply(rewritten_at=pull_rewritten_at)
         final_snapshot = self.service.load_snapshot()
         return DesktopSyncCycleResult(
             initialized=initialized,

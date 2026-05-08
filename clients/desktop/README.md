@@ -40,7 +40,7 @@ During `pull --apply` / `pull --apply-nonblocking`, the desktop client now also 
 
 If that replay plan is missing, corrupt, no longer matches the active `sync_apply_journal`, points at replay payloads that are no longer present, or the journal is still parked in the early `preparing` phase, `recover-pull-apply` now degrades safely by marking the local manifest summary stale, clearing the journal, and moving leftover staging files into `.noteapp/staging-orphans/`. The same command also isolates stray pull-apply `.staging` files and removes stale `.noteapp/sync-apply-plan.json` state when no active `sync_apply_journal` exists anymore.
 
-`sync-once` is the current one-shot automation boundary:
+`sync-once` is the current one-shot automation boundary. It now runs commit recovery, pull-apply recovery, and then the full `pull_and_apply` path instead of stopping at the older pull-and-ack boundary:
 
 ```powershell
 $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
@@ -77,7 +77,7 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
 
 Add `--continue-on-error` when the loop should capture iteration failures and keep going instead of aborting on the first exception.
 
-`sync-cycle` adds an optional local workspace commit step between recovery and pull:
+`sync-cycle` adds an optional local workspace commit step between recovery and the same full pull-apply boundary:
 
 ```powershell
 $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
@@ -132,7 +132,7 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
 
 `sync-cycle-loop` accepts the same `--submit-detected` mode for automatic local change submit on each iteration.
 
-Current `pull` / `sync-*` JSON results also expose `required_blob_ids` under the applied reconcile result. The desktop service can now follow that through seven explicit boundaries: returning a concrete apply plan, downloading the required encrypted blobs, downloading plus decrypting them into a `file_id -> plaintext` result, materializing those plaintext files under a caller-provided output root, staging them under `.noteapp/staging/` together with a persisted `sync_apply_journal`, executing the non-blocking subset of the apply plan against the live vault, and executing the current two-phase staging path for `blocking_paths`. The remaining gap is deeper recovery fidelity around mid-apply restarts, not the basic apply path itself.
+Current `pull` / `sync-*` JSON results also expose `required_blob_ids` under the applied reconcile result. The desktop service can now follow that through seven explicit boundaries: returning a concrete apply plan, downloading the required encrypted blobs, downloading plus decrypting them into a `file_id -> plaintext` result, materializing those plaintext files under a caller-provided output root, staging them under `.noteapp/staging/` together with a persisted `sync_apply_journal`, executing the non-blocking subset of the apply plan against the live vault, and executing the current two-phase staging path for `blocking_paths`. Higher-level `sync-*` orchestration now routes through the full pull-apply session rather than the older ack-only pull path. The remaining gap is deeper recovery fidelity around mid-apply restarts, not the basic apply path itself.
 
 `sync-worker` is a thinner bounded worker wrapper around `sync-cycle-loop`: it auto-plans timestamps, defaults to `continue_on_error=true`, and derives `step_ms` from `interval_seconds` when you do not provide one.
 
