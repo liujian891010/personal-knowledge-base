@@ -225,6 +225,35 @@ class FakeService:
             "summary": self.summarize_vault(),
         }
 
+    def build_sync_center_model(self, *, now_ms=None):
+        self.calls.append(("sync-center", now_ms))
+        return {
+            "cards": [
+                {
+                    "card_id": "conflicts",
+                    "kind": "conflicts",
+                    "level": "warning",
+                    "title": "2 unresolved local conflict artifacts",
+                    "body": "Conflict copies and orphan conflict files must be reviewed or cleared before commit submission can reopen.",
+                    "badge_count": 2,
+                    "actions": [
+                        {
+                            "action_id": "list-conflicts",
+                            "label": "Review Conflicts",
+                            "enabled": True,
+                            "emphasis": "primary",
+                            "command": "list-conflicts",
+                            "argv": [],
+                            "reason": None,
+                            "requires_confirmation": False,
+                        }
+                    ],
+                }
+            ],
+            "panel": self.build_sync_panel_model(now_ms=now_ms),
+            "summary": self.summarize_vault(),
+        }
+
     def export_vault_package(self, package_path: Path, *, include_ai_raw: bool = False):
         self.calls.append(("export-vault", str(package_path), include_ai_raw))
         return {
@@ -707,6 +736,34 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(
             self.service.calls,
             [("sync-panel", 1770000040123), ("vault-summary", None)],
+        )
+
+    def test_sync_center_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-center",
+            "--now-ms",
+            "1770000040456",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["cards"][0]["card_id"], "conflicts")
+        self.assertEqual(payload["panel"]["primary_action"]["action_id"], "list-conflicts")
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("sync-center", 1770000040456),
+                ("sync-panel", 1770000040456),
+                ("vault-summary", None),
+                ("vault-summary", None),
+            ],
         )
 
     def test_export_vault_command_routes_to_service(self) -> None:
