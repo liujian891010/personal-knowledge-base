@@ -35,11 +35,20 @@ def _infer_file_type(relative_path: str) -> str:
         return "ai_index"
     if normalized.parts[:2] == (".ai", "wiki") and normalized.suffix.lower() in {".md", ".markdown"}:
         return "ai_wiki"
-    if normalized.parts[:2] == (".ai", "agents"):
+    if len(normalized.parts) == 2 and normalized.parts[0] == ".ai" and normalized.parts[1].lower() == "agents.md":
         return "ai_agents"
     if normalized.suffix.lower() in {".md", ".markdown"}:
         return "note"
     return "attachment"
+
+
+def _is_sync_excluded_workspace_path(relative_path: str) -> bool:
+    normalized = PurePosixPath(_normalize_relative_path(relative_path))
+    if normalized.parts[:2] == (".ai", "raw"):
+        return True
+    if len(normalized.parts) == 2 and normalized.parts[0] == ".ai" and normalized.parts[1].lower() == "log.md":
+        return True
+    return False
 
 
 def build_placeholder_file_id(relative_path: str) -> str:
@@ -57,6 +66,8 @@ def _iter_workspace_files(vault_root: Path) -> Iterable[Path]:
         if NOTEAPP_DIRNAME in relative_parts:
             continue
         if relative_parts == (VAULTINFO_FILENAME,):
+            continue
+        if _is_sync_excluded_workspace_path(PurePosixPath(*relative_parts).as_posix()):
             continue
         yield path
 
