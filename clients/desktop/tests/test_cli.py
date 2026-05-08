@@ -30,6 +30,7 @@ class FakeService:
         self.fail_recover_at_calls: set[int] = set()
         self.fail_submit_workspace_at_calls: set[int] = set()
         self.skip_submit_detected_if_needed = False
+        self.pull_and_ack_payload = None
         self.detect_local_changes_payload = {
             "vault_id": "vault-001",
             "tracked_record_count": 2,
@@ -132,6 +133,8 @@ class FakeService:
 
     def pull_and_ack(self, *, rewritten_at: int):
         self.calls.append(("pull", rewritten_at))
+        if self.pull_and_ack_payload is not None:
+            return self.pull_and_ack_payload
         return {"kind": "pull", "rewritten_at": rewritten_at}
 
     def resume_commit_recovery(self, *, normalized_at: int):
@@ -405,6 +408,147 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload, {"kind": "pull", "rewritten_at": 1770000040100})
         self.assertEqual(self.service.calls, [("pull", 1770000040100)])
+
+    def test_pull_command_can_download_required_blobs(self) -> None:
+        self.service.pull_and_ack_payload = {
+            "pull": {
+                "reconcile": {
+                    "applied": {
+                        "required_blob_ids": ["blob-a", "blob-b"],
+                    }
+                }
+            }
+        }
+
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "pull",
+            "--rewritten-at",
+            "1770000040100",
+            "--download-required-blobs",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload,
+            {
+                "pull": {
+                    "pull": {
+                        "reconcile": {
+                            "applied": {
+                                "required_blob_ids": ["blob-a", "blob-b"],
+                            }
+                        }
+                    }
+                },
+                "download": {
+                    "init": {
+                        "request": {"blob_ids": ["blob-a", "blob-b"]},
+                        "response": {
+                            "downloads": [
+                                {
+                                    "blob_id": "blob-a",
+                                    "download_url": "https://blob.example.com/download/blob-a",
+                                    "encrypted_size": 3,
+                                    "expires_at": "2026-05-08T12:00:00Z",
+                                    "headers": None,
+                                },
+                                {
+                                    "blob_id": "blob-b",
+                                    "download_url": "https://blob.example.com/download/blob-b",
+                                    "encrypted_size": 3,
+                                    "expires_at": "2026-05-08T12:00:00Z",
+                                    "headers": None,
+                                },
+                            ]
+                        },
+                    },
+                    "downloaded_blobs_base64": {
+                        "blob-a": base64.b64encode(b"xyz").decode("ascii"),
+                        "blob-b": base64.b64encode(b"xyz").decode("ascii"),
+                    },
+                },
+            },
+        )
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("pull", 1770000040100),
+                ("download-blobs", ["blob-a", "blob-b"]),
+            ],
+        )
+
+    def test_pull_command_can_write_downloaded_required_blobs(self) -> None:
+        self.service.pull_and_ack_payload = {
+            "pull": {
+                "reconcile": {
+                    "applied": {
+                        "required_blob_ids": ["blob-a"],
+                    }
+                }
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "pull",
+                "--rewritten-at",
+                "1770000040100",
+                "--download-required-blobs",
+                "--output-dir",
+                tmpdir,
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                payload,
+                {
+                    "pull": {
+                        "pull": {
+                            "reconcile": {
+                                "applied": {
+                                    "required_blob_ids": ["blob-a"],
+                                }
+                            }
+                        }
+                    },
+                    "download": {
+                        "init": {
+                            "request": {"blob_ids": ["blob-a"]},
+                            "response": {
+                                "downloads": [
+                                    {
+                                        "blob_id": "blob-a",
+                                        "download_url": "https://blob.example.com/download/blob-a",
+                                        "encrypted_size": 3,
+                                        "expires_at": "2026-05-08T12:00:00Z",
+                                        "headers": None,
+                                    }
+                                ]
+                            },
+                        },
+                        "written_blob_paths": {
+                            "blob-a": str(Path(tmpdir) / "blob-a.blob"),
+                        },
+                    },
+                },
+            )
+            self.assertEqual((Path(tmpdir) / "blob-a.blob").read_bytes(), b"xyz")
 
     def test_recover_command_routes_normalized_at(self) -> None:
         exit_code, payload = self._run(

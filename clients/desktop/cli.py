@@ -46,6 +46,25 @@ def _write_downloaded_blobs(output_dir: Path, downloaded_blobs: dict[str, bytes]
     return written_paths
 
 
+def _extract_required_blob_ids_from_pull_result(result: Any) -> list[str]:
+    payload = _to_jsonable(result)
+    if not isinstance(payload, dict):
+        return []
+    pull_payload = payload.get("pull")
+    if not isinstance(pull_payload, dict):
+        return []
+    reconcile_payload = pull_payload.get("reconcile")
+    if not isinstance(reconcile_payload, dict):
+        return []
+    applied_payload = reconcile_payload.get("applied")
+    if not isinstance(applied_payload, dict):
+        return []
+    required_blob_ids = applied_payload.get("required_blob_ids")
+    if not isinstance(required_blob_ids, list):
+        return []
+    return [blob_id for blob_id in required_blob_ids if isinstance(blob_id, str) and blob_id]
+
+
 def _to_jsonable(value: Any) -> Any:
     if isinstance(value, BlobDownloadSessionResult):
         return {
@@ -130,6 +149,8 @@ def create_parser() -> argparse.ArgumentParser:
 
     pull_parser = subparsers.add_parser("pull")
     pull_parser.add_argument("--rewritten-at", type=int, required=True)
+    pull_parser.add_argument("--download-required-blobs", action="store_true")
+    pull_parser.add_argument("--output-dir")
 
     recover_parser = subparsers.add_parser("recover")
     recover_parser.add_argument("--normalized-at", type=int, required=True)
@@ -256,6 +277,29 @@ def run_cli(
         result = service.load_worker_health()
     elif args.command == "pull":
         result = service.pull_and_ack(rewritten_at=args.rewritten_at)
+        if args.output_dir and not args.download_required_blobs:
+            raise ValueError("pull --output-dir requires --download-required-blobs")
+        if args.download_required_blobs:
+            required_blob_ids = _extract_required_blob_ids_from_pull_result(result)
+            download_result = None
+            if required_blob_ids:
+                download_result = service.download_blobs(required_blob_ids)
+            if args.output_dir and download_result is not None:
+                output_dir = Path(args.output_dir)
+                result = {
+                    "pull": result,
+                    "download": {
+                        "init": _to_jsonable(download_result.init),
+                        "written_blob_paths": _to_jsonable(
+                            _write_downloaded_blobs(output_dir, download_result.downloaded_blobs)
+                        ),
+                    },
+                }
+            else:
+                result = {
+                    "pull": result,
+                    "download": download_result,
+                }
     elif args.command == "recover":
         result = service.resume_commit_recovery(normalized_at=args.normalized_at)
     elif args.command == "sync-once":

@@ -22,6 +22,8 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   pull --rewritten-at 1770000100100
 ```
 
+Add `--download-required-blobs` to have `pull` immediately follow up on the returned `required_blob_ids`, and optionally combine it with `--output-dir .\downloaded-blobs` to materialize the encrypted blob payloads locally.
+
 `sync-once` is the current one-shot automation boundary:
 
 ```powershell
