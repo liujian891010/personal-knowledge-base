@@ -37,6 +37,7 @@ class FakeService:
         self.skip_submit_detected_if_needed = False
         self.pull_and_ack_payload = None
         self.pull_and_plan_apply_payload = None
+        self.pull_and_apply_payload = None
         self.pull_and_apply_nonblocking_payload = None
         self.download_and_decrypt_pull_payload = None
         self.materialize_pull_required_plaintext_payload = None
@@ -158,6 +159,12 @@ class FakeService:
         if self.pull_and_apply_nonblocking_payload is not None:
             return self.pull_and_apply_nonblocking_payload
         return {"kind": "pull-and-apply-nonblocking", "rewritten_at": rewritten_at}
+
+    def pull_and_apply(self, *, rewritten_at: int):
+        self.calls.append(("pull-and-apply", rewritten_at))
+        if self.pull_and_apply_payload is not None:
+            return self.pull_and_apply_payload
+        return {"kind": "pull-and-apply", "rewritten_at": rewritten_at}
 
     def resume_commit_recovery(self, *, normalized_at: int):
         self.calls.append(("recover", normalized_at))
@@ -749,6 +756,48 @@ class DesktopCliTests(unittest.TestCase):
                 "--download-required-blobs",
             )
 
+    def test_pull_command_rejects_apply_with_blob_flags(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "pull --apply cannot be combined with blob download or materialization flags",
+        ):
+            self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "pull",
+                "--rewritten-at",
+                "1770000040100",
+                "--apply",
+                "--download-required-blobs",
+            )
+
+    def test_pull_command_rejects_multiple_apply_modes(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "pull apply modes are mutually exclusive",
+        ):
+            self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "pull",
+                "--rewritten-at",
+                "1770000040100",
+                "--apply",
+                "--apply-nonblocking",
+            )
+
     def test_pull_command_can_return_apply_plan(self) -> None:
         self.service.pull_and_plan_apply_payload = {
             "pull": {
@@ -811,6 +860,110 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload, self.service.pull_and_plan_apply_payload)
         self.assertEqual(self.service.calls, [("pull-and-plan-apply", 1770000040100)])
+
+    def test_pull_command_can_apply_full_plan(self) -> None:
+        self.service.pull_and_apply_payload = {
+            "pull": {
+                "pull": {
+                    "reconcile": {
+                        "applied": {
+                            "required_blob_ids": [],
+                        }
+                    }
+                }
+            },
+            "plan": {
+                "vault_id": "vault-001",
+                "revision": 8,
+                "writes": [],
+                "moves": [
+                    {
+                        "file_id": "file-a",
+                        "source_path": "Notes/A.md",
+                        "target_path": "Notes/B.md",
+                        "type": "note",
+                        "content_hash": "sha256:a",
+                    },
+                    {
+                        "file_id": "file-b",
+                        "source_path": "Notes/B.md",
+                        "target_path": "Notes/A.md",
+                        "type": "note",
+                        "content_hash": "sha256:b",
+                    },
+                ],
+                "deletes": [],
+                "blocking_paths": ["Notes/A.md", "Notes/B.md"],
+                "ops_hash": "sha256:ops8",
+            },
+            "staged": {
+                "journal": {
+                    "vault_id": "vault-001",
+                    "journal_id": "journal-1",
+                    "target_revision": 8,
+                    "target_manifest_hash": "sha256:head8",
+                    "phase": "staging",
+                    "ops_hash": "sha256:ops8",
+                    "created_at": 1770000040100,
+                    "updated_at": 1770000040100,
+                },
+                "written_staging_paths": {},
+            },
+            "execution": {
+                "journal": {
+                    "vault_id": "vault-001",
+                    "journal_id": "journal-1",
+                    "target_revision": 8,
+                    "target_manifest_hash": "sha256:head8",
+                    "phase": "materializing",
+                    "ops_hash": "sha256:ops8",
+                    "created_at": 1770000040100,
+                    "updated_at": 1770000040100,
+                },
+                "written_paths": {},
+                "moved_paths": {
+                    "file-a": "C:/vault/Notes/B.md",
+                    "file-b": "C:/vault/Notes/A.md",
+                },
+                "deleted_paths": [],
+            },
+            "finalized": {
+                "state": {
+                    "vault_id": "vault-001",
+                    "last_applied_revision": 8,
+                    "remote_head_revision": 8,
+                    "acked_revision": 8,
+                    "pending_ack_to_server": [8],
+                    "commit_in_progress": False,
+                    "last_manifest_summary": "sha256:head8",
+                    "last_manifest_summary_status": "valid",
+                    "local_delete_sequence": 1,
+                    "has_unresolved_conflicts": False,
+                    "schema_version": 1,
+                    "meta": None,
+                },
+                "removed_staging_paths": [],
+            },
+        }
+
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "pull",
+            "--rewritten-at",
+            "1770000040100",
+            "--apply",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload, self.service.pull_and_apply_payload)
+        self.assertEqual(self.service.calls, [("pull-and-apply", 1770000040100)])
 
     def test_pull_command_can_apply_nonblocking(self) -> None:
         self.service.pull_and_apply_nonblocking_payload = {
