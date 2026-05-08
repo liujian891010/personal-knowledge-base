@@ -124,6 +124,11 @@ from .sync_client import (
     execute_resolve_commit_intent,
     execute_submitted_recovery_via_resolve_intent,
 )
+from .sync_http import (
+    CapabilityBlobDownloader,
+    CapabilityBlobUploader,
+    JsonHttpSyncTransport,
+)
 from .sync_commit import (
     CommitRecoveryPlan,
     CommitFinalizeResult,
@@ -287,6 +292,9 @@ __all__ = [
     "SyncCommitTransport",
     "SyncHttpJsonResponse",
     "VaultSyncSession",
+    "JsonHttpSyncTransport",
+    "CapabilityBlobUploader",
+    "CapabilityBlobDownloader",
     "add_file",
     "allocate_conflict_copy_path",
     "apply_commit_submitted_state",
