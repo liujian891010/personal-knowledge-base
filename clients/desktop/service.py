@@ -32,6 +32,7 @@ from vault_core import (
     materialize_blob_staging_plan,
     materialize_content_snapshot_plan,
     prepare_commit_submission,
+    recover_sync_apply_finalizing_state,
     upsert_sync_apply_journal,
 )
 from vault_core.constants import STAGING_DIRNAME
@@ -246,11 +247,18 @@ class DesktopPullApplyExecutionResult:
 
 
 @dataclass(frozen=True)
+class DesktopPullApplyFinalizeResult:
+    state: VaultStateRecord
+    removed_staging_paths: list[Path]
+
+
+@dataclass(frozen=True)
 class DesktopPullApplySessionResult:
     pull: PullSyncSessionResult
     plan: DesktopPullApplyPlan
     staged: DesktopPullApplyStagingResult
     execution: DesktopPullApplyExecutionResult
+    finalized: Optional[DesktopPullApplyFinalizeResult] = None
 
 
 @dataclass(frozen=True)
@@ -306,11 +314,18 @@ class DesktopSyncService:
             staged,
             materialized_at=rewritten_at,
         )
+        finalized = self.finalize_applied_pull_plan(
+            plan,
+            execution,
+            staged,
+            finalized_at=rewritten_at,
+        )
         return DesktopPullApplySessionResult(
             pull=pull,
             plan=plan,
             staged=staged,
             execution=execution,
+            finalized=finalized,
         )
 
     def _pull_and_ack_with_snapshot(
@@ -616,6 +631,46 @@ class DesktopSyncService:
             written_paths=written_paths,
             moved_paths=moved_paths,
             deleted_paths=deleted_paths,
+        )
+
+    def finalize_applied_pull_plan(
+        self,
+        plan: DesktopPullApplyPlan,
+        execution: DesktopPullApplyExecutionResult,
+        staged: DesktopPullApplyStagingResult,
+        *,
+        finalized_at: int,
+    ) -> Optional[DesktopPullApplyFinalizeResult]:
+        if execution.journal is None:
+            return None
+
+        with closing(self.workspace._open_connection()) as connection:
+            current_journal = load_sync_apply_journal(connection, self.vault_id)
+            if current_journal is None:
+                raise KeyError(f"sync_apply_journal not found: {self.vault_id}")
+            if current_journal.vault_id != plan.vault_id:
+                raise ValueError("sync_apply_journal vault_id does not match pull apply plan")
+            if current_journal.target_revision != plan.revision:
+                raise ValueError("sync_apply_journal target_revision does not match pull apply plan")
+            if current_journal.phase != "materializing":
+                raise ValueError("sync_apply_journal must be in materializing phase before finalization")
+
+            filemap_rewrite_journal = replace(current_journal, phase="filemap_rewrite", updated_at=finalized_at)
+            upsert_sync_apply_journal(connection, filemap_rewrite_journal)
+            finalizing_journal = replace(filemap_rewrite_journal, phase="finalizing", updated_at=finalized_at)
+            upsert_sync_apply_journal(connection, finalizing_journal)
+            state = recover_sync_apply_finalizing_state(connection, self.vault_id)
+
+        removed_staging_paths: list[Path] = []
+        for staging_path in staged.written_staging_paths.values():
+            if not staging_path.exists():
+                continue
+            staging_path.unlink(missing_ok=True)
+            removed_staging_paths.append(staging_path)
+
+        return DesktopPullApplyFinalizeResult(
+            state=state,
+            removed_staging_paths=removed_staging_paths,
         )
 
     def _build_pull_apply_plan(

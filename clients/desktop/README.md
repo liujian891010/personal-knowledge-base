@@ -30,7 +30,7 @@ Add `--decrypt-required-blobs` on top of that to route the downloaded encrypted 
 
 Add `--stage-required-blobs` on top of `--decrypt-required-blobs` when the decrypted payload should be written into the vault's internal `.noteapp/staging/<file_id>.staging` paths and paired with a persisted `sync_apply_journal` boundary for later apply work.
 
-Add `--apply-nonblocking` to execute the first real live-vault apply boundary in one step: pull, download/decrypt required blobs, stage them, and materialize non-blocking `write/move/delete` actions. This path currently rejects any plan with `blocking_paths`, so rename cycles and path swaps remain a later two-phase apply boundary.
+Add `--apply-nonblocking` to execute the first real live-vault apply boundary in one step: pull, download/decrypt required blobs, stage them, materialize non-blocking `write/move/delete` actions, and then advance the local `sync_apply_journal` through `filemap_rewrite/finalizing` cleanup. This path currently rejects any plan with `blocking_paths`, so rename cycles and path swaps remain a later two-phase apply boundary.
 
 `sync-once` is the current one-shot automation boundary:
 

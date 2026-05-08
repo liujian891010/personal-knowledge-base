@@ -872,6 +872,25 @@ class DesktopCliTests(unittest.TestCase):
                 "moved_paths": {},
                 "deleted_paths": [],
             },
+            "finalized": {
+                "state": {
+                    "vault_id": "vault-001",
+                    "last_applied_revision": 8,
+                    "remote_head_revision": 8,
+                    "acked_revision": 8,
+                    "pending_ack_to_server": [8],
+                    "commit_in_progress": False,
+                    "last_manifest_summary": "sha256:head8",
+                    "last_manifest_summary_status": "valid",
+                    "local_delete_sequence": 1,
+                    "has_unresolved_conflicts": False,
+                    "schema_version": 1,
+                    "meta": None,
+                },
+                "removed_staging_paths": [
+                    "C:/vault/.noteapp/staging/file-a.staging",
+                ],
+            },
         }
 
         exit_code, payload = self._run(
