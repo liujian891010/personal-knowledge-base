@@ -497,10 +497,12 @@ class DesktopSyncServiceTests(unittest.TestCase):
                     ),
                 )
 
-            panel = service.build_sync_panel_model()
+            panel = service.build_sync_panel_model(now_ms=1770000040999)
 
             self.assertEqual(panel.level, "danger")
             self.assertEqual(panel.primary_action.action_id, "recover-pull-apply")
+            self.assertEqual(panel.primary_action.command, "recover-pull-apply")
+            self.assertEqual(panel.primary_action.argv, ["--normalized-at", "1770000040999"])
             self.assertEqual(panel.conflict_badge_count, 0)
             self.assertEqual(panel.change_badge_count, 0)
 
@@ -546,12 +548,19 @@ class DesktopSyncServiceTests(unittest.TestCase):
             live_path = root / "Notes" / "Live.md"
             live_path.write_bytes(payload + b" modified")
 
-            panel = service.build_sync_panel_model()
+            panel = service.build_sync_panel_model(now_ms=1770000040999)
 
             self.assertEqual(panel.level, "warning")
             self.assertEqual(panel.primary_action.action_id, "list-conflicts")
+            self.assertEqual(panel.primary_action.command, "list-conflicts")
             self.assertEqual(panel.conflict_badge_count, 1)
             self.assertGreaterEqual(panel.change_badge_count, 1)
+            self.assertEqual(panel.secondary_actions[-1].action_id, "resolve-conflicts-all")
+            self.assertEqual(
+                panel.secondary_actions[-1].argv,
+                ["--resolved-at", "1770000040999", "--all"],
+            )
+            self.assertTrue(panel.secondary_actions[-1].requires_confirmation)
 
     def test_build_sync_panel_model_marks_pending_changes_ready_for_submit(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -560,11 +569,13 @@ class DesktopSyncServiceTests(unittest.TestCase):
             live_path = root / "Notes" / "Live.md"
             live_path.write_bytes(payload + b" modified")
 
-            panel = service.build_sync_panel_model()
+            panel = service.build_sync_panel_model(now_ms=1770000040999)
 
             self.assertEqual(panel.level, "info")
             self.assertEqual(panel.primary_action.action_id, "submit-detected-commit")
             self.assertTrue(panel.primary_action.enabled)
+            self.assertEqual(panel.primary_action.command, "submit-detected-commit")
+            self.assertEqual(panel.primary_action.argv, ["--created-at", "1770000040999"])
             self.assertGreaterEqual(panel.change_badge_count, 1)
             self.assertEqual(panel.conflict_badge_count, 0)
 

@@ -168,7 +168,8 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("worker-state")
     subparsers.add_parser("worker-health")
     subparsers.add_parser("vault-summary")
-    subparsers.add_parser("sync-panel")
+    sync_panel_parser = subparsers.add_parser("sync-panel")
+    sync_panel_parser.add_argument("--now-ms", type=int)
     inspect_vault_parser = subparsers.add_parser("inspect-vault-package")
     inspect_vault_parser.add_argument("--input-package", required=True)
     subparsers.add_parser("list-conflicts")
@@ -338,7 +339,7 @@ def run_cli(
     elif args.command == "vault-summary":
         result = service.summarize_vault()
     elif args.command == "sync-panel":
-        result = service.build_sync_panel_model()
+        result = service.build_sync_panel_model(now_ms=args.now_ms)
     elif args.command == "export-vault":
         result = service.export_vault_package(
             Path(args.output_package),
