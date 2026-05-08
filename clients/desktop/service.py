@@ -259,6 +259,27 @@ def _list_migration_export_files(
     return export_files
 
 
+def _read_migration_package(archive: ZipFile) -> tuple[FileMapDocument, dict[str, str]]:
+    archive_entries: dict[str, str] = {}
+    for info in archive.infolist():
+        if info.is_dir():
+            continue
+        normalized = _normalize_migration_relative_path(info.filename)
+        if _is_forbidden_migration_import_path(normalized):
+            raise ValueError(f"migration package contains unsupported runtime entry: {normalized}")
+        existing = archive_entries.get(normalized)
+        if existing is not None and existing != info.filename:
+            raise ValueError(f"migration package contains duplicate entry: {normalized}")
+        archive_entries[normalized] = info.filename
+
+    missing_required = sorted(_MIGRATION_REQUIRED_FILES - set(archive_entries))
+    if missing_required:
+        raise ValueError("migration package is missing required files: " + ", ".join(missing_required))
+
+    filemap_payload = archive.read(archive_entries[f"{NOTEAPP_DIRNAME}/{FILEMAP_FILENAME}"])
+    return FileMapDocument.from_dict(json.loads(filemap_payload.decode("utf-8"))), archive_entries
+
+
 def _serialize_pull_apply_plan(plan: "DesktopPullApplyPlan") -> bytes:
     return json.dumps(asdict(plan), sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -438,6 +459,16 @@ class DesktopVaultExportResult:
 
 
 @dataclass(frozen=True)
+class DesktopVaultPackageInspection:
+    package_path: Path
+    vault_id: str
+    package_entries: list[str]
+    includes_ai_raw: bool
+    includes_conflict_orphans: bool
+    has_unresolved_conflicts: bool
+
+
+@dataclass(frozen=True)
 class DesktopVaultImportResult:
     package_path: Path
     vault_id: str
@@ -454,6 +485,28 @@ class DesktopPullApplySessionResult:
     staged: DesktopPullApplyStagingResult
     execution: DesktopPullApplyExecutionResult
     finalized: Optional[DesktopPullApplyFinalizeResult] = None
+
+
+def inspect_vault_package(package_path: Path) -> DesktopVaultPackageInspection:
+    resolved_package_path = package_path.resolve()
+    if not resolved_package_path.exists() or not resolved_package_path.is_file():
+        raise FileNotFoundError(f"migration package not found: {resolved_package_path}")
+    with ZipFile(resolved_package_path, "r") as archive:
+        package_document, archive_entries = _read_migration_package(archive)
+    package_entries = sorted(archive_entries)
+    return DesktopVaultPackageInspection(
+        package_path=resolved_package_path,
+        vault_id=package_document.vault_id,
+        package_entries=package_entries,
+        includes_ai_raw=any(path.startswith(".ai/raw/") for path in package_entries),
+        includes_conflict_orphans=any(
+            path.startswith(f"{CONFLICT_ORPHANS_DIRNAME}/") for path in package_entries
+        ),
+        has_unresolved_conflicts=(
+            _has_conflict_copy_records(package_document)
+            or any(path.startswith(f"{CONFLICT_ORPHANS_DIRNAME}/") for path in package_entries)
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -1570,33 +1623,15 @@ class DesktopSyncService:
         if self.workspace.paths.db_path.exists():
             raise ValueError("import-vault requires an empty local state database path")
 
+        inspection = inspect_vault_package(resolved_package_path)
+        if inspection.vault_id != self.vault_id:
+            raise ValueError(
+                "migration package vault_id does not match desktop config: "
+                f"expected {self.vault_id}, got {inspection.vault_id}"
+            )
+
         with ZipFile(resolved_package_path, "r") as archive:
-            archive_entries: dict[str, str] = {}
-            for info in archive.infolist():
-                if info.is_dir():
-                    continue
-                normalized = _normalize_migration_relative_path(info.filename)
-                if _is_forbidden_migration_import_path(normalized):
-                    raise ValueError(f"migration package contains unsupported runtime entry: {normalized}")
-                existing = archive_entries.get(normalized)
-                if existing is not None and existing != info.filename:
-                    raise ValueError(f"migration package contains duplicate entry: {normalized}")
-                archive_entries[normalized] = info.filename
-
-            missing_required = sorted(_MIGRATION_REQUIRED_FILES - set(archive_entries))
-            if missing_required:
-                raise ValueError(
-                    "migration package is missing required files: " + ", ".join(missing_required)
-                )
-
-            filemap_payload = archive.read(archive_entries[f"{NOTEAPP_DIRNAME}/{FILEMAP_FILENAME}"])
-            package_document = FileMapDocument.from_dict(json.loads(filemap_payload.decode("utf-8")))
-            if package_document.vault_id != self.vault_id:
-                raise ValueError(
-                    "migration package vault_id does not match desktop config: "
-                    f"expected {self.vault_id}, got {package_document.vault_id}"
-                )
-
+            package_document, archive_entries = _read_migration_package(archive)
             self.workspace.vault_root.mkdir(parents=True, exist_ok=True)
             for relative_path in sorted(archive_entries):
                 target_path = _resolve_workspace_file_path(self.workspace.vault_root, relative_path)
