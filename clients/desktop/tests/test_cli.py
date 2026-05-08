@@ -29,6 +29,7 @@ class FakeService:
         self.calls: list[tuple[str, int | None]] = []
         self.fail_recover_at_calls: set[int] = set()
         self.fail_submit_workspace_at_calls: set[int] = set()
+        self.skip_submit_detected_if_needed = False
         self.detect_local_changes_payload = {
             "vault_id": "vault-001",
             "tracked_record_count": 2,
@@ -238,6 +239,30 @@ class FakeService:
                 cleanup_normalized_at,
             )
         )
+        return {
+            "kind": "submit-detected-commit",
+            "created_at": created_at,
+            "commit_intent_id": commit_intent_id,
+            "cleanup_normalized_at": cleanup_normalized_at,
+        }
+
+    def submit_detected_changes_if_needed(
+        self,
+        *,
+        created_at: int,
+        commit_intent_id=None,
+        cleanup_normalized_at=None,
+    ):
+        self.calls.append(
+            (
+                "submit-detected-commit",
+                created_at,
+                commit_intent_id,
+                cleanup_normalized_at,
+            )
+        )
+        if self.skip_submit_detected_if_needed:
+            return None
         return {
             "kind": "submit-detected-commit",
             "created_at": created_at,
@@ -1535,6 +1560,30 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(
             self.service.calls,
             [("submit-detected-commit", 1770000040800, "intent-003", 1770000040801)],
+        )
+
+    def test_submit_detected_commit_command_reports_skipped_when_no_local_changes(self) -> None:
+        self.service.skip_submit_detected_if_needed = True
+
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "submit-detected-commit",
+            "--created-at",
+            "1770000040810",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload, {"reason": "no_local_changes", "status": "skipped"})
+        self.assertEqual(
+            self.service.calls,
+            [("submit-detected-commit", 1770000040810, None, None)],
         )
 
 

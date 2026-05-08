@@ -408,6 +408,19 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(changes.modified_file_ids, ["file-live"])
             self.assertEqual(changes.change_count, 1)
 
+    def test_submit_detected_changes_if_needed_returns_none_for_clean_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, _, _ = self._seed_workspace(Path(tmpdir))
+
+            result = service.submit_detected_changes_if_needed(
+                created_at=1770000030200,
+                commit_intent_id="intent-skip-001",
+            )
+
+            self.assertIsNone(result)
+            self.assertEqual(api_opener.calls, [])
+            self.assertEqual(blob_opener.calls, [])
+
     def test_submit_detected_changes_commits_modified_tracked_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, api_opener, blob_opener, payload, _ = self._seed_workspace(Path(tmpdir))

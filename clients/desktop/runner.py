@@ -89,7 +89,7 @@ class DesktopSyncRunner:
                     raise ValueError(
                         "submit_detected cannot be combined with encrypted_blob_by_file_id"
                     )
-                submitted = self.service.submit_detected_changes(
+                submitted = self.service.submit_detected_changes_if_needed(
                     created_at=submit_created_at,
                     commit_intent_id=commit_intent_id,
                     cleanup_normalized_at=cleanup_normalized_at,

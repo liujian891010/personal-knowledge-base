@@ -477,11 +477,16 @@ def run_cli(
             ),
         )
     elif args.command == "submit-detected-commit":
-        result = service.submit_detected_changes(
+        result = service.submit_detected_changes_if_needed(
             created_at=args.created_at,
             commit_intent_id=args.commit_intent_id,
             cleanup_normalized_at=args.cleanup_normalized_at,
         )
+        if result is None:
+            result = {
+                "status": "skipped",
+                "reason": "no_local_changes",
+            }
     else:
         raise ValueError(f"unsupported command: {args.command}")
 
