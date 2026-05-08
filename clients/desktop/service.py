@@ -159,6 +159,13 @@ def _relative_vault_path(vault_root: Path, path: Path) -> str:
     return path.relative_to(vault_root).as_posix()
 
 
+def _has_conflict_orphan_files(vault_root: Path) -> bool:
+    orphan_root = vault_root / CONFLICT_ORPHANS_DIRNAME
+    if not orphan_root.exists():
+        return False
+    return any(path.is_file() for path in orphan_root.rglob("*"))
+
+
 def _serialize_pull_apply_plan(plan: "DesktopPullApplyPlan") -> bytes:
     return json.dumps(asdict(plan), sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -842,7 +849,10 @@ class DesktopSyncService:
     ) -> DesktopWorkspaceSnapshot:
         if snapshot.state.has_unresolved_conflicts:
             return snapshot
-        if not any(record.status == "conflict_copy" for record in snapshot.document.files):
+        if (
+            not any(record.status == "conflict_copy" for record in snapshot.document.files)
+            and not _has_conflict_orphan_files(self.workspace.vault_root)
+        ):
             return snapshot
 
         updated_state = replace(snapshot.state, has_unresolved_conflicts=True)
