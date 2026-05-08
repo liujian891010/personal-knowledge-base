@@ -89,10 +89,52 @@ def _build_pull_apply_ops_hash(plan: "DesktopPullRequiredBlobPlan") -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def _resolve_pull_apply_staging_path(vault_root: Path, file_id: str) -> Path:
+def _build_pull_apply_plan_ops_hash(plan: "DesktopPullApplyPlan") -> str:
+    payload = {
+        "vault_id": plan.vault_id,
+        "revision": plan.revision,
+        "writes": [
+            {
+                "file_id": item.file_id,
+                "target_path": item.target_path,
+                "staging_path": item.staging_path,
+                "type": item.type,
+                "content_hash": item.content_hash,
+            }
+            for item in plan.writes
+        ],
+        "moves": [
+            {
+                "file_id": item.file_id,
+                "source_path": item.source_path,
+                "target_path": item.target_path,
+                "type": item.type,
+                "content_hash": item.content_hash,
+            }
+            for item in plan.moves
+        ],
+        "deletes": [
+            {
+                "file_id": item.file_id,
+                "path": item.path,
+                "reason": item.reason,
+            }
+            for item in plan.deletes
+        ],
+        "blocking_paths": plan.blocking_paths,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _build_pull_apply_staging_relative_path(file_id: str) -> str:
     if not file_id or "/" in file_id or "\\" in file_id or file_id in {".", ".."}:
         raise ValueError(f"file_id is not safe for staging: {file_id!r}")
-    return vault_root / STAGING_DIRNAME / f"{file_id}.staging"
+    return f"{STAGING_DIRNAME}/{file_id}.staging"
+
+
+def _resolve_pull_apply_staging_path(vault_root: Path, file_id: str) -> Path:
+    return vault_root / Path(_build_pull_apply_staging_relative_path(file_id))
 
 
 @dataclass(frozen=True)
@@ -150,6 +192,48 @@ class DesktopPullApplyStagingResult:
 
 
 @dataclass(frozen=True)
+class DesktopPullApplyWriteFile:
+    file_id: str
+    target_path: str
+    staging_path: str
+    type: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class DesktopPullApplyMoveFile:
+    file_id: str
+    source_path: str
+    target_path: str
+    type: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class DesktopPullApplyDeleteFile:
+    file_id: str
+    path: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class DesktopPullApplyPlan:
+    vault_id: str
+    revision: int
+    writes: list[DesktopPullApplyWriteFile]
+    moves: list[DesktopPullApplyMoveFile]
+    deletes: list[DesktopPullApplyDeleteFile]
+    blocking_paths: list[str]
+    ops_hash: str
+
+
+@dataclass(frozen=True)
+class DesktopPullApplyPlanResult:
+    pull: PullSyncSessionResult
+    plan: DesktopPullApplyPlan
+
+
+@dataclass(frozen=True)
 class DesktopSyncService:
     workspace: DesktopVaultWorkspace
     blob_crypto_provider: DesktopBlobCryptoProvider
@@ -174,12 +258,26 @@ class DesktopSyncService:
         return self.workspace.pull_reconcile(rewritten_at=rewritten_at)
 
     def pull_and_ack(self, *, rewritten_at: int) -> PullSyncSessionResult:
+        return self._pull_and_ack_with_snapshot(rewritten_at=rewritten_at)[1]
+
+    def pull_and_plan_apply(self, *, rewritten_at: int) -> DesktopPullApplyPlanResult:
+        before_snapshot, pull = self._pull_and_ack_with_snapshot(rewritten_at=rewritten_at)
+        return DesktopPullApplyPlanResult(
+            pull=pull,
+            plan=self._build_pull_apply_plan(before_snapshot, pull),
+        )
+
+    def _pull_and_ack_with_snapshot(
+        self,
+        *,
+        rewritten_at: int,
+    ) -> tuple[DesktopWorkspaceSnapshot, PullSyncSessionResult]:
         with closing(self.workspace._open_connection()) as connection:
             snapshot = self.workspace._load_snapshot_from_connection(connection)
             self._require_no_active_sync_apply_journal(connection, operation="pull")
             if snapshot.state.commit_in_progress:
                 raise ValueError("pull cannot start while commit_in_progress is true")
-            return self.workspace.runtime.session.pull_and_ack(
+            pull = self.workspace.runtime.session.pull_and_ack(
                 connection,
                 filemap_path=self.workspace.paths.filemap_path,
                 ledger_path=self.workspace.paths.ledger_path,
@@ -188,6 +286,7 @@ class DesktopSyncService:
                 local_tombstones=snapshot.tombstones,
                 rewritten_at=rewritten_at,
             )
+        return snapshot, pull
 
     def resume_commit_recovery(self, *, normalized_at: int) -> CommitRecoverySessionResult:
         return self.workspace.resume_commit_recovery(normalized_at=normalized_at)
@@ -371,6 +470,87 @@ class DesktopSyncService:
             journal=journal,
             written_staging_paths=written_staging_paths,
         )
+
+    def _build_pull_apply_plan(
+        self,
+        before_snapshot: DesktopWorkspaceSnapshot,
+        pull: PullSyncSessionResult,
+    ) -> DesktopPullApplyPlan:
+        manifest = pull.pull.manifest
+        if manifest is None:
+            raise ValueError("pull manifest is required to build pull apply plan")
+
+        before_active_by_file_id = {
+            record.file_id: record
+            for record in before_snapshot.document.files
+            if record.status == "active"
+        }
+        target_file_ids = {entry.file_id for entry in manifest.files}
+
+        writes: list[DesktopPullApplyWriteFile] = []
+        moves: list[DesktopPullApplyMoveFile] = []
+        deletes: list[DesktopPullApplyDeleteFile] = []
+
+        for entry in manifest.sorted_files():
+            before_record = before_active_by_file_id.get(entry.file_id)
+            if before_record is None or before_record.content_hash != entry.content_hash:
+                writes.append(
+                    DesktopPullApplyWriteFile(
+                        file_id=entry.file_id,
+                        target_path=entry.path,
+                        staging_path=_build_pull_apply_staging_relative_path(entry.file_id),
+                        type=entry.type,
+                        content_hash=entry.content_hash,
+                    )
+                )
+                if before_record is not None and before_record.path != entry.path:
+                    deletes.append(
+                        DesktopPullApplyDeleteFile(
+                            file_id=entry.file_id,
+                            path=before_record.path,
+                            reason="replaced_old_path",
+                        )
+                    )
+                continue
+
+            if before_record.path != entry.path:
+                moves.append(
+                    DesktopPullApplyMoveFile(
+                        file_id=entry.file_id,
+                        source_path=before_record.path,
+                        target_path=entry.path,
+                        type=entry.type,
+                        content_hash=entry.content_hash,
+                    )
+                )
+
+        for record in before_active_by_file_id.values():
+            if record.file_id in target_file_ids:
+                continue
+            deletes.append(
+                DesktopPullApplyDeleteFile(
+                    file_id=record.file_id,
+                    path=record.path,
+                    reason="deleted",
+                )
+            )
+
+        source_paths = {item.source_path for item in moves}
+        source_paths.update(item.path for item in deletes)
+        target_paths = {item.target_path for item in writes}
+        target_paths.update(item.target_path for item in moves)
+        blocking_paths = sorted(target_paths & source_paths)
+
+        plan = DesktopPullApplyPlan(
+            vault_id=manifest.vault_id,
+            revision=manifest.revision,
+            writes=writes,
+            moves=moves,
+            deletes=deletes,
+            blocking_paths=blocking_paths,
+            ops_hash="",
+        )
+        return replace(plan, ops_hash=_build_pull_apply_plan_ops_hash(plan))
 
     def detect_local_changes(self) -> DesktopWorkspaceChangeSet:
         return self.workspace.detect_local_changes()
