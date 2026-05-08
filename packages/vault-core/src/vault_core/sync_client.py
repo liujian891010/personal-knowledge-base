@@ -11,6 +11,9 @@ from .sync_apply import SubmittedRecoveryResult, recover_submitted_commit_flow
 from .sync_api import (
     AckRequestPayload,
     AckResponsePayload,
+    BlobDownloadCapability,
+    BlobDownloadInitRequestPayload,
+    BlobDownloadInitResponsePayload,
     BlobUploadCapability,
     BlobUploadInitRequestPayload,
     BlobUploadInitResponsePayload,
@@ -21,6 +24,7 @@ from .sync_api import (
     VaultHeadResponsePayload,
     build_blob_upload_init_request,
     parse_ack_response,
+    parse_blob_download_init_response,
     parse_blob_check_response,
     parse_blob_upload_init_response,
     parse_commit_conflict_response,
@@ -29,6 +33,7 @@ from .sync_api import (
     parse_resolve_commit_intent_response,
     parse_vault_head_response,
     serialize_ack_request,
+    serialize_blob_download_init_request,
     serialize_blob_check_request,
     serialize_blob_upload_init_request,
     serialize_create_commit_request,
@@ -64,6 +69,13 @@ class SyncCommitTransport(Protocol):
         ...
 
     def post_blob_upload_init(
+        self,
+        vault_id: str,
+        payload: Mapping[str, object],
+    ) -> SyncHttpJsonResponse:
+        ...
+
+    def post_blob_download_init(
         self,
         vault_id: str,
         payload: Mapping[str, object],
@@ -111,6 +123,14 @@ class SyncBlobUploader(Protocol):
         upload: BlobUploadPlanEntry,
         capability: BlobUploadCapability,
     ) -> None:
+        ...
+
+
+class SyncBlobDownloader(Protocol):
+    def download_blob(
+        self,
+        capability: BlobDownloadCapability,
+    ) -> bytes:
         ...
 
 
@@ -163,6 +183,12 @@ class PullReconcileSessionResult:
     reconcile: ReconcileResult
 
 
+@dataclass(frozen=True)
+class BlobDownloadInitExecutionResult:
+    request: BlobDownloadInitRequestPayload
+    response: BlobDownloadInitResponsePayload
+
+
 def _require_status(response: SyncHttpJsonResponse, expected_status: int, label: str) -> None:
     if response.status_code != expected_status:
         raise ValueError(
@@ -187,6 +213,17 @@ def _index_upload_capabilities(
     for capability in response.uploads:
         if capability.blob_id in capability_by_blob_id:
             raise ValueError("upload-init response contains duplicate blob_ids")
+        capability_by_blob_id[capability.blob_id] = capability
+    return capability_by_blob_id
+
+
+def _index_download_capabilities(
+    response: BlobDownloadInitResponsePayload,
+) -> dict[str, BlobDownloadCapability]:
+    capability_by_blob_id: dict[str, BlobDownloadCapability] = {}
+    for capability in response.downloads:
+        if capability.blob_id in capability_by_blob_id:
+            raise ValueError("download-init response contains duplicate blob_ids")
         capability_by_blob_id[capability.blob_id] = capability
     return capability_by_blob_id
 
@@ -254,6 +291,34 @@ def execute_blob_uploads(
         uploader.upload_blob(upload, capability_by_blob_id[upload.blob_id])
         uploaded_blob_ids.append(upload.blob_id)
     return uploaded_blob_ids
+
+
+def execute_blob_download_init(
+    transport: SyncCommitTransport,
+    vault_id: str,
+    blob_ids: Iterable[str],
+) -> BlobDownloadInitExecutionResult:
+    request = BlobDownloadInitRequestPayload(blob_ids=list(blob_ids))
+    http_response = transport.post_blob_download_init(
+        vault_id,
+        serialize_blob_download_init_request(request),
+    )
+    _require_status(http_response, 200, "blobs/download-init")
+    return BlobDownloadInitExecutionResult(
+        request=request,
+        response=parse_blob_download_init_response(http_response.payload),
+    )
+
+
+def execute_blob_downloads(
+    downloader: SyncBlobDownloader,
+    download_init_response: BlobDownloadInitResponsePayload,
+) -> dict[str, bytes]:
+    capability_by_blob_id = _index_download_capabilities(download_init_response)
+    downloaded_blobs: dict[str, bytes] = {}
+    for blob_id in sorted(capability_by_blob_id):
+        downloaded_blobs[blob_id] = downloader.download_blob(capability_by_blob_id[blob_id])
+    return downloaded_blobs
 
 
 def execute_resolve_commit_intent(
