@@ -70,6 +70,10 @@ def _write_bytes_atomic(path: Path, payload: bytes) -> None:
         temp_path.unlink(missing_ok=True)
 
 
+def _compute_content_hash(payload: bytes) -> str:
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
 def _build_pull_apply_ops_hash(plan: "DesktopPullRequiredBlobPlan") -> str:
     payload = {
         "vault_id": plan.vault_id,
@@ -234,6 +238,22 @@ class DesktopPullApplyPlanResult:
 
 
 @dataclass(frozen=True)
+class DesktopPullApplyExecutionResult:
+    journal: Optional[SyncApplyJournalRecord]
+    written_paths: dict[str, Path]
+    moved_paths: dict[str, Path]
+    deleted_paths: list[Path]
+
+
+@dataclass(frozen=True)
+class DesktopPullApplySessionResult:
+    pull: PullSyncSessionResult
+    plan: DesktopPullApplyPlan
+    staged: DesktopPullApplyStagingResult
+    execution: DesktopPullApplyExecutionResult
+
+
+@dataclass(frozen=True)
 class DesktopSyncService:
     workspace: DesktopVaultWorkspace
     blob_crypto_provider: DesktopBlobCryptoProvider
@@ -265,6 +285,32 @@ class DesktopSyncService:
         return DesktopPullApplyPlanResult(
             pull=pull,
             plan=self._build_pull_apply_plan(before_snapshot, pull),
+        )
+
+    def pull_and_apply_nonblocking(self, *, rewritten_at: int) -> DesktopPullApplySessionResult:
+        before_snapshot, pull = self._pull_and_ack_with_snapshot(rewritten_at=rewritten_at)
+        plan = self._build_pull_apply_plan(before_snapshot, pull)
+        if plan.blocking_paths:
+            raise ValueError(
+                "pull apply requires a later two-phase materialization boundary for blocking paths: "
+                + ", ".join(plan.blocking_paths)
+            )
+        resolved = self.download_and_decrypt_pull_required_blobs(pull)
+        staged = self.stage_pull_required_plaintext_for_apply(
+            resolved,
+            started_at=rewritten_at,
+            apply_plan=plan,
+        )
+        execution = self.apply_staged_pull_plan(
+            plan,
+            staged,
+            materialized_at=rewritten_at,
+        )
+        return DesktopPullApplySessionResult(
+            pull=pull,
+            plan=plan,
+            staged=staged,
+            execution=execution,
         )
 
     def _pull_and_ack_with_snapshot(
@@ -411,6 +457,7 @@ class DesktopSyncService:
         resolved: DesktopPullRequiredBlobResult,
         *,
         started_at: int,
+        apply_plan: Optional[DesktopPullApplyPlan] = None,
     ) -> DesktopPullApplyStagingResult:
         manifest = resolved.pull.pull.manifest
         if manifest is None:
@@ -419,6 +466,11 @@ class DesktopSyncService:
             raise ValueError("pull manifest vault_id does not match required blob plan")
         if manifest.revision != resolved.plan.revision:
             raise ValueError("pull manifest revision does not match required blob plan")
+        if apply_plan is not None:
+            if apply_plan.vault_id != resolved.plan.vault_id:
+                raise ValueError("pull apply plan vault_id does not match required blob plan")
+            if apply_plan.revision != resolved.plan.revision:
+                raise ValueError("pull apply plan revision does not match required blob plan")
 
         staged_files: list[tuple[str, Path, bytes]] = []
         for item in resolved.plan.files:
@@ -432,7 +484,10 @@ class DesktopSyncService:
                     plaintext,
                 )
             )
-        if not staged_files:
+        should_create_journal = bool(staged_files)
+        if apply_plan is not None and (apply_plan.writes or apply_plan.moves or apply_plan.deletes):
+            should_create_journal = True
+        if not should_create_journal:
             return DesktopPullApplyStagingResult(
                 journal=None,
                 written_staging_paths={},
@@ -444,7 +499,7 @@ class DesktopSyncService:
             target_revision=resolved.plan.revision,
             target_manifest_hash=manifest.summary_hash,
             phase="preparing",
-            ops_hash=_build_pull_apply_ops_hash(resolved.plan),
+            ops_hash=apply_plan.ops_hash if apply_plan is not None else _build_pull_apply_ops_hash(resolved.plan),
             created_at=started_at,
             updated_at=started_at,
         )
@@ -469,6 +524,98 @@ class DesktopSyncService:
         return DesktopPullApplyStagingResult(
             journal=journal,
             written_staging_paths=written_staging_paths,
+        )
+
+    def apply_staged_pull_plan(
+        self,
+        plan: DesktopPullApplyPlan,
+        staged: DesktopPullApplyStagingResult,
+        *,
+        materialized_at: int,
+    ) -> DesktopPullApplyExecutionResult:
+        if plan.blocking_paths:
+            raise ValueError(
+                "pull apply requires a later two-phase materialization boundary for blocking paths: "
+                + ", ".join(plan.blocking_paths)
+            )
+
+        journal = staged.journal
+        if journal is None:
+            return DesktopPullApplyExecutionResult(
+                journal=None,
+                written_paths={},
+                moved_paths={},
+                deleted_paths=[],
+            )
+
+        written_paths: dict[str, Path] = {}
+        moved_paths: dict[str, Path] = {}
+        deleted_paths: list[Path] = []
+
+        with closing(self.workspace._open_connection()) as connection:
+            current_journal = load_sync_apply_journal(connection, self.vault_id)
+            if current_journal is None:
+                raise KeyError(f"sync_apply_journal not found: {self.vault_id}")
+            if current_journal.target_revision != plan.revision:
+                raise ValueError("sync_apply_journal target_revision does not match pull apply plan")
+            if current_journal.vault_id != plan.vault_id:
+                raise ValueError("sync_apply_journal vault_id does not match pull apply plan")
+
+            materializing_journal = replace(
+                current_journal,
+                phase="materializing",
+                ops_hash=plan.ops_hash,
+                updated_at=materialized_at,
+            )
+            upsert_sync_apply_journal(connection, materializing_journal)
+
+            for item in plan.writes:
+                staging_path = _resolve_workspace_file_path(self.workspace.vault_root, item.staging_path)
+                if not staging_path.exists() or not staging_path.is_file():
+                    raise FileNotFoundError(f"staged pull payload not found: {item.staging_path}")
+                payload = staging_path.read_bytes()
+                actual_hash = _compute_content_hash(payload)
+                if actual_hash != item.content_hash:
+                    raise ValueError(
+                        f"staged pull payload hash mismatch for file_id {item.file_id}: "
+                        f"expected {item.content_hash}, got {actual_hash}"
+                    )
+                output_path = _resolve_workspace_file_path(self.workspace.vault_root, item.target_path)
+                _write_bytes_atomic(output_path, payload)
+                written_paths[item.file_id] = output_path
+
+            for item in plan.moves:
+                source_path = _resolve_workspace_file_path(self.workspace.vault_root, item.source_path)
+                target_path = _resolve_workspace_file_path(self.workspace.vault_root, item.target_path)
+                if source_path.exists():
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    source_path.replace(target_path)
+                    moved_paths[item.file_id] = target_path
+                    continue
+                if target_path.exists():
+                    payload = target_path.read_bytes()
+                    actual_hash = _compute_content_hash(payload)
+                    if actual_hash != item.content_hash:
+                        raise ValueError(
+                            f"materialized move target hash mismatch for file_id {item.file_id}: "
+                            f"expected {item.content_hash}, got {actual_hash}"
+                        )
+                    moved_paths[item.file_id] = target_path
+                    continue
+                raise FileNotFoundError(f"pull apply source path not found: {item.source_path}")
+
+            for item in plan.deletes:
+                delete_path = _resolve_workspace_file_path(self.workspace.vault_root, item.path)
+                if not delete_path.exists():
+                    continue
+                delete_path.unlink(missing_ok=True)
+                deleted_paths.append(delete_path)
+
+        return DesktopPullApplyExecutionResult(
+            journal=materializing_journal,
+            written_paths=written_paths,
+            moved_paths=moved_paths,
+            deleted_paths=deleted_paths,
         )
 
     def _build_pull_apply_plan(

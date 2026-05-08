@@ -30,6 +30,8 @@ Add `--decrypt-required-blobs` on top of that to route the downloaded encrypted 
 
 Add `--stage-required-blobs` on top of `--decrypt-required-blobs` when the decrypted payload should be written into the vault's internal `.noteapp/staging/<file_id>.staging` paths and paired with a persisted `sync_apply_journal` boundary for later apply work.
 
+Add `--apply-nonblocking` to execute the first real live-vault apply boundary in one step: pull, download/decrypt required blobs, stage them, and materialize non-blocking `write/move/delete` actions. This path currently rejects any plan with `blocking_paths`, so rename cycles and path swaps remain a later two-phase apply boundary.
+
 `sync-once` is the current one-shot automation boundary:
 
 ```powershell
@@ -120,7 +122,7 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
 
 `sync-cycle-loop` accepts the same `--submit-detected` mode for automatic local change submit on each iteration.
 
-Current `pull` / `sync-*` JSON results also expose `required_blob_ids` under the applied reconcile result. The desktop service can now follow that through five explicit boundaries: returning a concrete apply plan, downloading the required encrypted blobs, downloading plus decrypting them into a `file_id -> plaintext` result, materializing those plaintext files under a caller-provided output root, and staging them under `.noteapp/staging/` together with a persisted `sync_apply_journal`. Writing those plaintext files back into the live vault is still a later boundary tied to full `sync_apply_journal` materialization.
+Current `pull` / `sync-*` JSON results also expose `required_blob_ids` under the applied reconcile result. The desktop service can now follow that through six explicit boundaries: returning a concrete apply plan, downloading the required encrypted blobs, downloading plus decrypting them into a `file_id -> plaintext` result, materializing those plaintext files under a caller-provided output root, staging them under `.noteapp/staging/` together with a persisted `sync_apply_journal`, and executing the non-blocking subset of the apply plan against the live vault. Full two-phase materialization for `blocking_paths`, plus `filemap_rewrite` / `finalizing`, is still a later boundary.
 
 `sync-worker` is a thinner bounded worker wrapper around `sync-cycle-loop`: it auto-plans timestamps, defaults to `continue_on_error=true`, and derives `step_ms` from `interval_seconds` when you do not provide one.
 
