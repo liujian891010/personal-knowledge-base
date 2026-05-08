@@ -485,11 +485,27 @@ class DesktopSyncService:
             try:
                 plan = self._load_pull_apply_plan_file()
             except (KeyError, TypeError, UnicodeDecodeError, ValueError):
+                if (
+                    journal.phase == "materializing"
+                    and self._materializing_workspace_matches_document(materialized_snapshot)
+                ):
+                    return self._finalize_materializing_pull_apply_recovery(
+                        journal,
+                        normalized_at=normalized_at,
+                    )
                 return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
             if plan is not None:
                 try:
                     self._validate_recovery_pull_apply_plan(plan, journal=journal)
                 except ValueError:
+                    if (
+                        journal.phase == "materializing"
+                        and self._materializing_workspace_matches_document(materialized_snapshot)
+                    ):
+                        return self._finalize_materializing_pull_apply_recovery(
+                            journal,
+                            normalized_at=normalized_at,
+                        )
                     return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
                 staged = DesktopPullApplyStagingResult(journal=journal, written_staging_paths={})
                 try:
@@ -505,6 +521,14 @@ class DesktopSyncService:
                         finalized_at=normalized_at,
                     )
                 except (FileNotFoundError, KeyError, ValueError):
+                    if (
+                        journal.phase == "materializing"
+                        and self._materializing_workspace_matches_document(materialized_snapshot)
+                    ):
+                        return self._finalize_materializing_pull_apply_recovery(
+                            journal,
+                            normalized_at=normalized_at,
+                        )
                     return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
                 return DesktopPullApplyRecoveryResult(
                     mode="replayed",
@@ -538,23 +562,11 @@ class DesktopSyncService:
         if journal.phase == "preparing":
             return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
         if journal.phase == "materializing":
-            if materialized_snapshot is None or not self._workspace_matches_document(materialized_snapshot.document):
+            if not self._materializing_workspace_matches_document(materialized_snapshot):
                 return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
-            with closing(self.workspace._open_connection()) as connection:
-                upsert_sync_apply_journal(
-                    connection,
-                    replace(journal, phase="finalizing", updated_at=normalized_at),
-                )
-                state = recover_sync_apply_finalizing_state(connection, self.vault_id)
-            removed = self._cleanup_pull_apply_staging_artifacts()
-            return DesktopPullApplyRecoveryResult(
-                mode="finalized",
-                requires_full_pull=state.last_manifest_summary_status != "valid",
-                journal_phase="materializing",
-                state=state,
-                removed_staging_paths=removed,
-                isolated_staging_paths=[],
-                removed_plan_path=self._cleanup_pull_apply_plan_file(),
+            return self._finalize_materializing_pull_apply_recovery(
+                journal,
+                normalized_at=normalized_at,
             )
         if journal.phase == "staging":
             return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
@@ -1583,6 +1595,35 @@ class DesktopSyncService:
             raise ValueError("recovery pull apply plan revision does not match sync_apply_journal")
         if plan.ops_hash != journal.ops_hash:
             raise ValueError("recovery pull apply plan ops_hash does not match sync_apply_journal")
+
+    def _materializing_workspace_matches_document(
+        self,
+        snapshot: Optional[DesktopWorkspaceSnapshot],
+    ) -> bool:
+        return snapshot is not None and self._workspace_matches_document(snapshot.document)
+
+    def _finalize_materializing_pull_apply_recovery(
+        self,
+        journal: SyncApplyJournalRecord,
+        *,
+        normalized_at: int,
+    ) -> DesktopPullApplyRecoveryResult:
+        with closing(self.workspace._open_connection()) as connection:
+            upsert_sync_apply_journal(
+                connection,
+                replace(journal, phase="finalizing", updated_at=normalized_at),
+            )
+            state = recover_sync_apply_finalizing_state(connection, self.vault_id)
+        removed = self._cleanup_pull_apply_staging_artifacts()
+        return DesktopPullApplyRecoveryResult(
+            mode="finalized",
+            requires_full_pull=state.last_manifest_summary_status != "valid",
+            journal_phase="materializing",
+            state=state,
+            removed_staging_paths=removed,
+            isolated_staging_paths=[],
+            removed_plan_path=self._cleanup_pull_apply_plan_file(),
+        )
 
     def _degrade_pull_apply_recovery(
         self,
