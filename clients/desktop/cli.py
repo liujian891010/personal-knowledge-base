@@ -164,6 +164,7 @@ def create_parser() -> argparse.ArgumentParser:
     pull_parser.add_argument("--decrypt-required-blobs", action="store_true")
     pull_parser.add_argument("--output-dir")
     pull_parser.add_argument("--plaintext-output-dir")
+    pull_parser.add_argument("--stage-required-blobs", action="store_true")
 
     recover_parser = subparsers.add_parser("recover")
     recover_parser.add_argument("--normalized-at", type=int, required=True)
@@ -289,7 +290,6 @@ def run_cli(
     elif args.command == "worker-health":
         result = service.load_worker_health()
     elif args.command == "pull":
-        result = service.pull_and_ack(rewritten_at=args.rewritten_at)
         if args.decrypt_required_blobs and not args.download_required_blobs:
             raise ValueError("pull --decrypt-required-blobs requires --download-required-blobs")
         if args.output_dir and args.decrypt_required_blobs:
@@ -298,10 +298,31 @@ def run_cli(
             raise ValueError("pull --output-dir requires --download-required-blobs")
         if args.plaintext_output_dir and not args.decrypt_required_blobs:
             raise ValueError("pull --plaintext-output-dir requires --decrypt-required-blobs")
+        if args.stage_required_blobs and not args.decrypt_required_blobs:
+            raise ValueError("pull --stage-required-blobs requires --decrypt-required-blobs")
+        if args.plaintext_output_dir and args.stage_required_blobs:
+            raise ValueError("pull --plaintext-output-dir cannot be combined with --stage-required-blobs")
+        result = service.pull_and_ack(rewritten_at=args.rewritten_at)
         if args.download_required_blobs:
             if args.decrypt_required_blobs:
                 decrypted_result = service.download_and_decrypt_pull_required_blobs(result)
-                if args.plaintext_output_dir:
+                if args.stage_required_blobs:
+                    result = {
+                        "pull": _to_jsonable(decrypted_result.pull),
+                        "plan": _to_jsonable(decrypted_result.plan),
+                        "download": (
+                            None
+                            if decrypted_result.download is None
+                            else _to_jsonable(decrypted_result.download)
+                        ),
+                        "apply_staging": _to_jsonable(
+                            service.stage_pull_required_plaintext_for_apply(
+                                decrypted_result,
+                                started_at=args.rewritten_at,
+                            )
+                        ),
+                    }
+                elif args.plaintext_output_dir:
                     result = {
                         "pull": _to_jsonable(decrypted_result.pull),
                         "plan": _to_jsonable(decrypted_result.plan),

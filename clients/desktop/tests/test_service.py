@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.request import Request
 
 from clients.desktop import (
+    DesktopPullApplyStagingResult,
     DesktopPullRequiredBlobFile,
     DesktopPullRequiredBlobPlan,
     DesktopPullRequiredBlobResult,
@@ -38,11 +39,14 @@ from vault_core import (
     PullReconcileSessionResult,
     PullSyncSessionResult,
     ReconcileResult,
+    SyncApplyJournalRecord,
     VaultHeadResponsePayload,
     VaultStateRecord,
     load_commit_intent_journal,
+    load_sync_apply_journal,
     load_vault_state,
     open_database,
+    upsert_sync_apply_journal,
     upsert_vault_state,
     write_filemap_atomic,
 )
@@ -724,6 +728,120 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 (Path(tmpdir) / "materialized" / "Notes" / "A.md").read_bytes(),
                 b"# materialized\n",
             )
+
+    def test_stage_pull_required_plaintext_for_apply_writes_staging_and_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            pull = self._build_pull_result(
+                required_blob_ids=["blob-a"],
+                manifest_files=[
+                    ManifestFileEntry(
+                        file_id="file-a",
+                        path="Notes/A.md",
+                        type="note",
+                        blob_id="blob-a",
+                        content_hash="sha256:abc",
+                        size=4,
+                        mtime=1770000040000,
+                    )
+                ],
+            )
+            resolved = DesktopPullRequiredBlobResult(
+                pull=pull,
+                plan=DesktopPullRequiredBlobPlan(
+                    vault_id="vault-001",
+                    revision=8,
+                    blob_ids=["blob-a"],
+                    files=[
+                        DesktopPullRequiredBlobFile(
+                            file_id="file-a",
+                            path="Notes/A.md",
+                            type="note",
+                            blob_id="blob-a",
+                            content_hash="sha256:abc",
+                        )
+                    ],
+                ),
+                download=None,
+                plaintext_by_file_id={"file-a": b"# A\n"},
+            )
+
+            staged = service.stage_pull_required_plaintext_for_apply(
+                resolved,
+                started_at=1770000040100,
+            )
+
+            self.assertIsInstance(staged, DesktopPullApplyStagingResult)
+            self.assertEqual(staged.journal.vault_id, "vault-001")
+            self.assertEqual(staged.journal.target_revision, 8)
+            self.assertEqual(staged.journal.target_manifest_hash, "sha256:head8")
+            self.assertEqual(staged.journal.phase, "staging")
+            self.assertTrue(staged.journal.ops_hash.startswith("sha256:"))
+            self.assertEqual(
+                staged.written_staging_paths,
+                {"file-a": Path(tmpdir) / ".noteapp" / "staging" / "file-a.staging"},
+            )
+            self.assertEqual(
+                (Path(tmpdir) / ".noteapp" / "staging" / "file-a.staging").read_bytes(),
+                b"# A\n",
+            )
+
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertEqual(load_sync_apply_journal(connection, "vault-001"), staged.journal)
+
+    def test_stage_pull_required_plaintext_for_apply_skips_empty_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            pull = self._build_pull_result(required_blob_ids=[], manifest_files=[])
+            resolved = DesktopPullRequiredBlobResult(
+                pull=pull,
+                plan=DesktopPullRequiredBlobPlan(
+                    vault_id="vault-001",
+                    revision=8,
+                    blob_ids=[],
+                    files=[],
+                ),
+                download=None,
+                plaintext_by_file_id={},
+            )
+
+            staged = service.stage_pull_required_plaintext_for_apply(
+                resolved,
+                started_at=1770000040100,
+            )
+
+            self.assertEqual(staged, DesktopPullApplyStagingResult(journal=None, written_staging_paths={}))
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
+
+    def test_prepare_commit_rejects_active_sync_apply_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, payload, encrypted_payload = self._seed_workspace(Path(tmpdir))
+
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(
+                    connection,
+                    SyncApplyJournalRecord(
+                        vault_id="vault-001",
+                        journal_id="journal-1",
+                        target_revision=8,
+                        target_manifest_hash="sha256:head8",
+                        phase="staging",
+                        ops_hash="sha256:ops8",
+                        created_at=1770000040100,
+                        updated_at=1770000040100,
+                    ),
+                )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "commit is blocked while sync_apply_journal is active: journal-1 \\(staging\\)",
+            ):
+                service.prepare_commit(
+                    created_at=1770000040200,
+                    content_by_file_id={"file-live": payload},
+                    encrypted_blob_by_file_id={"file-live": encrypted_payload},
+                )
 
     def test_load_worker_state_and_health_routes_workspace_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

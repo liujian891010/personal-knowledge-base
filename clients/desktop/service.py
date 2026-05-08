@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from contextlib import closing, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -18,17 +19,22 @@ from vault_core import (
     ContentSnapshotMaterializationResult,
     PullReconcileSessionResult,
     PullSyncSessionResult,
+    SyncApplyJournalRecord,
     TombstoneRecord,
     VaultStateRecord,
     build_commit_snapshot_table,
+    clear_sync_apply_journal,
     cleanup_commit_staging_artifacts,
     cleanup_failed_commit_submission,
     finalize_commit_submission_cleanup,
+    load_sync_apply_journal,
     load_tombstone_ledger,
     materialize_blob_staging_plan,
     materialize_content_snapshot_plan,
     prepare_commit_submission,
+    upsert_sync_apply_journal,
 )
+from vault_core.constants import STAGING_DIRNAME
 from vault_core.sync_http import UrlopenLike
 
 from .change_detection import (
@@ -62,6 +68,31 @@ def _write_bytes_atomic(path: Path, payload: bytes) -> None:
         temp_path.replace(path)
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+def _build_pull_apply_ops_hash(plan: "DesktopPullRequiredBlobPlan") -> str:
+    payload = {
+        "vault_id": plan.vault_id,
+        "revision": plan.revision,
+        "files": [
+            {
+                "file_id": item.file_id,
+                "path": item.path,
+                "type": item.type,
+                "blob_id": item.blob_id,
+                "content_hash": item.content_hash,
+            }
+            for item in plan.files
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _resolve_pull_apply_staging_path(vault_root: Path, file_id: str) -> Path:
+    if not file_id or "/" in file_id or "\\" in file_id or file_id in {".", ".."}:
+        raise ValueError(f"file_id is not safe for staging: {file_id!r}")
+    return vault_root / STAGING_DIRNAME / f"{file_id}.staging"
 
 
 @dataclass(frozen=True)
@@ -113,6 +144,12 @@ class DesktopPullRequiredBlobResult:
 
 
 @dataclass(frozen=True)
+class DesktopPullApplyStagingResult:
+    journal: Optional[SyncApplyJournalRecord]
+    written_staging_paths: dict[str, Path]
+
+
+@dataclass(frozen=True)
 class DesktopSyncService:
     workspace: DesktopVaultWorkspace
     blob_crypto_provider: DesktopBlobCryptoProvider
@@ -137,7 +174,20 @@ class DesktopSyncService:
         return self.workspace.pull_reconcile(rewritten_at=rewritten_at)
 
     def pull_and_ack(self, *, rewritten_at: int) -> PullSyncSessionResult:
-        return self.workspace.pull_and_ack(rewritten_at=rewritten_at)
+        with closing(self.workspace._open_connection()) as connection:
+            snapshot = self.workspace._load_snapshot_from_connection(connection)
+            self._require_no_active_sync_apply_journal(connection, operation="pull")
+            if snapshot.state.commit_in_progress:
+                raise ValueError("pull cannot start while commit_in_progress is true")
+            return self.workspace.runtime.session.pull_and_ack(
+                connection,
+                filemap_path=self.workspace.paths.filemap_path,
+                ledger_path=self.workspace.paths.ledger_path,
+                current_document=snapshot.document,
+                current_state=snapshot.state,
+                local_tombstones=snapshot.tombstones,
+                rewritten_at=rewritten_at,
+            )
 
     def resume_commit_recovery(self, *, normalized_at: int) -> CommitRecoverySessionResult:
         return self.workspace.resume_commit_recovery(normalized_at=normalized_at)
@@ -256,6 +306,71 @@ class DesktopSyncService:
             _write_bytes_atomic(output_path, resolved.plaintext_by_file_id[item.file_id])
             written_paths[item.file_id] = output_path
         return written_paths
+
+    def stage_pull_required_plaintext_for_apply(
+        self,
+        resolved: DesktopPullRequiredBlobResult,
+        *,
+        started_at: int,
+    ) -> DesktopPullApplyStagingResult:
+        manifest = resolved.pull.pull.manifest
+        if manifest is None:
+            raise ValueError("pull manifest is required to stage required plaintext")
+        if manifest.vault_id != resolved.plan.vault_id:
+            raise ValueError("pull manifest vault_id does not match required blob plan")
+        if manifest.revision != resolved.plan.revision:
+            raise ValueError("pull manifest revision does not match required blob plan")
+
+        staged_files: list[tuple[str, Path, bytes]] = []
+        for item in resolved.plan.files:
+            plaintext = resolved.plaintext_by_file_id.get(item.file_id)
+            if plaintext is None:
+                raise KeyError(f"plaintext payload not found for file_id: {item.file_id}")
+            staged_files.append(
+                (
+                    item.file_id,
+                    _resolve_pull_apply_staging_path(self.workspace.vault_root, item.file_id),
+                    plaintext,
+                )
+            )
+        if not staged_files:
+            return DesktopPullApplyStagingResult(
+                journal=None,
+                written_staging_paths={},
+            )
+
+        journal = SyncApplyJournalRecord(
+            vault_id=resolved.plan.vault_id,
+            journal_id=str(uuid4()),
+            target_revision=resolved.plan.revision,
+            target_manifest_hash=manifest.summary_hash,
+            phase="preparing",
+            ops_hash=_build_pull_apply_ops_hash(resolved.plan),
+            created_at=started_at,
+            updated_at=started_at,
+        )
+        written_staging_paths: dict[str, Path] = {}
+
+        with closing(self.workspace._open_connection()) as connection:
+            self._require_no_active_sync_apply_journal(connection, operation="stage pull apply")
+            upsert_sync_apply_journal(connection, journal)
+            try:
+                for file_id, staging_path, plaintext in staged_files:
+                    _write_bytes_atomic(staging_path, plaintext)
+                    written_staging_paths[file_id] = staging_path
+                journal = replace(journal, phase="staging", updated_at=started_at)
+                upsert_sync_apply_journal(connection, journal)
+            except Exception:
+                for staging_path in written_staging_paths.values():
+                    staging_path.unlink(missing_ok=True)
+                with suppress(Exception):
+                    clear_sync_apply_journal(connection, resolved.plan.vault_id)
+                raise
+
+        return DesktopPullApplyStagingResult(
+            journal=journal,
+            written_staging_paths=written_staging_paths,
+        )
 
     def detect_local_changes(self) -> DesktopWorkspaceChangeSet:
         return self.workspace.detect_local_changes()
@@ -454,6 +569,7 @@ class DesktopSyncService:
         )
 
         with closing(self.workspace._open_connection()) as connection:
+            self._require_no_active_sync_apply_journal(connection, operation="commit")
             submission = prepare_commit_submission(
                 connection,
                 state=snapshot.state,
@@ -498,6 +614,15 @@ class DesktopSyncService:
             snapshot_materialization=snapshot_materialization,
             blob_staging_materialization=blob_staging_materialization,
             snapshot_table=snapshot_table,
+        )
+
+    def _require_no_active_sync_apply_journal(self, connection, *, operation: str) -> None:
+        journal = load_sync_apply_journal(connection, self.vault_id)
+        if journal is None:
+            return
+        raise ValueError(
+            f"{operation} is blocked while sync_apply_journal is active: "
+            f"{journal.journal_id} ({journal.phase})"
         )
 
     def _submit_prepared_commit(
