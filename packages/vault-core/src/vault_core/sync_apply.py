@@ -34,6 +34,7 @@ from .sync_commit import (
 class AppliedManifestResult:
     convergence: ManifestConvergenceResult
     state: VaultStateRecord
+    required_blob_ids: List[str]
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,30 @@ def _validate_submitted_confirmation_manifest(
         raise ValueError("matched_manifest revision does not match submitted confirmation target")
 
 
+def plan_required_blob_ids(
+    current_document: FileMapDocument,
+    manifest: ManifestRecord,
+) -> List[str]:
+    current_active_by_file_id = {
+        record.file_id: record
+        for record in current_document.files
+        if record.status == "active"
+    }
+    required_blob_ids: List[str] = []
+    seen_blob_ids: set[str] = set()
+
+    for entry in manifest.sorted_files():
+        current = current_active_by_file_id.get(entry.file_id)
+        if current is not None and current.content_hash == entry.content_hash:
+            continue
+        if entry.blob_id in seen_blob_ids:
+            continue
+        seen_blob_ids.add(entry.blob_id)
+        required_blob_ids.append(entry.blob_id)
+
+    return required_blob_ids
+
+
 def apply_pulled_manifest(
     connection: sqlite3.Connection,
     *,
@@ -126,6 +151,7 @@ def apply_pulled_manifest(
     if state is None:
         raise KeyError(f"vault_state not found: {manifest.vault_id}")
 
+    required_blob_ids = plan_required_blob_ids(current_document, manifest)
     convergence = persist_manifest_convergence(
         filemap_path,
         ledger_path,
@@ -143,6 +169,7 @@ def apply_pulled_manifest(
     return AppliedManifestResult(
         convergence=convergence,
         state=updated_state,
+        required_blob_ids=required_blob_ids,
     )
 
 

@@ -1187,6 +1187,7 @@ class SyncClientTests(unittest.TestCase):
                 self.assertIsNotNone(result.manifest)
                 self.assertEqual(result.reconcile.state.last_applied_revision, 8)
                 self.assertEqual(result.reconcile.state.pending_ack_to_server, [8])
+                self.assertEqual(result.reconcile.applied.required_blob_ids, [])
                 self.assertEqual([call[0] for call in transport.calls], ["get_vault_head", "get_manifest"])
 
     def test_execute_pull_reconcile_session_skips_manifest_when_head_not_advanced(self) -> None:

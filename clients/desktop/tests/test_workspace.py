@@ -36,8 +36,28 @@ class FakeHttpResponse:
 
 
 class RoutingUrlopen:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        head_revision: int = 8,
+        manifest_payload: object | None = None,
+    ) -> None:
         self.calls: list[tuple[str, str, object | None, float]] = []
+        self.head_revision = head_revision
+        self.manifest_payload = (
+            {
+                "vault_id": "vault-001",
+                "revision": head_revision,
+                "base_revision": max(head_revision - 1, 0),
+                "created_by_device": "desktop-remote",
+                "created_at": 1770000025000,
+                "summary_hash": f"sha256:head{head_revision}",
+                "files": [],
+                "tombstones": [],
+            }
+            if manifest_payload is None
+            else manifest_payload
+        )
 
     def __call__(self, request: Request, timeout: float) -> FakeHttpResponse:
         body = None if request.data is None else json.loads(request.data.decode("utf-8"))
@@ -47,32 +67,23 @@ class RoutingUrlopen:
             return self._json_response(
                 {
                     "vault_id": "vault-001",
-                    "head_revision": 8,
-                    "manifest_summary": "sha256:head8",
+                    "head_revision": self.head_revision,
+                    "manifest_summary": f"sha256:head{self.head_revision}",
                 }
             )
-        if request.get_method() == "GET" and request.full_url.endswith("/vaults/vault-001/manifests/8"):
-            return self._json_response(
-                {
-                    "vault_id": "vault-001",
-                    "revision": 8,
-                    "base_revision": 0,
-                    "created_by_device": "desktop-remote",
-                    "created_at": 1770000025000,
-                    "summary_hash": "sha256:head8",
-                    "files": [],
-                    "tombstones": [],
-                }
-            )
+        if request.get_method() == "GET" and request.full_url.endswith(
+            f"/vaults/vault-001/manifests/{self.head_revision}"
+        ):
+            return self._json_response(self.manifest_payload)
         if request.get_method() == "POST" and request.full_url.endswith("/vaults/vault-001/ack"):
-            return self._json_response({"max_acked_revision": 8})
+            return self._json_response({"max_acked_revision": self.head_revision})
         if request.get_method() == "POST" and request.full_url.endswith("/vaults/vault-001/commits/resolve-intent"):
             return self._json_response(
                 {
                     "status": "found",
-                    "matched_revision": 8,
-                    "observed_head_revision": 8,
-                    "head_manifest_summary": "sha256:head8",
+                    "matched_revision": self.head_revision,
+                    "observed_head_revision": self.head_revision,
+                    "head_manifest_summary": f"sha256:head{self.head_revision}",
                 }
             )
         raise AssertionError(f"unexpected request: {request.get_method()} {request.full_url}")
@@ -142,6 +153,68 @@ class DesktopVaultWorkspaceTests(unittest.TestCase):
                     ("POST", "https://sync.example.com/vaults/vault-001/ack"),
                 ],
             )
+
+    def test_pull_and_ack_reports_required_blob_ids_for_changed_remote_files(self) -> None:
+        opener = RoutingUrlopen(
+            manifest_payload={
+                "vault_id": "vault-001",
+                "revision": 8,
+                "base_revision": 7,
+                "created_by_device": "desktop-remote",
+                "created_at": 1770000025000,
+                "summary_hash": "sha256:head8",
+                "files": [
+                    {
+                        "file_id": "file-live",
+                        "path": "Notes/Live.md",
+                        "type": "note",
+                        "content_hash": "sha256:new",
+                        "blob_id": "blob-live-new",
+                        "size": 12,
+                        "mtime": 1770000024900,
+                    }
+                ],
+                "tombstones": [],
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            workspace = build_desktop_vault_workspace(
+                DesktopSyncHttpConfig(
+                    base_url="https://sync.example.com",
+                    vault_id="vault-001",
+                    device_id="desktop-shanghai",
+                ),
+                root,
+                api_opener=opener,
+            )
+            workspace.ensure_initialized(now_ms=1770000022000)
+
+            from vault_core import FileMapDocument, FileRecord, write_filemap_atomic
+
+            write_filemap_atomic(
+                workspace.paths.filemap_path,
+                FileMapDocument(
+                    vault_id="vault-001",
+                    updated_at=1770000022100,
+                    files=[
+                        FileRecord(
+                            file_id="file-live",
+                            path="Notes/Live.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000022090,
+                            content_hash="sha256:old",
+                            last_known_revision=7,
+                        )
+                    ],
+                ),
+            )
+
+            result = workspace.pull_and_ack(rewritten_at=1770000023000)
+
+            self.assertEqual(result.pull.reconcile.applied.required_blob_ids, ["blob-live-new"])
 
     def test_resume_commit_recovery_runs_remote_confirmation_against_workspace_state(self) -> None:
         opener = RoutingUrlopen()
