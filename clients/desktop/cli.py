@@ -21,6 +21,7 @@ from .scheduler import (
 from .service import DesktopSyncService, build_desktop_sync_service
 from .sync_runtime import DesktopSyncHttpConfig
 from .timing import resolve_desktop_sync_time_plan
+from .worker import DesktopSyncWorker, DesktopSyncWorkerConfig
 
 ServiceBuilder = Callable[[DesktopSyncHttpConfig, Path], DesktopSyncService]
 NowMsProvider = Callable[[], int]
@@ -168,6 +169,21 @@ def create_parser() -> argparse.ArgumentParser:
     sync_cycle_loop_parser.add_argument("--encrypted-map")
     sync_cycle_loop_parser.add_argument("--encrypted-dir")
     sync_cycle_loop_parser.add_argument("--continue-on-error", action="store_true")
+
+    sync_worker_parser = subparsers.add_parser("sync-worker")
+    sync_worker_parser.add_argument("--iterations", type=int, required=True)
+    sync_worker_parser.add_argument("--interval-seconds", type=float, default=30.0)
+    sync_worker_parser.add_argument("--step-ms", type=int)
+    sync_worker_parser.add_argument("--now-ms", type=int)
+    sync_worker_parser.add_argument("--normalized-at", type=int)
+    sync_worker_parser.add_argument("--submit-created-at", type=int)
+    sync_worker_parser.add_argument("--file-id", action="append", dest="file_ids")
+    sync_worker_parser.add_argument("--commit-intent-id")
+    sync_worker_parser.add_argument("--cleanup-normalized-at", type=int)
+    sync_worker_parser.add_argument("--rewritten-at", type=int)
+    sync_worker_parser.add_argument("--encrypted-map")
+    sync_worker_parser.add_argument("--encrypted-dir")
+    sync_worker_parser.add_argument("--stop-on-error", action="store_true")
 
     download_parser = subparsers.add_parser("download-blobs")
     download_parser.add_argument("--blob-id", action="append", dest="blob_ids", required=True)
@@ -345,6 +361,37 @@ def run_cli(
                 interval_seconds=args.interval_seconds,
                 step_ms=args.step_ms,
                 continue_on_error=args.continue_on_error,
+            )
+        )
+    elif args.command == "sync-worker":
+        encrypted_blob_by_file_id = None
+        if args.file_ids:
+            if args.encrypted_map or args.encrypted_dir:
+                encrypted_blob_by_file_id = _load_encrypted_blob_payloads(
+                    args.file_ids,
+                    encrypted_map=args.encrypted_map,
+                    encrypted_dir=args.encrypted_dir,
+                )
+        elif args.encrypted_map or args.encrypted_dir:
+            raise ValueError("sync-worker encrypted payloads require at least one --file-id")
+        result = DesktopSyncWorker(
+            DesktopSyncRunner(service),
+            sleep=sleep,
+            now_ms_provider=resolved_now_ms_provider,
+        ).run(
+            DesktopSyncWorkerConfig(
+                iterations=args.iterations,
+                interval_seconds=args.interval_seconds,
+                step_ms=args.step_ms,
+                continue_on_error=not args.stop_on_error,
+                init_now_ms=args.now_ms,
+                recovery_normalized_at=args.normalized_at,
+                submit_created_at=args.submit_created_at,
+                submit_file_ids=args.file_ids,
+                commit_intent_id=args.commit_intent_id,
+                cleanup_normalized_at=args.cleanup_normalized_at,
+                pull_rewritten_at=args.rewritten_at,
+                encrypted_blob_by_file_id=encrypted_blob_by_file_id,
             )
         )
     elif args.command == "download-blobs":

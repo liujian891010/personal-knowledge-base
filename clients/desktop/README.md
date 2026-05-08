@@ -97,6 +97,20 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
 
 `sync-cycle-loop` also supports `--continue-on-error`, returning per-iteration failure records in JSON while continuing later iterations.
 
+`sync-worker` is a thinner bounded worker wrapper around `sync-cycle-loop`: it auto-plans timestamps, defaults to `continue_on_error=true`, and derives `step_ms` from `interval_seconds` when you do not provide one.
+
+```powershell
+$env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
+  --vault-root C:\vaults\pkb `
+  --base-url https://sync.example.com `
+  --vault-id vault-001 `
+  --device-id desktop-shanghai `
+  sync-worker `
+  --iterations 2 `
+  --file-id file-live `
+  --interval-seconds 30
+```
+
 `submit-commit` payload files use `file_id -> base64 bytes` JSON objects:
 
 ```json

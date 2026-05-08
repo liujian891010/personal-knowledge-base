@@ -730,6 +730,69 @@ class DesktopCliTests(unittest.TestCase):
             ],
         )
 
+    def test_sync_worker_command_wraps_cycle_loop_defaults(self) -> None:
+        slept: list[float] = []
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-worker",
+            "--iterations",
+            "2",
+            "--file-id",
+            "file-a",
+            "--interval-seconds",
+            "2.5",
+            sleep=slept.append,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["started_at_ms"], 1770000040000)
+        self.assertEqual(payload["effective_step_ms"], 2500)
+        self.assertTrue(payload["config"]["continue_on_error"])
+        self.assertEqual(payload["time_plan"]["submit_created_at"], 1770000040020)
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040000),
+                ("recover", 1770000040010),
+                ("submit-workspace-commit", 1770000040020, ["file-a"], None, 1770000040021, None),
+                ("pull", 1770000040030),
+                ("status", None),
+                ("init", 1770000042500),
+                ("recover", 1770000042510),
+                ("submit-workspace-commit", 1770000042520, ["file-a"], None, 1770000042521, None),
+                ("pull", 1770000042530),
+                ("status", None),
+            ],
+        )
+        self.assertEqual(slept, [2.5])
+
+    def test_sync_worker_command_can_stop_on_error(self) -> None:
+        self.service.fail_submit_workspace_at_calls = {0}
+        with self.assertRaisesRegex(RuntimeError, "submit failed at call 0"):
+            self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "sync-worker",
+                "--iterations",
+                "2",
+                "--file-id",
+                "file-a",
+                "--stop-on-error",
+            )
+
     def test_sync_loop_command_can_continue_on_error(self) -> None:
         self.service.fail_recover_at_calls = {1}
         slept: list[float] = []
