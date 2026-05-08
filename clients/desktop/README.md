@@ -1,3 +1,3 @@
 # desktop
 
-桌面端客户端工程占位目录。
+Desktop client runtime assembly for AG05 sync flows.
