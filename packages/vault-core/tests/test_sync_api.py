@@ -6,6 +6,9 @@ from vault_core import (
     AckResponsePayload,
     BlobCheckRequest,
     BlobCheckResponsePayload,
+    BlobDownloadCapability,
+    BlobDownloadInitRequestPayload,
+    BlobDownloadInitResponsePayload,
     BlobUploadCapability,
     BlobUploadInitRequestItem,
     BlobUploadInitRequestPayload,
@@ -22,6 +25,7 @@ from vault_core import (
     ResolveCommitIntentResponsePayload,
     VaultHeadResponsePayload,
     parse_ack_response,
+    parse_blob_download_init_response,
     build_blob_upload_init_request,
     parse_blob_check_response,
     parse_blob_upload_init_response,
@@ -31,6 +35,7 @@ from vault_core import (
     parse_resolve_commit_intent_response,
     parse_vault_head_response,
     serialize_ack_request,
+    serialize_blob_download_init_request,
     serialize_blob_check_request,
     serialize_blob_upload_init_request,
     serialize_create_commit_request,
@@ -169,6 +174,44 @@ class SyncApiAdapterTests(unittest.TestCase):
                 ]
             },
         )
+
+    def test_serialize_and_parse_blob_download_init_payloads(self) -> None:
+        request = BlobDownloadInitRequestPayload(blob_ids=["blob_a", "blob_b"])
+        self.assertEqual(
+            serialize_blob_download_init_request(request),
+            {"blob_ids": ["blob_a", "blob_b"]},
+        )
+        self.assertEqual(
+            parse_blob_download_init_response(
+                {
+                    "downloads": [
+                        {
+                            "blob_id": "blob_a",
+                            "download_url": "https://example.com/download/blob_a",
+                            "encrypted_size": 32,
+                            "expires_at": "2026-05-08T12:00:00Z",
+                            "headers": {"x-token": "a"},
+                        }
+                    ]
+                }
+            ),
+            BlobDownloadInitResponsePayload(
+                downloads=[
+                    BlobDownloadCapability(
+                        blob_id="blob_a",
+                        download_url="https://example.com/download/blob_a",
+                        encrypted_size=32,
+                        expires_at="2026-05-08T12:00:00Z",
+                        headers={"x-token": "a"},
+                    )
+                ]
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "must be unique"):
+            serialize_blob_download_init_request(
+                BlobDownloadInitRequestPayload(blob_ids=["blob_a", "blob_a"])
+            )
 
     def test_parse_blob_upload_init_response_supports_optional_method_and_headers(self) -> None:
         parsed = parse_blob_upload_init_response(

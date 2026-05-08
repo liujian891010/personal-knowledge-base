@@ -8,6 +8,9 @@ from pathlib import Path
 from vault_core import (
     AckExecutionResult,
     BlobCheckResult,
+    BlobDownloadCapability,
+    BlobDownloadInitExecutionResult,
+    BlobDownloadInitResponsePayload,
     BlobUploadCapability,
     BlobUploadInitRequestPayload,
     BlobUploadInitResponsePayload,
@@ -44,6 +47,8 @@ from vault_core import (
     upsert_commit_intent_journal,
     upsert_vault_state,
     execute_ack_revisions,
+    execute_blob_download_init,
+    execute_blob_downloads,
     execute_blob_uploads,
     execute_commit_preflight,
     execute_create_commit,
@@ -65,6 +70,7 @@ class FakeSyncCommitTransport:
         manifest: SyncHttpJsonResponse | None = None,
         head: SyncHttpJsonResponse | None = None,
         ack: SyncHttpJsonResponse | None = None,
+        blob_download_init: SyncHttpJsonResponse | None = None,
     ) -> None:
         self.blob_check_response = blob_check
         self.blob_upload_init_response = blob_upload_init
@@ -73,6 +79,7 @@ class FakeSyncCommitTransport:
         self.manifest_response = manifest
         self.head_response = head
         self.ack_response = ack
+        self.blob_download_init_response = blob_download_init
         self.calls: list[tuple[str, str, dict[str, object]]] = []
 
     def post_blob_check(self, vault_id: str, payload: dict[str, object]) -> SyncHttpJsonResponse:
@@ -115,6 +122,12 @@ class FakeSyncCommitTransport:
             raise AssertionError("ack response was not configured")
         return self.ack_response
 
+    def post_blob_download_init(self, vault_id: str, payload: dict[str, object]) -> SyncHttpJsonResponse:
+        self.calls.append(("blob_download_init", vault_id, payload))
+        if self.blob_download_init_response is None:
+            raise AssertionError("blob download init response was not configured")
+        return self.blob_download_init_response
+
 
 class FakeSyncBlobUploader:
     def __init__(self, *, error_blob_id: str | None = None) -> None:
@@ -129,6 +142,15 @@ class FakeSyncBlobUploader:
         self.calls.append((upload, capability))
         if upload.blob_id == self.error_blob_id:
             raise RuntimeError(f"upload failed for {upload.blob_id}")
+
+
+class FakeSyncBlobDownloader:
+    def __init__(self) -> None:
+        self.calls: list[BlobDownloadCapability] = []
+
+    def download_blob(self, capability: BlobDownloadCapability) -> bytes:
+        self.calls.append(capability)
+        return f"downloaded:{capability.blob_id}".encode("utf-8")
 
 
 def _build_submission() -> CommitSubmissionBundle:
@@ -359,6 +381,72 @@ class SyncClientTests(unittest.TestCase):
                     ]
                 ),
             )
+
+    def test_execute_blob_download_init_and_downloads(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            blob_download_init=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "downloads": [
+                        {
+                            "blob_id": "blob_b",
+                            "download_url": "https://example.com/download/blob_b",
+                            "encrypted_size": 24,
+                            "expires_at": "2026-05-08T12:00:00Z",
+                        },
+                        {
+                            "blob_id": "blob_a",
+                            "download_url": "https://example.com/download/blob_a",
+                            "encrypted_size": 32,
+                            "expires_at": "2026-05-08T12:00:00Z",
+                            "headers": {"x-token": "token_a"},
+                        },
+                    ]
+                },
+            ),
+        )
+        downloader = FakeSyncBlobDownloader()
+
+        init = execute_blob_download_init(
+            transport,
+            "vault_pkb_001",
+            ["blob_b", "blob_a"],
+        )
+        downloaded = execute_blob_downloads(downloader, init.response)
+
+        self.assertEqual(
+            init,
+            BlobDownloadInitExecutionResult(
+                request=init.request,
+                response=BlobDownloadInitResponsePayload(
+                    downloads=[
+                        BlobDownloadCapability(
+                            blob_id="blob_b",
+                            download_url="https://example.com/download/blob_b",
+                            encrypted_size=24,
+                            expires_at="2026-05-08T12:00:00Z",
+                        ),
+                        BlobDownloadCapability(
+                            blob_id="blob_a",
+                            download_url="https://example.com/download/blob_a",
+                            encrypted_size=32,
+                            expires_at="2026-05-08T12:00:00Z",
+                            headers={"x-token": "token_a"},
+                        ),
+                    ]
+                ),
+            ),
+        )
+        self.assertEqual(
+            downloaded,
+            {
+                "blob_a": b"downloaded:blob_a",
+                "blob_b": b"downloaded:blob_b",
+            },
+        )
+        self.assertEqual([call[0] for call in transport.calls], ["blob_download_init"])
+        self.assertEqual([capability.blob_id for capability in downloader.calls], ["blob_a", "blob_b"])
 
     def test_execute_create_commit_parses_success_and_conflict(self) -> None:
         request = CreateCommitRequestPayload(

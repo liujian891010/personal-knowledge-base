@@ -47,6 +47,25 @@ class BlobUploadInitResponsePayload:
 
 
 @dataclass(frozen=True)
+class BlobDownloadInitRequestPayload:
+    blob_ids: list[str]
+
+
+@dataclass(frozen=True)
+class BlobDownloadCapability:
+    blob_id: str
+    download_url: str
+    encrypted_size: int
+    expires_at: str
+    headers: Optional[dict[str, str]] = None
+
+
+@dataclass(frozen=True)
+class BlobDownloadInitResponsePayload:
+    downloads: list[BlobDownloadCapability]
+
+
+@dataclass(frozen=True)
 class ResolveCommitIntentRequestPayload:
     commit_intent_id: str
     intent_manifest_hash: str
@@ -245,6 +264,44 @@ def parse_blob_upload_init_response(
             )
         )
     return BlobUploadInitResponsePayload(uploads=uploads)
+
+
+def serialize_blob_download_init_request(
+    request: BlobDownloadInitRequestPayload,
+) -> dict[str, object]:
+    blob_ids = _require_string_list(
+        {"blob_ids": request.blob_ids},
+        "blob_ids",
+        allow_empty=False,
+    )
+    if len(set(blob_ids)) != len(blob_ids):
+        raise ValueError("blob_ids must be unique")
+    return {
+        "blob_ids": blob_ids,
+    }
+
+
+def parse_blob_download_init_response(
+    payload: Mapping[str, object],
+) -> BlobDownloadInitResponsePayload:
+    downloads_payload = payload.get("downloads")
+    if not isinstance(downloads_payload, list):
+        raise ValueError("downloads must be a list")
+
+    downloads: list[BlobDownloadCapability] = []
+    for item in downloads_payload:
+        if not isinstance(item, dict):
+            raise ValueError("downloads items must be objects")
+        downloads.append(
+            BlobDownloadCapability(
+                blob_id=_require_string(item, "blob_id"),
+                download_url=_require_string(item, "download_url"),
+                encrypted_size=_require_non_negative_int(item, "encrypted_size"),
+                expires_at=_require_string(item, "expires_at"),
+                headers=_optional_headers(item, "headers"),
+            )
+        )
+    return BlobDownloadInitResponsePayload(downloads=downloads)
 
 
 def serialize_resolve_commit_intent_request(
