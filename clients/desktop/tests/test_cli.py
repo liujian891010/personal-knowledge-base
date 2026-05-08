@@ -238,6 +238,63 @@ class DesktopCliTests(unittest.TestCase):
         )
         self.assertEqual(self.service.calls, [("download-blobs", ["blob-a", "blob-b"])])
 
+    def test_download_blobs_command_writes_blob_files_when_output_dir_is_provided(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "downloaded"
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "download-blobs",
+                "--blob-id",
+                "blob-a",
+                "--blob-id",
+                "blob-b",
+                "--output-dir",
+                str(output_dir),
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                payload,
+                {
+                    "init": {
+                        "request": {"blob_ids": ["blob-a", "blob-b"]},
+                        "response": {
+                            "downloads": [
+                                {
+                                    "blob_id": "blob-a",
+                                    "download_url": "https://blob.example.com/download/blob-a",
+                                    "encrypted_size": 3,
+                                    "expires_at": "2026-05-08T12:00:00Z",
+                                    "headers": None,
+                                },
+                                {
+                                    "blob_id": "blob-b",
+                                    "download_url": "https://blob.example.com/download/blob-b",
+                                    "encrypted_size": 3,
+                                    "expires_at": "2026-05-08T12:00:00Z",
+                                    "headers": None,
+                                },
+                            ]
+                        },
+                    },
+                    "written_blob_paths": {
+                        "blob-a": str(output_dir / "blob-a.blob"),
+                        "blob-b": str(output_dir / "blob-b.blob"),
+                    },
+                },
+            )
+            self.assertEqual((output_dir / "blob-a.blob").read_bytes(), b"xyz")
+            self.assertEqual((output_dir / "blob-b.blob").read_bytes(), b"xyz")
+
+        self.assertEqual(self.service.calls, [("download-blobs", ["blob-a", "blob-b"])])
+
     def test_submit_commit_command_decodes_payload_files_and_routes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             content_map = Path(tmpdir) / "content.json"
