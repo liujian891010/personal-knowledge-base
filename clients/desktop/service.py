@@ -333,6 +333,24 @@ class DesktopConflictResolutionResult:
 
 
 @dataclass(frozen=True)
+class DesktopConflictArtifact:
+    kind: str
+    path: str
+    exists_on_disk: bool
+    file_id: Optional[str] = None
+    conflict_source_file_id: Optional[str] = None
+    content_hash: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class DesktopConflictStatus:
+    state: VaultStateRecord
+    actual_has_unresolved_conflicts: bool
+    conflict_copies: list[DesktopConflictArtifact]
+    conflict_orphans: list[DesktopConflictArtifact]
+
+
+@dataclass(frozen=True)
 class DesktopPullApplySessionResult:
     pull: PullSyncSessionResult
     plan: DesktopPullApplyPlan
@@ -1262,6 +1280,47 @@ class DesktopSyncService:
 
     def load_worker_health(self) -> DesktopSyncWorkerHealth:
         return self.workspace.load_worker_health()
+
+    def list_conflicts(self) -> DesktopConflictStatus:
+        snapshot = self._promote_unresolved_conflict_state_if_needed(self.load_snapshot())
+        conflict_copies: list[DesktopConflictArtifact] = []
+        for record in sorted(
+            (item for item in snapshot.document.files if item.status == "conflict_copy"),
+            key=lambda item: (item.path, item.file_id),
+        ):
+            conflict_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            conflict_copies.append(
+                DesktopConflictArtifact(
+                    kind="conflict_copy",
+                    file_id=record.file_id,
+                    path=record.path,
+                    exists_on_disk=conflict_path.exists() and conflict_path.is_file(),
+                    conflict_source_file_id=record.conflict_source_file_id,
+                    content_hash=record.content_hash,
+                )
+            )
+
+        orphan_root = self.workspace.vault_root / CONFLICT_ORPHANS_DIRNAME
+        conflict_orphans: list[DesktopConflictArtifact] = []
+        if orphan_root.exists():
+            for path in sorted(
+                (item for item in orphan_root.rglob("*") if item.is_file()),
+                key=lambda item: str(item.relative_to(orphan_root)),
+            ):
+                conflict_orphans.append(
+                    DesktopConflictArtifact(
+                        kind="conflict_orphan",
+                        path=_relative_vault_path(self.workspace.vault_root, path),
+                        exists_on_disk=True,
+                    )
+                )
+
+        return DesktopConflictStatus(
+            state=snapshot.state,
+            actual_has_unresolved_conflicts=bool(conflict_copies or conflict_orphans),
+            conflict_copies=conflict_copies,
+            conflict_orphans=conflict_orphans,
+        )
 
     def resolve_conflicts(
         self,

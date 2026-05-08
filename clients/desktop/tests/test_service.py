@@ -2673,6 +2673,66 @@ class DesktopSyncServiceTests(unittest.TestCase):
             with closing(open_database(service.workspace.paths.db_path)) as connection:
                 self.assertIsNone(load_commit_intent_journal(connection, "vault-001"))
 
+    def test_list_conflicts_reports_conflict_records_and_orphans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, payload, _ = self._seed_workspace(root)
+            conflict_path = root / "Notes" / "Live (conflict 2026-04-29 Desktop-Win).md"
+            conflict_path.write_bytes(payload + b" conflict")
+            conflict_hash = "sha256:" + hashlib.sha256(conflict_path.read_bytes()).hexdigest()
+            orphan_path = root / ".noteapp" / "conflict-orphans" / "Live orphan.md"
+            orphan_path.parent.mkdir(parents=True, exist_ok=True)
+            orphan_path.write_text("orphan conflict", encoding="utf-8")
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                FileMapDocument(
+                    vault_id="vault-001",
+                    updated_at=1770000040100,
+                    files=[
+                        FileRecord(
+                            file_id="file-live",
+                            path="Notes/Live.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000030090,
+                            content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                            meta={
+                                "blob_id": "blob-live",
+                                "size": len(payload),
+                                "mtime": 1770000030080,
+                                "mime_type": "text/markdown",
+                            },
+                        ),
+                        FileRecord(
+                            file_id="file-conflict",
+                            path="Notes/Live (conflict 2026-04-29 Desktop-Win).md",
+                            type="note",
+                            status="conflict_copy",
+                            updated_at=1770000040100,
+                            content_hash=conflict_hash,
+                            conflict_source_file_id="file-live",
+                        ),
+                    ],
+                ),
+            )
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                state = load_vault_state(connection, "vault-001")
+                self.assertIsNotNone(state)
+                upsert_vault_state(connection, replace(state, has_unresolved_conflicts=False))
+
+            status = service.list_conflicts()
+
+            self.assertTrue(status.state.has_unresolved_conflicts)
+            self.assertTrue(status.actual_has_unresolved_conflicts)
+            self.assertEqual(len(status.conflict_copies), 1)
+            self.assertEqual(status.conflict_copies[0].file_id, "file-conflict")
+            self.assertTrue(status.conflict_copies[0].exists_on_disk)
+            self.assertEqual(status.conflict_copies[0].conflict_source_file_id, "file-live")
+            self.assertEqual(
+                status.conflict_orphans[0].path,
+                ".noteapp/conflict-orphans/Live orphan.md",
+            )
+
     def test_resolve_conflicts_removes_conflict_copy_and_clears_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

@@ -144,6 +144,46 @@ class FakeService:
         self.calls.append(("worker-health", None))
         return self.worker_health_payload
 
+    def list_conflicts(self):
+        self.calls.append(("list-conflicts", None))
+        return {
+            "state": {
+                "vault_id": "vault-001",
+                "last_applied_revision": 7,
+                "remote_head_revision": 7,
+                "acked_revision": 7,
+                "pending_ack_to_server": [],
+                "commit_in_progress": False,
+                "last_manifest_summary": "sha256:head7",
+                "last_manifest_summary_status": "valid",
+                "local_delete_sequence": 1,
+                "has_unresolved_conflicts": True,
+                "schema_version": "v1",
+                "meta": None,
+            },
+            "actual_has_unresolved_conflicts": True,
+            "conflict_copies": [
+                {
+                    "kind": "conflict_copy",
+                    "file_id": "file-conflict",
+                    "path": "Notes/Live (conflict).md",
+                    "exists_on_disk": True,
+                    "conflict_source_file_id": "file-live",
+                    "content_hash": "sha256:abc",
+                }
+            ],
+            "conflict_orphans": [
+                {
+                    "kind": "conflict_orphan",
+                    "path": ".noteapp/conflict-orphans/Orphan.md",
+                    "exists_on_disk": True,
+                    "file_id": None,
+                    "conflict_source_file_id": None,
+                    "content_hash": None,
+                }
+            ],
+        }
+
     def resolve_conflicts(self, *, resolved_at: int, conflict_file_ids=None, orphan_relative_paths=None):
         self.calls.append(
             (
@@ -482,6 +522,24 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "degraded")
         self.assertEqual(self.service.calls, [("worker-health", None)])
+
+    def test_list_conflicts_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "list-conflicts",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["actual_has_unresolved_conflicts"])
+        self.assertEqual(payload["conflict_copies"][0]["file_id"], "file-conflict")
+        self.assertEqual(self.service.calls, [("list-conflicts", None)])
 
     def test_resolve_conflicts_command_routes_selected_targets(self) -> None:
         exit_code, payload = self._run(
