@@ -161,6 +161,7 @@ def create_parser() -> argparse.ArgumentParser:
     pull_parser = subparsers.add_parser("pull")
     pull_parser.add_argument("--rewritten-at", type=int, required=True)
     pull_parser.add_argument("--plan-apply", action="store_true")
+    pull_parser.add_argument("--apply", action="store_true")
     pull_parser.add_argument("--apply-nonblocking", action="store_true")
     pull_parser.add_argument("--download-required-blobs", action="store_true")
     pull_parser.add_argument("--decrypt-required-blobs", action="store_true")
@@ -292,8 +293,15 @@ def run_cli(
     elif args.command == "worker-health":
         result = service.load_worker_health()
     elif args.command == "pull":
+        if sum(
+            1
+            for enabled in (args.plan_apply, args.apply, args.apply_nonblocking)
+            if enabled
+        ) > 1:
+            raise ValueError("pull apply modes are mutually exclusive")
         if args.plan_apply and (
             args.apply_nonblocking
+            or args.apply
             or args.download_required_blobs
             or args.decrypt_required_blobs
             or args.output_dir
@@ -301,6 +309,14 @@ def run_cli(
             or args.stage_required_blobs
         ):
             raise ValueError("pull --plan-apply cannot be combined with blob download or materialization flags")
+        if args.apply and (
+            args.download_required_blobs
+            or args.decrypt_required_blobs
+            or args.output_dir
+            or args.plaintext_output_dir
+            or args.stage_required_blobs
+        ):
+            raise ValueError("pull --apply cannot be combined with blob download or materialization flags")
         if args.apply_nonblocking and (
             args.download_required_blobs
             or args.decrypt_required_blobs
@@ -325,9 +341,13 @@ def run_cli(
             service.pull_and_plan_apply(rewritten_at=args.rewritten_at)
             if args.plan_apply
             else (
-                service.pull_and_apply_nonblocking(rewritten_at=args.rewritten_at)
-                if args.apply_nonblocking
-                else service.pull_and_ack(rewritten_at=args.rewritten_at)
+                service.pull_and_apply(rewritten_at=args.rewritten_at)
+                if args.apply
+                else (
+                    service.pull_and_apply_nonblocking(rewritten_at=args.rewritten_at)
+                    if args.apply_nonblocking
+                    else service.pull_and_ack(rewritten_at=args.rewritten_at)
+                )
             )
         )
         if args.download_required_blobs:

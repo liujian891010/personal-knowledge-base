@@ -1099,6 +1099,76 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 self.assertEqual(loaded_journal.phase, "materializing")
                 self.assertEqual(loaded_journal.ops_hash, "sha256:ops8")
 
+    def test_apply_staged_pull_plan_materializes_blocking_path_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            path_a = root / "Notes" / "A.md"
+            path_b = root / "Notes" / "B.md"
+            path_a.write_bytes(b"# A\n")
+            path_b.write_bytes(b"# B\n")
+
+            journal = SyncApplyJournalRecord(
+                vault_id="vault-001",
+                journal_id="journal-1",
+                target_revision=8,
+                target_manifest_hash="sha256:head8",
+                phase="staging",
+                ops_hash="sha256:old",
+                created_at=1770000040100,
+                updated_at=1770000040100,
+            )
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(connection, journal)
+
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[],
+                moves=[
+                    DesktopPullApplyMoveFile(
+                        file_id="file-a",
+                        source_path="Notes/A.md",
+                        target_path="Notes/B.md",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# A\n").hexdigest(),
+                    ),
+                    DesktopPullApplyMoveFile(
+                        file_id="file-b",
+                        source_path="Notes/B.md",
+                        target_path="Notes/A.md",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# B\n").hexdigest(),
+                    ),
+                ],
+                deletes=[],
+                blocking_paths=["Notes/A.md", "Notes/B.md"],
+                ops_hash="sha256:ops8",
+            )
+            staged = DesktopPullApplyStagingResult(
+                journal=journal,
+                written_staging_paths={},
+            )
+
+            execution = service.apply_staged_pull_plan(
+                plan,
+                staged,
+                materialized_at=1770000040200,
+            )
+
+            self.assertEqual(path_a.read_bytes(), b"# B\n")
+            self.assertEqual(path_b.read_bytes(), b"# A\n")
+            self.assertEqual(
+                execution.moved_paths,
+                {
+                    "file-a": path_b,
+                    "file-b": path_a,
+                },
+            )
+            self.assertEqual(execution.deleted_paths, [])
+            self.assertEqual(execution.journal.phase, "materializing")
+
     def test_finalize_applied_pull_plan_clears_journal_and_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -1237,6 +1307,60 @@ class DesktopSyncServiceTests(unittest.TestCase):
                             with mock.patch.object(type(service), "apply_staged_pull_plan", return_value=execution):
                                 with mock.patch.object(type(service), "finalize_applied_pull_plan", return_value=finalized):
                                     session = service.pull_and_apply_nonblocking(rewritten_at=1770000040100)
+
+            self.assertIs(session.pull, pull)
+            self.assertIs(session.plan, plan)
+            self.assertIs(session.staged, staged)
+            self.assertIs(session.execution, execution)
+            self.assertIs(session.finalized, finalized)
+
+    def test_pull_and_apply_orchestrates_finalize(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            before_snapshot = service.load_snapshot()
+            pull = self._build_pull_result(required_blob_ids=[], manifest_files=[])
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[],
+                moves=[],
+                deletes=[],
+                blocking_paths=["Notes/A.md"],
+                ops_hash="sha256:ops8",
+            )
+            resolved = DesktopPullRequiredBlobResult(
+                pull=pull,
+                plan=DesktopPullRequiredBlobPlan(vault_id="vault-001", revision=8, blob_ids=[], files=[]),
+                download=None,
+                plaintext_by_file_id={},
+            )
+            staged = DesktopPullApplyStagingResult(journal=None, written_staging_paths={})
+            execution = type(
+                "Execution",
+                (),
+                {
+                    "journal": None,
+                    "written_paths": {},
+                    "moved_paths": {},
+                    "deleted_paths": [],
+                },
+            )()
+            finalized = type(
+                "Finalized",
+                (),
+                {
+                    "state": service.load_snapshot().state,
+                    "removed_staging_paths": [],
+                },
+            )()
+
+            with mock.patch.object(type(service), "_pull_and_ack_with_snapshot", return_value=(before_snapshot, pull)):
+                with mock.patch.object(type(service), "_build_pull_apply_plan", return_value=plan):
+                    with mock.patch.object(type(service), "download_and_decrypt_pull_required_blobs", return_value=resolved):
+                        with mock.patch.object(type(service), "stage_pull_required_plaintext_for_apply", return_value=staged):
+                            with mock.patch.object(type(service), "apply_staged_pull_plan", return_value=execution):
+                                with mock.patch.object(type(service), "finalize_applied_pull_plan", return_value=finalized):
+                                    session = service.pull_and_apply(rewritten_at=1770000040100)
 
             self.assertIs(session.pull, pull)
             self.assertIs(session.plan, plan)

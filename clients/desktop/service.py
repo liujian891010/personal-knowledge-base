@@ -295,10 +295,21 @@ class DesktopSyncService:
             plan=self._build_pull_apply_plan(before_snapshot, pull),
         )
 
+    def pull_and_apply(self, *, rewritten_at: int) -> DesktopPullApplySessionResult:
+        return self._pull_and_apply(rewritten_at=rewritten_at, reject_blocking_paths=False)
+
     def pull_and_apply_nonblocking(self, *, rewritten_at: int) -> DesktopPullApplySessionResult:
+        return self._pull_and_apply(rewritten_at=rewritten_at, reject_blocking_paths=True)
+
+    def _pull_and_apply(
+        self,
+        *,
+        rewritten_at: int,
+        reject_blocking_paths: bool,
+    ) -> DesktopPullApplySessionResult:
         before_snapshot, pull = self._pull_and_ack_with_snapshot(rewritten_at=rewritten_at)
         plan = self._build_pull_apply_plan(before_snapshot, pull)
-        if plan.blocking_paths:
+        if reject_blocking_paths and plan.blocking_paths:
             raise ValueError(
                 "pull apply requires a later two-phase materialization boundary for blocking paths: "
                 + ", ".join(plan.blocking_paths)
@@ -548,12 +559,6 @@ class DesktopSyncService:
         *,
         materialized_at: int,
     ) -> DesktopPullApplyExecutionResult:
-        if plan.blocking_paths:
-            raise ValueError(
-                "pull apply requires a later two-phase materialization boundary for blocking paths: "
-                + ", ".join(plan.blocking_paths)
-            )
-
         journal = staged.journal
         if journal is None:
             return DesktopPullApplyExecutionResult(
@@ -566,6 +571,7 @@ class DesktopSyncService:
         written_paths: dict[str, Path] = {}
         moved_paths: dict[str, Path] = {}
         deleted_paths: list[Path] = []
+        blocking_paths = set(plan.blocking_paths)
 
         with closing(self.workspace._open_connection()) as connection:
             current_journal = load_sync_apply_journal(connection, self.vault_id)
@@ -584,6 +590,38 @@ class DesktopSyncService:
             )
             upsert_sync_apply_journal(connection, materializing_journal)
 
+            for item in plan.moves:
+                if item.source_path not in blocking_paths and item.target_path not in blocking_paths:
+                    continue
+                source_path = _resolve_workspace_file_path(self.workspace.vault_root, item.source_path)
+                move_staging_path = _resolve_pull_apply_staging_path(self.workspace.vault_root, item.file_id)
+                if source_path.exists():
+                    move_staging_path.parent.mkdir(parents=True, exist_ok=True)
+                    source_path.replace(move_staging_path)
+                    continue
+                if move_staging_path.exists():
+                    continue
+                target_path = _resolve_workspace_file_path(self.workspace.vault_root, item.target_path)
+                if target_path.exists():
+                    payload = target_path.read_bytes()
+                    actual_hash = _compute_content_hash(payload)
+                    if actual_hash != item.content_hash:
+                        raise ValueError(
+                            f"materialized move target hash mismatch for file_id {item.file_id}: "
+                            f"expected {item.content_hash}, got {actual_hash}"
+                        )
+                    continue
+                raise FileNotFoundError(f"pull apply source path not found: {item.source_path}")
+
+            for item in plan.deletes:
+                if item.path not in blocking_paths:
+                    continue
+                delete_path = _resolve_workspace_file_path(self.workspace.vault_root, item.path)
+                if not delete_path.exists():
+                    continue
+                delete_path.unlink(missing_ok=True)
+                deleted_paths.append(delete_path)
+
             for item in plan.writes:
                 staging_path = _resolve_workspace_file_path(self.workspace.vault_root, item.staging_path)
                 if not staging_path.exists() or not staging_path.is_file():
@@ -600,7 +638,10 @@ class DesktopSyncService:
                 written_paths[item.file_id] = output_path
 
             for item in plan.moves:
-                source_path = _resolve_workspace_file_path(self.workspace.vault_root, item.source_path)
+                if item.source_path in blocking_paths or item.target_path in blocking_paths:
+                    source_path = _resolve_pull_apply_staging_path(self.workspace.vault_root, item.file_id)
+                else:
+                    source_path = _resolve_workspace_file_path(self.workspace.vault_root, item.source_path)
                 target_path = _resolve_workspace_file_path(self.workspace.vault_root, item.target_path)
                 if source_path.exists():
                     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -620,6 +661,8 @@ class DesktopSyncService:
                 raise FileNotFoundError(f"pull apply source path not found: {item.source_path}")
 
             for item in plan.deletes:
+                if item.path in blocking_paths:
+                    continue
                 delete_path = _resolve_workspace_file_path(self.workspace.vault_root, item.path)
                 if not delete_path.exists():
                     continue
