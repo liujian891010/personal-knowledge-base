@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Optional
 
+from .models import ManifestRecord
 from .sync_commit import BlobCheckRequest, BlobUploadPlan, CreateCommitRequestPayload
 
 
@@ -36,6 +37,20 @@ class BlobUploadCapability:
 @dataclass(frozen=True)
 class BlobUploadInitResponsePayload:
     uploads: list[BlobUploadCapability]
+
+
+@dataclass(frozen=True)
+class ResolveCommitIntentRequestPayload:
+    commit_intent_id: str
+    intent_manifest_hash: str
+
+
+@dataclass(frozen=True)
+class ResolveCommitIntentResponsePayload:
+    status: str
+    matched_revision: Optional[int]
+    observed_head_revision: Optional[int]
+    head_manifest_summary: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -109,6 +124,33 @@ def _optional_headers(payload: Mapping[str, object], key: str) -> Optional[dict[
     return headers
 
 
+def _optional_non_empty_string(payload: Mapping[str, object], key: str) -> Optional[str]:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{key} must be a non-empty string or null")
+    return value
+
+
+def _optional_positive_int(payload: Mapping[str, object], key: str) -> Optional[int]:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{key} must be a positive integer or null")
+    return value
+
+
+def _optional_non_negative_int(payload: Mapping[str, object], key: str) -> Optional[int]:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int) or value < 0:
+        raise ValueError(f"{key} must be a non-negative integer or null")
+    return value
+
+
 def serialize_blob_check_request(request: BlobCheckRequest) -> dict[str, object]:
     return {
         "blob_ids": list(request.blob_ids),
@@ -175,6 +217,46 @@ def parse_blob_upload_init_response(
             )
         )
     return BlobUploadInitResponsePayload(uploads=uploads)
+
+
+def serialize_resolve_commit_intent_request(
+    request: ResolveCommitIntentRequestPayload,
+) -> dict[str, object]:
+    return {
+        "commit_intent_id": request.commit_intent_id,
+        "intent_manifest_hash": request.intent_manifest_hash,
+    }
+
+
+def parse_resolve_commit_intent_response(
+    payload: Mapping[str, object],
+) -> ResolveCommitIntentResponsePayload:
+    status = _require_string(payload, "status")
+    if status not in {"found", "not_found", "mismatched"}:
+        raise ValueError("status must be a supported resolve-intent result")
+
+    matched_revision = _optional_positive_int(payload, "matched_revision")
+    observed_head_revision = _optional_non_negative_int(payload, "observed_head_revision")
+    head_manifest_summary = _optional_non_empty_string(payload, "head_manifest_summary")
+
+    if status == "found" and matched_revision is None:
+        raise ValueError("matched_revision is required when resolve-intent status is found")
+    if status != "found" and matched_revision is not None:
+        raise ValueError("matched_revision is only allowed when resolve-intent status is found")
+    return ResolveCommitIntentResponsePayload(
+        status=status,
+        matched_revision=matched_revision,
+        observed_head_revision=observed_head_revision,
+        head_manifest_summary=head_manifest_summary,
+    )
+
+
+def parse_manifest_response(
+    payload: Mapping[str, object],
+) -> ManifestRecord:
+    if not isinstance(payload, dict):
+        raise ValueError("manifest response payload must be an object")
+    return ManifestRecord.from_dict(dict(payload))
 
 
 def serialize_create_commit_request(

@@ -3,20 +3,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Optional, Protocol
 
+from .models import CommitIntentJournalRecord, ManifestRecord
 from .sync_api import (
     BlobUploadCapability,
     BlobUploadInitRequestPayload,
     BlobUploadInitResponsePayload,
     CommitConflictResponsePayload,
     CreateCommitResponsePayload,
+    ResolveCommitIntentRequestPayload,
+    ResolveCommitIntentResponsePayload,
     build_blob_upload_init_request,
     parse_blob_check_response,
     parse_blob_upload_init_response,
     parse_commit_conflict_response,
     parse_create_commit_response,
+    parse_manifest_response,
+    parse_resolve_commit_intent_response,
     serialize_blob_check_request,
     serialize_blob_upload_init_request,
     serialize_create_commit_request,
+    serialize_resolve_commit_intent_request,
 )
 from .sync_commit import (
     BlobUploadPlan,
@@ -59,6 +65,20 @@ class SyncCommitTransport(Protocol):
     ) -> SyncHttpJsonResponse:
         ...
 
+    def post_resolve_commit_intent(
+        self,
+        vault_id: str,
+        payload: Mapping[str, object],
+    ) -> SyncHttpJsonResponse:
+        ...
+
+    def get_manifest(
+        self,
+        vault_id: str,
+        revision: int,
+    ) -> SyncHttpJsonResponse:
+        ...
+
 
 class SyncBlobUploader(Protocol):
     def upload_blob(
@@ -89,6 +109,14 @@ class CommitSubmissionExecutionResult:
     preflight: CommitPreflightResult
     uploaded_blob_ids: list[str]
     commit: CreateCommitExecutionResult
+
+
+@dataclass(frozen=True)
+class ResolveCommitIntentExecutionResult:
+    request: ResolveCommitIntentRequestPayload
+    response: ResolveCommitIntentResponsePayload
+    matched_manifest: Optional[ManifestRecord] = None
+    matched_manifest_missing: bool = False
 
 
 def _require_status(response: SyncHttpJsonResponse, expected_status: int, label: str) -> None:
@@ -182,6 +210,55 @@ def execute_blob_uploads(
         uploader.upload_blob(upload, capability_by_blob_id[upload.blob_id])
         uploaded_blob_ids.append(upload.blob_id)
     return uploaded_blob_ids
+
+
+def execute_resolve_commit_intent(
+    transport: SyncCommitTransport,
+    journal: CommitIntentJournalRecord,
+) -> ResolveCommitIntentExecutionResult:
+    request = ResolveCommitIntentRequestPayload(
+        commit_intent_id=journal.commit_intent_id,
+        intent_manifest_hash=journal.intent_manifest_hash,
+    )
+    http_response = transport.post_resolve_commit_intent(
+        journal.vault_id,
+        serialize_resolve_commit_intent_request(request),
+    )
+    _require_status(http_response, 200, "commits/resolve-intent")
+    response = parse_resolve_commit_intent_response(http_response.payload)
+
+    if response.status != "found":
+        return ResolveCommitIntentExecutionResult(
+            request=request,
+            response=response,
+        )
+
+    manifest_http = transport.get_manifest(
+        journal.vault_id,
+        response.matched_revision,
+    )
+    if manifest_http.status_code == 404:
+        return ResolveCommitIntentExecutionResult(
+            request=request,
+            response=response,
+            matched_manifest=None,
+            matched_manifest_missing=True,
+        )
+    _require_status(
+        manifest_http,
+        200,
+        f"manifests/{response.matched_revision}",
+    )
+    matched_manifest = parse_manifest_response(manifest_http.payload)
+    if matched_manifest.vault_id != journal.vault_id:
+        raise ValueError("matched manifest vault_id does not match resolve-intent journal vault")
+    if matched_manifest.revision != response.matched_revision:
+        raise ValueError("matched manifest revision does not match resolve-intent response")
+    return ResolveCommitIntentExecutionResult(
+        request=request,
+        response=response,
+        matched_manifest=matched_manifest,
+    )
 
 
 def execute_create_commit(
