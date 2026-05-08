@@ -91,6 +91,35 @@ class FakeService:
             "encrypted_sizes": {key: len(value) for key, value in encrypted_blob_by_file_id.items()},
         }
 
+    def submit_workspace_commit(
+        self,
+        *,
+        created_at: int,
+        file_ids,
+        commit_intent_id=None,
+        cleanup_normalized_at=None,
+        encrypted_blob_by_file_id=None,
+    ):
+        self.calls.append(
+            (
+                "submit-workspace-commit",
+                created_at,
+                list(file_ids),
+                commit_intent_id,
+                cleanup_normalized_at,
+                encrypted_blob_by_file_id,
+            )
+        )
+        return {
+            "kind": "submit-workspace-commit",
+            "created_at": created_at,
+            "file_ids": list(file_ids),
+            "commit_intent_id": commit_intent_id,
+            "encrypted_sizes": {
+                key: len(value) for key, value in encrypted_blob_by_file_id.items()
+            },
+        }
+
 
 class DesktopCliTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -501,6 +530,120 @@ class DesktopCliTests(unittest.TestCase):
                     1770000040301,
                     {"file-a": b"hello"},
                     {"file-a": b"encrypted-payload"},
+                )
+            ],
+        )
+
+    def test_submit_workspace_commit_command_routes_selected_file_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            encrypted_map = Path(tmpdir) / "encrypted.json"
+            encrypted_map.write_text(
+                json.dumps(
+                    {
+                        "file-a": base64.b64encode(b"encrypted-a").decode("ascii"),
+                        "file-b": base64.b64encode(b"encrypted-bb").decode("ascii"),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "submit-workspace-commit",
+                "--created-at",
+                "1770000040500",
+                "--commit-intent-id",
+                "intent-002",
+                "--cleanup-normalized-at",
+                "1770000040501",
+                "--file-id",
+                "file-a",
+                "--file-id",
+                "file-b",
+                "--encrypted-map",
+                str(encrypted_map),
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload,
+            {
+                "kind": "submit-workspace-commit",
+                "created_at": 1770000040500,
+                "file_ids": ["file-a", "file-b"],
+                "commit_intent_id": "intent-002",
+                "encrypted_sizes": {"file-a": 11, "file-b": 12},
+            },
+        )
+        self.assertEqual(
+            self.service.calls,
+            [
+                (
+                    "submit-workspace-commit",
+                    1770000040500,
+                    ["file-a", "file-b"],
+                    "intent-002",
+                    1770000040501,
+                    {"file-a": b"encrypted-a", "file-b": b"encrypted-bb"},
+                )
+            ],
+        )
+
+    def test_submit_workspace_commit_command_loads_blob_dir_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            encrypted_dir = Path(tmpdir) / "encrypted"
+            encrypted_dir.mkdir(parents=True, exist_ok=True)
+            (encrypted_dir / "file-a.blob").write_bytes(b"enc-a")
+            (encrypted_dir / "file-b.blob").write_bytes(b"enc-bb")
+
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "submit-workspace-commit",
+                "--created-at",
+                "1770000040600",
+                "--file-id",
+                "file-a",
+                "--file-id",
+                "file-b",
+                "--encrypted-dir",
+                str(encrypted_dir),
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload,
+            {
+                "kind": "submit-workspace-commit",
+                "created_at": 1770000040600,
+                "file_ids": ["file-a", "file-b"],
+                "commit_intent_id": None,
+                "encrypted_sizes": {"file-a": 5, "file-b": 6},
+            },
+        )
+        self.assertEqual(
+            self.service.calls,
+            [
+                (
+                    "submit-workspace-commit",
+                    1770000040600,
+                    ["file-a", "file-b"],
+                    None,
+                    None,
+                    {"file-a": b"enc-a", "file-b": b"enc-bb"},
                 )
             ],
         )

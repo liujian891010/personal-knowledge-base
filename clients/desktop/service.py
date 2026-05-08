@@ -38,6 +38,13 @@ from .workspace import (
 )
 
 
+def _resolve_workspace_file_path(vault_root: Path, relative_path: str) -> Path:
+    path = Path(relative_path)
+    if path.anchor or path.drive or ".." in path.parts:
+        raise ValueError(f"workspace file path is not safe: {relative_path!r}")
+    return vault_root / path
+
+
 @dataclass(frozen=True)
 class DesktopPreparedCommit:
     snapshot: DesktopWorkspaceSnapshot
@@ -90,6 +97,22 @@ class DesktopSyncService:
 
     def download_blobs(self, blob_ids: Iterable[str]) -> BlobDownloadSessionResult:
         return self.workspace.download_blobs(blob_ids)
+
+    def load_workspace_content(self, file_ids: Iterable[str]) -> dict[str, bytes]:
+        snapshot = self.load_snapshot()
+        file_by_id = {record.file_id: record for record in snapshot.document.files}
+        content_by_file_id: dict[str, bytes] = {}
+
+        for file_id in file_ids:
+            record = file_by_id.get(file_id)
+            if record is None:
+                raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+            if record.status != "active":
+                raise ValueError(f"workspace file is not active: {file_id}")
+            content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            content_by_file_id[file_id] = content_path.read_bytes()
+
+        return content_by_file_id
 
     def cleanup_failed_commit(self, *, normalized_at: int) -> DesktopCommitCleanupResult:
         with closing(self.workspace._open_connection()) as connection:
@@ -212,6 +235,24 @@ class DesktopSyncService:
             prepared=prepared,
             network=network,
             finalized=finalized,
+        )
+
+    def submit_workspace_commit(
+        self,
+        *,
+        created_at: int,
+        file_ids: Iterable[str],
+        encrypted_blob_by_file_id: Mapping[str, bytes],
+        commit_intent_id: Optional[str] = None,
+        cleanup_normalized_at: Optional[int] = None,
+    ) -> DesktopCommitSessionResult:
+        requested_file_ids = list(file_ids)
+        return self.submit_commit(
+            created_at=created_at,
+            content_by_file_id=self.load_workspace_content(requested_file_ids),
+            encrypted_blob_by_file_id=encrypted_blob_by_file_id,
+            commit_intent_id=commit_intent_id,
+            cleanup_normalized_at=cleanup_normalized_at,
         )
 
 
