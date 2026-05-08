@@ -2163,6 +2163,44 @@ class DesktopSyncServiceTests(unittest.TestCase):
                     encrypted_blob_by_file_id={"file-live": encrypted_payload},
                 )
 
+    def test_submit_workspace_commit_promotes_and_rejects_unresolved_conflict_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            snapshot = service.load_snapshot()
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                snapshot.document.replace_files(
+                    [
+                        *snapshot.document.files,
+                        FileRecord(
+                            file_id="file-conflict",
+                            path="Notes/Live (conflict 2026-04-29 Desktop-Win).md",
+                            type="note",
+                            status="conflict_copy",
+                            updated_at=1770000040200,
+                            content_hash="sha256:conflict",
+                            conflict_source_file_id="file-live",
+                        ),
+                    ],
+                    updated_at=1770000040200,
+                ),
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "document contains unresolved conflict_copy entries",
+            ):
+                service.submit_workspace_commit(
+                    created_at=1770000040300,
+                    file_ids=["file-live"],
+                )
+
+            reloaded = service.load_snapshot()
+            self.assertTrue(reloaded.state.has_unresolved_conflicts)
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertIsNone(load_commit_intent_journal(connection, "vault-001"))
+
     def test_load_worker_state_and_health_routes_workspace_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, _, _ = self._seed_workspace(Path(tmpdir))

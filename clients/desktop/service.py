@@ -836,6 +836,24 @@ class DesktopSyncService:
             upsert_vault_state(connection, replace(state, has_unresolved_conflicts=True))
         return conflict_path
 
+    def _promote_unresolved_conflict_state_if_needed(
+        self,
+        snapshot: DesktopWorkspaceSnapshot,
+    ) -> DesktopWorkspaceSnapshot:
+        if snapshot.state.has_unresolved_conflicts:
+            return snapshot
+        if not any(record.status == "conflict_copy" for record in snapshot.document.files):
+            return snapshot
+
+        updated_state = replace(snapshot.state, has_unresolved_conflicts=True)
+        with closing(self.workspace._open_connection()) as connection:
+            upsert_vault_state(connection, updated_state)
+        return DesktopWorkspaceSnapshot(
+            document=snapshot.document,
+            state=updated_state,
+            tombstones=snapshot.tombstones,
+        )
+
     def apply_staged_pull_plan(
         self,
         plan: DesktopPullApplyPlan,
@@ -1356,6 +1374,7 @@ class DesktopSyncService:
         encrypted_blob_by_file_id: Optional[Mapping[str, bytes]] = None,
         commit_intent_id: Optional[str] = None,
     ) -> DesktopPreparedCommit:
+        snapshot = self._promote_unresolved_conflict_state_if_needed(snapshot)
         resolved_commit_intent_id = commit_intent_id or str(uuid4())
         resolved_encrypted_blob_by_file_id = (
             self.blob_crypto_provider.build_encrypted_blob_map(content_by_file_id)

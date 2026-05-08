@@ -2585,6 +2585,67 @@ class VaultCoreStorageTests(unittest.TestCase):
                         created_at=1770000018402,
                     )
 
+    def test_prepare_commit_submission_rejects_unresolved_conflict_copy_entries(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000018400,
+            files=[
+                FileRecord(
+                    file_id="file_live",
+                    path="Notes/Live.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000018390,
+                    content_hash="sha256:live",
+                    meta={
+                        "blob_id": "blob_live",
+                        "size": 128,
+                        "mtime": 1770000018380,
+                    },
+                ),
+                FileRecord(
+                    file_id="file_conflict",
+                    path="Notes/Live (conflict 2026-04-29 Desktop-Win).md",
+                    type="note",
+                    status="conflict_copy",
+                    updated_at=1770000018391,
+                    content_hash="sha256:conflict",
+                    conflict_source_file_id="file_live",
+                ),
+            ],
+        )
+        valid_state = VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=7,
+            remote_head_revision=7,
+            acked_revision=7,
+            pending_ack_to_server=[],
+            commit_in_progress=False,
+            last_manifest_summary="sha256:head7",
+            last_manifest_summary_status="valid",
+            local_delete_sequence=2,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with closing(open_database(Path(tmpdir) / "conflict.sqlite3")) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(connection, valid_state)
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "document contains unresolved conflict_copy entries",
+                ):
+                    prepare_commit_submission(
+                        connection,
+                        state=valid_state,
+                        document=document,
+                        tombstones=[],
+                        commit_intent_id="intent_conflict",
+                        created_by_device="desktop-shanghai",
+                        created_at=1770000018403,
+                    )
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
     def test_finalize_commit_manifest_sets_committed_revision_and_summary(self) -> None:
         manifest = ManifestRecord(
             vault_id="vault_pkb_001",
