@@ -74,6 +74,20 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   --encrypted-map .\encrypted-map.json
 ```
 
+`submit-workspace-commit` reads the selected plain content directly from the current vault files, so only encrypted blob payloads still need to be provided:
+
+```powershell
+$env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
+  --vault-root C:\vaults\pkb `
+  --base-url https://sync.example.com `
+  --vault-id vault-001 `
+  --device-id desktop-shanghai `
+  submit-workspace-commit `
+  --created-at 1770000100300 `
+  --file-id file-live `
+  --encrypted-dir .\encrypted-blobs
+```
+
 `download-blobs` returns `downloaded_blobs_base64` on stdout:
 
 ```powershell

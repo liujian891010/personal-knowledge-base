@@ -76,6 +76,14 @@ def _load_base64_payload_map(path: Path) -> dict[str, bytes]:
     return decoded
 
 
+def _load_payload_dir(file_ids: Sequence[str], path: Path, *, suffix: str) -> dict[str, bytes]:
+    decoded: dict[str, bytes] = {}
+    for file_id in file_ids:
+        payload_path = path / f"{file_id}{suffix}"
+        decoded[file_id] = payload_path.read_bytes()
+    return decoded
+
+
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pkb-desktop-sync")
     parser.add_argument("--vault-root", required=True)
@@ -120,6 +128,15 @@ def create_parser() -> argparse.ArgumentParser:
     submit_parser.add_argument("--cleanup-normalized-at", type=int)
     submit_parser.add_argument("--content-map", required=True)
     submit_parser.add_argument("--encrypted-map", required=True)
+
+    submit_workspace_parser = subparsers.add_parser("submit-workspace-commit")
+    submit_workspace_parser.add_argument("--created-at", type=int, required=True)
+    submit_workspace_parser.add_argument("--file-id", action="append", dest="file_ids", required=True)
+    submit_workspace_parser.add_argument("--commit-intent-id")
+    submit_workspace_parser.add_argument("--cleanup-normalized-at", type=int)
+    encrypted_group = submit_workspace_parser.add_mutually_exclusive_group(required=True)
+    encrypted_group.add_argument("--encrypted-map")
+    encrypted_group.add_argument("--encrypted-dir")
     return parser
 
 
@@ -186,6 +203,22 @@ def run_cli(
             cleanup_normalized_at=args.cleanup_normalized_at,
             content_by_file_id=_load_base64_payload_map(Path(args.content_map)),
             encrypted_blob_by_file_id=_load_base64_payload_map(Path(args.encrypted_map)),
+        )
+    elif args.command == "submit-workspace-commit":
+        if args.encrypted_map:
+            encrypted_blob_by_file_id = _load_base64_payload_map(Path(args.encrypted_map))
+        else:
+            encrypted_blob_by_file_id = _load_payload_dir(
+                args.file_ids,
+                Path(args.encrypted_dir),
+                suffix=".blob",
+            )
+        result = service.submit_workspace_commit(
+            created_at=args.created_at,
+            file_ids=args.file_ids,
+            commit_intent_id=args.commit_intent_id,
+            cleanup_normalized_at=args.cleanup_normalized_at,
+            encrypted_blob_by_file_id=encrypted_blob_by_file_id,
         )
     else:
         raise ValueError(f"unsupported command: {args.command}")

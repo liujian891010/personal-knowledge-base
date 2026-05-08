@@ -116,6 +116,9 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
         payload = b"# Live note\n"
         encrypted_payload = b"x" * (len(payload) + 16)
+        live_note_path = root / "Notes" / "Live.md"
+        live_note_path.parent.mkdir(parents=True, exist_ok=True)
+        live_note_path.write_bytes(payload)
         document = FileMapDocument(
             vault_id="vault-001",
             updated_at=1770000030100,
@@ -158,6 +161,14 @@ class DesktopSyncServiceTests(unittest.TestCase):
             )
 
         return service, api_opener, blob_opener, payload, encrypted_payload
+
+    def test_load_workspace_content_reads_file_bytes_from_vault_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
+
+            content_by_file_id = service.load_workspace_content(["file-live"])
+
+            self.assertEqual(content_by_file_id, {"file-live": payload})
 
     def test_prepare_commit_materializes_snapshot_and_blob_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -256,6 +267,29 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 self.assertIsNotNone(state)
                 self.assertEqual(state.last_applied_revision, 7)
                 self.assertFalse(state.commit_in_progress)
+
+    def test_submit_workspace_commit_reads_workspace_files_before_submit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, payload, encrypted_payload = self._seed_workspace(Path(tmpdir))
+
+            result = service.submit_workspace_commit(
+                created_at=1770000030200,
+                file_ids=["file-live"],
+                commit_intent_id="intent-001",
+                encrypted_blob_by_file_id={"file-live": encrypted_payload},
+            )
+
+            self.assertEqual(result.network.commit.status, "committed")
+            self.assertEqual(
+                [call[0:2] for call in api_opener.calls],
+                [
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/check"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/upload-init"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/commits"),
+                ],
+            )
+            self.assertEqual(blob_opener.calls[0][2], encrypted_payload)
+            self.assertEqual((Path(tmpdir) / "Notes" / "Live.md").read_bytes(), payload)
 
 
 if __name__ == "__main__":
