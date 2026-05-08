@@ -793,6 +793,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             with closing(open_database(service.workspace.paths.db_path)) as connection:
                 self.assertEqual(load_sync_apply_journal(connection, "vault-001"), staged.journal)
+            self.assertFalse(service.workspace.paths.sync_apply_plan_path.exists())
 
     def test_stage_pull_required_plaintext_for_apply_skips_empty_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -864,6 +865,10 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(staged.written_staging_paths, {})
             with closing(open_database(service.workspace.paths.db_path)) as connection:
                 self.assertEqual(load_sync_apply_journal(connection, "vault-001"), staged.journal)
+            self.assertEqual(
+                service._load_pull_apply_plan_file(),
+                apply_plan,
+            )
 
     def test_build_pull_apply_plan_emits_write_move_and_delete_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1231,6 +1236,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             self.assertFalse(staging_path.exists())
             self.assertEqual(finalized.removed_staging_paths, [staging_path])
+            self.assertIsNone(finalized.removed_plan_path)
             self.assertEqual(finalized.state.last_applied_revision, 8)
             self.assertEqual(finalized.state.acked_revision, 8)
             self.assertEqual(finalized.state.pending_ack_to_server, [8])
@@ -1297,6 +1303,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 {
                     "state": service.load_snapshot().state,
                     "removed_staging_paths": [],
+                    "removed_plan_path": None,
                 },
             )()
 
@@ -1351,6 +1358,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 {
                     "state": service.load_snapshot().state,
                     "removed_staging_paths": [],
+                    "removed_plan_path": None,
                 },
             )()
 
@@ -1378,6 +1386,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertIsNone(recovered.journal_phase)
             self.assertIsNone(recovered.state)
             self.assertEqual(recovered.removed_staging_paths, [])
+            self.assertIsNone(recovered.removed_plan_path)
 
     def test_resume_pull_apply_recovery_finalizes_finalizing_journal(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1409,6 +1418,71 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(recovered.state.last_applied_revision, 8)
             self.assertEqual(recovered.state.pending_ack_to_server, [8])
             self.assertEqual(recovered.removed_staging_paths, [staging_path])
+            self.assertIsNone(recovered.removed_plan_path)
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
+
+    def test_resume_pull_apply_recovery_replays_staging_with_persisted_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            path_a = root / "Notes" / "A.md"
+            path_b = root / "Notes" / "B.md"
+            path_a.write_bytes(b"# A\n")
+            path_b.write_bytes(b"# B\n")
+
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[],
+                moves=[
+                    DesktopPullApplyMoveFile(
+                        file_id="file-a",
+                        source_path="Notes/A.md",
+                        target_path="Notes/B.md",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# A\n").hexdigest(),
+                    ),
+                    DesktopPullApplyMoveFile(
+                        file_id="file-b",
+                        source_path="Notes/B.md",
+                        target_path="Notes/A.md",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# B\n").hexdigest(),
+                    ),
+                ],
+                deletes=[],
+                blocking_paths=["Notes/A.md", "Notes/B.md"],
+                ops_hash="sha256:ops8",
+            )
+            service._write_pull_apply_plan_file(plan)
+
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(
+                    connection,
+                    SyncApplyJournalRecord(
+                        vault_id="vault-001",
+                        journal_id="journal-1",
+                        target_revision=8,
+                        target_manifest_hash="sha256:head8",
+                        phase="staging",
+                        ops_hash="sha256:ops8",
+                        created_at=1770000040100,
+                        updated_at=1770000040200,
+                    ),
+                )
+
+            recovered = service.resume_pull_apply_recovery(normalized_at=1770000040300)
+
+            self.assertEqual(recovered.mode, "replayed")
+            self.assertEqual(recovered.journal_phase, "staging")
+            self.assertEqual(path_a.read_bytes(), b"# B\n")
+            self.assertEqual(path_b.read_bytes(), b"# A\n")
+            self.assertEqual(recovered.state.last_applied_revision, 8)
+            self.assertEqual(recovered.state.pending_ack_to_server, [8])
+            self.assertEqual(recovered.removed_staging_paths, [])
+            self.assertEqual(recovered.removed_plan_path, service.workspace.paths.sync_apply_plan_path)
+            self.assertFalse(service.workspace.paths.sync_apply_plan_path.exists())
             with closing(open_database(service.workspace.paths.db_path)) as connection:
                 self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
 

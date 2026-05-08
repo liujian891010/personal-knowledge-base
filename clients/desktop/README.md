@@ -36,6 +36,8 @@ Add `--apply` to run the fuller pull apply boundary, including the current two-p
 
 Use `recover-pull-apply --normalized-at ...` when a previous pull apply left `sync_apply_journal` behind. The current recovery fast-path finalizes journals already in `materializing`, `filemap_rewrite`, or `finalizing` when the workspace content already matches the target filemap state.
 
+During `pull --apply` / `pull --apply-nonblocking`, the desktop client now also persists a local `.noteapp/sync-apply-plan.json` replay plan. That lets `recover-pull-apply` re-run interrupted `staging` / `materializing` work instead of only handling final journal cleanup.
+
 `sync-once` is the current one-shot automation boundary:
 
 ```powershell

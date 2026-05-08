@@ -39,6 +39,7 @@ from .worker_state import (
 
 STATE_DB_FILENAME = "state.sqlite3"
 SYNC_WORKER_STATE_FILENAME = "sync-worker-state.json"
+SYNC_APPLY_PLAN_FILENAME = "sync-apply-plan.json"
 
 
 def _require_matching_vault(expected_vault_id: str, actual_vault_id: str, label: str) -> None:
@@ -56,6 +57,7 @@ class DesktopVaultPaths:
     ledger_path: Path
     db_path: Path
     worker_state_path: Path
+    sync_apply_plan_path: Path
 
     @classmethod
     def from_root(
@@ -71,6 +73,7 @@ class DesktopVaultPaths:
             ledger_path=noteapp_root / TOMBSTONE_LEDGER_FILENAME,
             db_path=noteapp_root / STATE_DB_FILENAME if db_path is None else db_path,
             worker_state_path=noteapp_root / SYNC_WORKER_STATE_FILENAME,
+            sync_apply_plan_path=noteapp_root / SYNC_APPLY_PLAN_FILENAME,
         )
 
 
