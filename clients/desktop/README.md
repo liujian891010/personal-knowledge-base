@@ -1,3 +1,3 @@
 # desktop
 
-Desktop client runtime assembly for AG05 sync flows.
+Desktop client runtime and workspace assembly for AG05 sync flows.
