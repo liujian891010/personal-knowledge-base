@@ -32,6 +32,7 @@ from .service import (
     DesktopSyncService,
     build_desktop_sync_service,
 )
+from .timing import DesktopSyncTimePlan, resolve_desktop_sync_time_plan
 from .workspace import (
     DesktopVaultPaths,
     DesktopVaultWorkspace,
@@ -59,6 +60,7 @@ __all__ = [
     "DesktopSyncService",
     "build_desktop_sync_runner",
     "build_cli_service",
+    "DesktopSyncTimePlan",
     "DesktopVaultPaths",
     "DesktopVaultWorkspace",
     "DesktopWorkspaceSnapshot",
@@ -69,4 +71,5 @@ __all__ = [
     "build_desktop_sync_runtime",
     "build_desktop_sync_session",
     "build_desktop_vault_workspace",
+    "resolve_desktop_sync_time_plan",
 ]
