@@ -30,6 +30,15 @@ def _compute_content_hash(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def _build_source_version_token(
+    *,
+    content_hash: str,
+    size_bytes: int,
+    mtime_ms: int,
+) -> str:
+    return f"mtime:{mtime_ms}:size:{size_bytes}:hash:{content_hash}"
+
+
 def _infer_file_type(relative_path: str) -> str:
     normalized = PurePosixPath(relative_path)
     if normalized == PurePosixPath(".ai/index.md"):
@@ -310,6 +319,11 @@ def build_tracked_change_commit_plan(
                 "size": size_bytes,
                 "mtime": mtime_ms,
                 "mime_type": _resolve_mime_type(record, relative_path),
+                "source_version_token": _build_source_version_token(
+                    content_hash=content_hash,
+                    size_bytes=size_bytes,
+                    mtime_ms=mtime_ms,
+                ),
             }
         )
         updated_files.append(
@@ -372,6 +386,11 @@ def build_tracked_change_commit_plan(
                     "size": len(payload),
                     "mtime": mtime_ms,
                     "mime_type": _resolve_mime_type(record, relative_path),
+                    "source_version_token": _build_source_version_token(
+                        content_hash=content_hash,
+                        size_bytes=len(payload),
+                        mtime_ms=mtime_ms,
+                    ),
                 }
             )
             rewritten_files.append(
@@ -449,6 +468,11 @@ def build_tracked_change_commit_plan(
                         "size": len(payload),
                         "mtime": mtime_ms,
                         "mime_type": mimetypes.guess_type(relative_path)[0],
+                        "source_version_token": _build_source_version_token(
+                            content_hash=content_hash,
+                            size_bytes=len(payload),
+                            mtime_ms=mtime_ms,
+                        ),
                     },
                 )
             )

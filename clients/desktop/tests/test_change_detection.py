@@ -157,6 +157,10 @@ class DesktopChangeDetectionTests(unittest.TestCase):
             self.assertEqual(plan.content_by_file_id, {"file-tracked": payload})
             self.assertEqual(plan.document.files[0].meta["mime_type"], "text/markdown")
             self.assertEqual(
+                plan.document.files[0].meta["source_version_token"],
+                f"mtime:{plan.document.files[0].meta['mtime']}:size:{len(payload)}:hash:{plan.document.files[0].content_hash}",
+            )
+            self.assertEqual(
                 plan.document.files[0].meta["blob_id"],
                 build_placeholder_blob_id(plan.document.files[0].content_hash),
             )
@@ -228,6 +232,10 @@ class DesktopChangeDetectionTests(unittest.TestCase):
             self.assertEqual(len(plan.document.files), 1)
             self.assertEqual(plan.document.files[0].path, "Notes/New.md")
             UUID(plan.document.files[0].file_id)
+            self.assertEqual(
+                plan.document.files[0].meta["source_version_token"],
+                f"mtime:{plan.document.files[0].meta['mtime']}:size:{len(payload)}:hash:{plan.document.files[0].content_hash}",
+            )
             self.assertEqual(plan.content_by_file_id[plan.document.files[0].file_id], payload)
 
     def test_build_tracked_change_commit_plan_supports_injected_file_and_blob_id_builders(self) -> None:
@@ -284,6 +292,10 @@ class DesktopChangeDetectionTests(unittest.TestCase):
             self.assertEqual(plan.document.files[0].path, "Notes/Renamed.md")
             self.assertEqual(plan.document.files[0].status, "active")
             self.assertEqual(plan.document.files[0].meta["blob_id"], "blob-live")
+            self.assertEqual(
+                plan.document.files[0].meta["source_version_token"],
+                f"mtime:{plan.document.files[0].meta['mtime']}:size:{len(payload)}:hash:{plan.document.files[0].content_hash}",
+            )
             self.assertEqual(plan.tombstones, [])
             self.assertEqual(plan.content_by_file_id, {"file-live": payload})
 
