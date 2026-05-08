@@ -86,6 +86,7 @@ from .sync_client import (
     CommitSubmissionExecutionResult,
     CreateCommitExecutionResult,
     ResolveCommitIntentExecutionResult,
+    SubmittedResolveIntentRecoveryExecutionResult,
     SyncBlobUploader,
     SyncCommitTransport,
     SyncHttpJsonResponse,
@@ -94,6 +95,7 @@ from .sync_client import (
     execute_create_commit,
     execute_commit_submission,
     execute_resolve_commit_intent,
+    execute_submitted_recovery_via_resolve_intent,
 )
 from .sync_commit import (
     CommitRecoveryPlan,
@@ -240,6 +242,7 @@ __all__ = [
     "CommitSubmissionExecutionResult",
     "CreateCommitExecutionResult",
     "ResolveCommitIntentExecutionResult",
+    "SubmittedResolveIntentRecoveryExecutionResult",
     "SyncBlobUploader",
     "SyncCommitTransport",
     "SyncHttpJsonResponse",
@@ -288,6 +291,7 @@ __all__ = [
     "execute_create_commit",
     "execute_commit_submission",
     "execute_resolve_commit_intent",
+    "execute_submitted_recovery_via_resolve_intent",
     "finalize_commit_manifest",
     "finalize_commit_submission",
     "finalize_commit_submission_cleanup",

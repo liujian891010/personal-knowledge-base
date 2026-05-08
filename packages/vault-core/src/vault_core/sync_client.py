@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
-from typing import Mapping, Optional, Protocol
+from pathlib import Path
+from typing import Iterable, Mapping, Optional, Protocol
 
-from .models import CommitIntentJournalRecord, ManifestRecord
+from .models import CommitIntentJournalRecord, ManifestRecord, TombstoneRecord
+from .sqlite_store import load_commit_intent_journal, recover_submitted_commit_miss
+from .sync_apply import SubmittedRecoveryResult, recover_submitted_commit_flow
 from .sync_api import (
     BlobUploadCapability,
     BlobUploadInitRequestPayload,
@@ -117,6 +121,12 @@ class ResolveCommitIntentExecutionResult:
     response: ResolveCommitIntentResponsePayload
     matched_manifest: Optional[ManifestRecord] = None
     matched_manifest_missing: bool = False
+
+
+@dataclass(frozen=True)
+class SubmittedResolveIntentRecoveryExecutionResult:
+    resolved: ResolveCommitIntentExecutionResult
+    recovery: SubmittedRecoveryResult
 
 
 def _require_status(response: SyncHttpJsonResponse, expected_status: int, label: str) -> None:
@@ -258,6 +268,64 @@ def execute_resolve_commit_intent(
         request=request,
         response=response,
         matched_manifest=matched_manifest,
+    )
+
+
+def execute_submitted_recovery_via_resolve_intent(
+    transport: SyncCommitTransport,
+    connection: sqlite3.Connection,
+    *,
+    ledger_path: Path,
+    vault_id: str,
+    local_tombstones: Iterable[TombstoneRecord],
+    normalized_at: int,
+) -> SubmittedResolveIntentRecoveryExecutionResult:
+    journal = load_commit_intent_journal(connection, vault_id)
+    if journal is None:
+        raise KeyError(f"commit_intent_journal not found: {vault_id}")
+    if journal.status not in {"submitted", "acknowledged"}:
+        raise ValueError("submitted or acknowledged journal is required for resolve-intent recovery")
+
+    local_tombstone_list = list(local_tombstones)
+    resolved = execute_resolve_commit_intent(transport, journal)
+    observed_head_revision = resolved.response.observed_head_revision
+    if observed_head_revision is None:
+        raise ValueError("resolve-intent response must include observed_head_revision for submitted recovery")
+
+    if resolved.response.status == "mismatched":
+        raise ValueError("resolve-intent reported mismatched status for submitted recovery")
+
+    if resolved.response.status == "not_found":
+        recovery = SubmittedRecoveryResult(
+            state=recover_submitted_commit_miss(
+                connection,
+                vault_id,
+                normalized_at=normalized_at,
+            ),
+            tombstones=local_tombstone_list,
+            requires_full_pull=False,
+        )
+        return SubmittedResolveIntentRecoveryExecutionResult(
+            resolved=resolved,
+            recovery=recovery,
+        )
+
+    matched_revision = resolved.response.matched_revision
+    if matched_revision is None:
+        raise ValueError("resolve-intent found status must include matched_revision")
+    recovery = recover_submitted_commit_flow(
+        connection,
+        ledger_path=ledger_path,
+        vault_id=vault_id,
+        local_tombstones=local_tombstone_list,
+        matched_revision=matched_revision,
+        observed_head_revision=observed_head_revision,
+        normalized_at=normalized_at,
+        matched_manifest=resolved.matched_manifest,
+    )
+    return SubmittedResolveIntentRecoveryExecutionResult(
+        resolved=resolved,
+        recovery=recovery,
     )
 
 

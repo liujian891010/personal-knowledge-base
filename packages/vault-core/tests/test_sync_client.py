@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from vault_core import (
@@ -19,6 +21,7 @@ from vault_core import (
     CommitSubmissionBundle,
     ResolveCommitIntentExecutionResult,
     ResolveCommitIntentResponsePayload,
+    SubmittedResolveIntentRecoveryExecutionResult,
     CreateCommitBlobRef,
     CreateCommitExecutionResult,
     CreateCommitRequestPayload,
@@ -26,12 +29,22 @@ from vault_core import (
     ManifestFileEntry,
     ManifestRecord,
     SyncHttpJsonResponse,
+    TombstoneRecord,
     VaultStateRecord,
+    bootstrap_database,
+    compute_manifest_summary_hash,
+    load_commit_intent_journal,
+    load_tombstone_ledger,
+    load_vault_state,
+    open_database,
+    upsert_commit_intent_journal,
+    upsert_vault_state,
     execute_blob_uploads,
     execute_commit_preflight,
     execute_create_commit,
     execute_commit_submission,
     execute_resolve_commit_intent,
+    execute_submitted_recovery_via_resolve_intent,
 )
 
 
@@ -598,6 +611,224 @@ class SyncClientTests(unittest.TestCase):
             self.assertIsNone(result.matched_manifest)
             self.assertFalse(result.matched_manifest_missing)
             self.assertEqual([call[0] for call in transport.calls], ["resolve_commit_intent"])
+
+    def test_execute_submitted_recovery_via_resolve_intent_recovers_found_commit(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            resolve_commit_intent=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "status": "found",
+                    "matched_revision": 8,
+                    "observed_head_revision": 10,
+                    "head_manifest_summary": "sha256:head10",
+                },
+            ),
+            manifest=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "vault_id": "vault_pkb_001",
+                    "revision": 8,
+                    "base_revision": 7,
+                    "created_by_device": "desktop-shanghai",
+                    "created_at": 1770000020000,
+                    "summary_hash": "sha256:head8",
+                    "files": [],
+                    "tombstones": [],
+                },
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "tombstone-ledger.jsonl"
+            db_path = Path(tmpdir) / "state.sqlite3"
+            tombstones = [
+                TombstoneRecord(
+                    file_id="file_hit",
+                    deleted_revision=None,
+                    deleted_at=1770000019990,
+                    local_delete_seq=2,
+                    last_known_path="Notes/Hit.md",
+                )
+            ]
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[4],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=2,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=2,
+                        created_at=1770000019995,
+                        updated_at=1770000019995,
+                    ),
+                )
+
+                result = execute_submitted_recovery_via_resolve_intent(
+                    transport,
+                    connection,
+                    ledger_path=ledger_path,
+                    vault_id="vault_pkb_001",
+                    local_tombstones=tombstones,
+                    normalized_at=1770000020001,
+                )
+
+                self.assertIsInstance(result, SubmittedResolveIntentRecoveryExecutionResult)
+                self.assertEqual(result.resolved.response.status, "found")
+                self.assertEqual(result.recovery.state.last_applied_revision, 8)
+                self.assertEqual(result.recovery.state.remote_head_revision, 10)
+                self.assertEqual(result.recovery.state.acked_revision, 8)
+                self.assertEqual(
+                    result.recovery.state.last_manifest_summary,
+                    compute_manifest_summary_hash(result.resolved.matched_manifest),
+                )
+                self.assertEqual(
+                    [(item.file_id, item.deleted_revision) for item in load_tombstone_ledger(ledger_path)],
+                    [("file_hit", 8)],
+                )
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_execute_submitted_recovery_via_resolve_intent_recovers_not_found_commit(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            resolve_commit_intent=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "status": "not_found",
+                    "observed_head_revision": 10,
+                    "head_manifest_summary": "sha256:head10",
+                },
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "tombstone-ledger.jsonl"
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[4],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="acknowledged",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=1770000019995,
+                        updated_at=1770000019995,
+                    ),
+                )
+
+                result = execute_submitted_recovery_via_resolve_intent(
+                    transport,
+                    connection,
+                    ledger_path=ledger_path,
+                    vault_id="vault_pkb_001",
+                    local_tombstones=[],
+                    normalized_at=1770000020001,
+                )
+
+                state = load_vault_state(connection, "vault_pkb_001")
+                self.assertEqual(result.resolved.response.status, "not_found")
+                self.assertFalse(result.recovery.requires_full_pull)
+                self.assertEqual(state.last_applied_revision, 7)
+                self.assertFalse(state.commit_in_progress)
+                self.assertIsNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+
+    def test_execute_submitted_recovery_via_resolve_intent_rejects_mismatched_status(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            resolve_commit_intent=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "status": "mismatched",
+                    "observed_head_revision": 10,
+                    "head_manifest_summary": "sha256:head10",
+                },
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "tombstone-ledger.jsonl"
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=1770000019995,
+                        updated_at=1770000019995,
+                    ),
+                )
+
+                with self.assertRaisesRegex(ValueError, "mismatched status"):
+                    execute_submitted_recovery_via_resolve_intent(
+                        transport,
+                        connection,
+                        ledger_path=ledger_path,
+                        vault_id="vault_pkb_001",
+                        local_tombstones=[],
+                        normalized_at=1770000020001,
+                    )
+
+                self.assertIsNotNone(load_commit_intent_journal(connection, "vault_pkb_001"))
+                self.assertTrue(load_vault_state(connection, "vault_pkb_001").commit_in_progress)
 
 
 if __name__ == "__main__":
