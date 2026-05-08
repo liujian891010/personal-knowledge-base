@@ -1526,6 +1526,163 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(conflict_records[0].conflict_source_file_id, "file-move")
             self.assertEqual((root / conflict_records[0].path).read_bytes(), b"# local dirty move\n")
 
+    def test_apply_staged_pull_plan_reuses_materialized_dirty_move_when_staging_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            move_source = root / "Notes" / "Move-old.md"
+            move_source.write_bytes(b"# local dirty move\n")
+            move_target = root / "Notes" / "Move-new.md"
+            move_target.write_bytes(b"# canonical move\n")
+
+            snapshot = service.load_snapshot()
+            document = snapshot.document.replace_files(
+                [
+                    *snapshot.document.files,
+                    FileRecord(
+                        file_id="file-move",
+                        path="Notes/Move-new.md",
+                        type="note",
+                        status="active",
+                        updated_at=1770000040150,
+                        content_hash="sha256:" + hashlib.sha256(b"# canonical move\n").hexdigest(),
+                        last_known_revision=8,
+                    ),
+                ],
+                updated_at=1770000040150,
+            )
+            write_filemap_atomic(service.workspace.paths.filemap_path, document)
+
+            journal = SyncApplyJournalRecord(
+                vault_id="vault-001",
+                journal_id="journal-1",
+                target_revision=8,
+                target_manifest_hash="sha256:head8",
+                phase="staging",
+                ops_hash="sha256:old",
+                created_at=1770000040100,
+                updated_at=1770000040100,
+            )
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(connection, journal)
+
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[],
+                moves=[
+                    DesktopPullApplyMoveFile(
+                        file_id="file-move",
+                        source_path="Notes/Move-old.md",
+                        target_path="Notes/Move-new.md",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# canonical move\n").hexdigest(),
+                    )
+                ],
+                deletes=[],
+                blocking_paths=[],
+                ops_hash="sha256:ops8",
+            )
+            staged = DesktopPullApplyStagingResult(
+                journal=journal,
+                written_staging_paths={},
+            )
+
+            execution = service.apply_staged_pull_plan(
+                plan,
+                staged,
+                materialized_at=1770000040200,
+            )
+            snapshot = service.load_snapshot()
+            conflict_records = [record for record in snapshot.document.files if record.status == "conflict_copy"]
+
+            self.assertFalse(move_source.exists())
+            self.assertEqual(move_target.read_bytes(), b"# canonical move\n")
+            self.assertEqual(execution.moved_paths, {"file-move": move_target})
+            self.assertTrue(snapshot.state.has_unresolved_conflicts)
+            self.assertEqual(len(conflict_records), 1)
+            self.assertEqual(conflict_records[0].conflict_source_file_id, "file-move")
+            self.assertEqual((root / conflict_records[0].path).read_bytes(), b"# local dirty move\n")
+
+    def test_apply_staged_pull_plan_reuses_materialized_blocking_dirty_move_when_staging_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            source_path = root / "Notes" / "A.md"
+            target_path = root / "Notes" / "B.md"
+            source_path.write_bytes(b"# local dirty A\n")
+            target_path.write_bytes(b"# A\n")
+            snapshot = service.load_snapshot()
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                snapshot.document.replace_files(
+                    [
+                        *snapshot.document.files,
+                        FileRecord(
+                            file_id="file-a",
+                            path="Notes/A.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000040150,
+                            content_hash="sha256:" + hashlib.sha256(b"# A\n").hexdigest(),
+                            last_known_revision=8,
+                        ),
+                    ],
+                    updated_at=1770000040150,
+                ),
+            )
+
+            journal = SyncApplyJournalRecord(
+                vault_id="vault-001",
+                journal_id="journal-1",
+                target_revision=8,
+                target_manifest_hash="sha256:head8",
+                phase="staging",
+                ops_hash="sha256:old",
+                created_at=1770000040100,
+                updated_at=1770000040100,
+            )
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(connection, journal)
+
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[],
+                moves=[
+                    DesktopPullApplyMoveFile(
+                        file_id="file-a",
+                        source_path="Notes/A.md",
+                        target_path="Notes/B.md",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# A\n").hexdigest(),
+                    )
+                ],
+                deletes=[],
+                blocking_paths=["Notes/A.md", "Notes/B.md"],
+                ops_hash="sha256:ops8",
+            )
+            staged = DesktopPullApplyStagingResult(
+                journal=journal,
+                written_staging_paths={},
+            )
+
+            execution = service.apply_staged_pull_plan(
+                plan,
+                staged,
+                materialized_at=1770000040200,
+            )
+            snapshot = service.load_snapshot()
+            conflict_records = [record for record in snapshot.document.files if record.status == "conflict_copy"]
+
+            self.assertFalse(source_path.exists())
+            self.assertEqual(target_path.read_bytes(), b"# A\n")
+            self.assertEqual(execution.moved_paths, {"file-a": target_path})
+            self.assertTrue(snapshot.state.has_unresolved_conflicts)
+            self.assertEqual(len(conflict_records), 1)
+            self.assertEqual(conflict_records[0].conflict_source_file_id, "file-a")
+            self.assertEqual((root / conflict_records[0].path).read_bytes(), b"# local dirty A\n")
+
     def test_finalize_applied_pull_plan_clears_journal_and_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
