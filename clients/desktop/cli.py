@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, TextIO
 
 from vault_core import BlobDownloadSessionResult
+from vault_core.constants import FILEMAP_FILENAME, NOTEAPP_DIRNAME
 
 from .runner import DesktopSyncRunner
 from .service import DesktopPullRequiredBlobResult
@@ -19,7 +20,7 @@ from .scheduler import (
     DesktopSyncScheduleConfig,
     DesktopSyncScheduler,
 )
-from .service import DesktopSyncService, build_desktop_sync_service
+from .service import DesktopSyncService, build_desktop_sync_service, inspect_vault_package
 from .sync_runtime import DesktopSyncHttpConfig
 from .timing import resolve_desktop_sync_time_plan
 from .workspace import DesktopVaultPaths
@@ -140,11 +141,20 @@ def _load_encrypted_blob_payloads(
     raise ValueError("encrypted payload source is required")
 
 
+def _infer_local_vault_id(vault_root: Path) -> str:
+    filemap_path = vault_root / NOTEAPP_DIRNAME / FILEMAP_FILENAME
+    payload = json.loads(filemap_path.read_text(encoding="utf-8"))
+    vault_id = payload.get("vault_id")
+    if not isinstance(vault_id, str) or not vault_id:
+        raise ValueError(f"vault_id not found in local filemap: {filemap_path}")
+    return vault_id
+
+
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pkb-desktop-sync")
     parser.add_argument("--vault-root", required=True)
     parser.add_argument("--base-url", required=True)
-    parser.add_argument("--vault-id", required=True)
+    parser.add_argument("--vault-id")
     parser.add_argument("--device-id", required=True)
     parser.add_argument("--bearer-token")
 
@@ -157,6 +167,8 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("detect-local-changes")
     subparsers.add_parser("worker-state")
     subparsers.add_parser("worker-health")
+    inspect_vault_parser = subparsers.add_parser("inspect-vault-package")
+    inspect_vault_parser.add_argument("--input-package", required=True)
     subparsers.add_parser("list-conflicts")
     export_vault_parser = subparsers.add_parser("export-vault")
     export_vault_parser.add_argument("--output-package", required=True)
@@ -287,13 +299,28 @@ def run_cli(
         else now_ms_provider
     )
 
+    vault_root = Path(args.vault_root)
+    if args.command == "inspect-vault-package":
+        result = inspect_vault_package(Path(args.input_package))
+        stdout.write(json.dumps(_to_jsonable(result), ensure_ascii=False, indent=2))
+        stdout.write("\n")
+        return 0
+
+    resolved_vault_id = args.vault_id
+    if not resolved_vault_id:
+        if args.command == "import-vault":
+            resolved_vault_id = inspect_vault_package(Path(args.input_package)).vault_id
+        elif args.command == "export-vault":
+            resolved_vault_id = _infer_local_vault_id(vault_root)
+        else:
+            raise ValueError(f"--vault-id is required for {args.command}")
+
     config = DesktopSyncHttpConfig(
         base_url=args.base_url,
-        vault_id=args.vault_id,
+        vault_id=resolved_vault_id,
         device_id=args.device_id,
         bearer_token=args.bearer_token,
     )
-    vault_root = Path(args.vault_root)
     service = service_builder(config, vault_root)
 
     if args.command == "init":

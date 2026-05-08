@@ -45,6 +45,7 @@ from .service import (
     DesktopCommitCleanupResult,
     DesktopVaultExportResult,
     DesktopVaultImportResult,
+    DesktopVaultPackageInspection,
     DesktopPullApplyStagingResult,
     DesktopPullApplyDeleteFile,
     DesktopPullApplyMoveFile,
@@ -62,6 +63,7 @@ from .service import (
     DesktopPullRequiredBlobResult,
     DesktopSyncService,
     build_desktop_sync_service,
+    inspect_vault_package,
 )
 from .timing import DesktopSyncTimePlan, resolve_desktop_sync_time_plan
 from .worker import (
@@ -94,6 +96,7 @@ __all__ = [
     "DesktopCommitCleanupResult",
     "DesktopVaultExportResult",
     "DesktopVaultImportResult",
+    "DesktopVaultPackageInspection",
     "DesktopPullApplyStagingResult",
     "DesktopPullApplyDeleteFile",
     "DesktopPullApplyMoveFile",
@@ -149,6 +152,7 @@ __all__ = [
     "build_desktop_sync_runtime",
     "build_desktop_sync_session",
     "build_desktop_vault_workspace",
+    "inspect_vault_package",
     "build_tracked_change_commit_plan",
     "detect_local_workspace_changes",
     "build_desktop_sync_worker_health",

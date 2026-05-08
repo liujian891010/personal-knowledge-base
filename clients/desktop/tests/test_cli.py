@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from clients.desktop import (
     DesktopPullRequiredBlobFile,
@@ -472,6 +473,24 @@ class DesktopCliTests(unittest.TestCase):
         )
         return exit_code, json.loads(stdout.getvalue())
 
+    def _write_package(self, package_path: Path, *, vault_id: str = "vault-001") -> None:
+        package_path.parent.mkdir(parents=True, exist_ok=True)
+        with ZipFile(package_path, "w", compression=ZIP_DEFLATED) as archive:
+            archive.writestr(".vaultinfo", json.dumps({"vault_id": vault_id}) + "\n")
+            archive.writestr(
+                ".noteapp/filemap.json",
+                json.dumps(
+                    {
+                        "schema_version": "v1",
+                        "vault_id": vault_id,
+                        "updated_at": 1770000040000,
+                        "files": [],
+                    }
+                )
+                + "\n",
+            )
+            archive.writestr(".noteapp/tombstone-ledger.jsonl", "")
+
     def test_init_command_builds_service_and_returns_json(self) -> None:
         exit_code, payload = self._run(
             "--vault-root",
@@ -591,6 +610,38 @@ class DesktopCliTests(unittest.TestCase):
             [("export-vault", "C:\\exports\\vault.zip", True)],
         )
 
+    def test_export_vault_command_can_infer_local_vault_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            vault_root = Path(tmpdir)
+            (vault_root / ".noteapp").mkdir(parents=True, exist_ok=True)
+            (vault_root / ".noteapp" / "filemap.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "v1",
+                        "vault_id": "vault-local",
+                        "updated_at": 1770000040000,
+                        "files": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            exit_code, _ = self._run(
+                "--vault-root",
+                str(vault_root),
+                "--base-url",
+                "https://sync.example.com",
+                "--device-id",
+                "desktop-shanghai",
+                "export-vault",
+                "--output-package",
+                "C:/exports/vault.zip",
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(self.created[0][0].vault_id, "vault-local")
+
     def test_import_vault_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(
             "--vault-root",
@@ -612,6 +663,49 @@ class DesktopCliTests(unittest.TestCase):
             self.service.calls,
             [("import-vault", "C:\\exports\\vault.zip")],
         )
+
+    def test_import_vault_command_can_infer_vault_id_from_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            package_path = Path(tmpdir) / "vault.zip"
+            self._write_package(package_path, vault_id="vault-imported")
+
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--device-id",
+                "desktop-shanghai",
+                "import-vault",
+                "--input-package",
+                str(package_path),
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["state"]["last_manifest_summary_status"], "stale")
+        self.assertEqual(self.created[0][0].vault_id, "vault-imported")
+
+    def test_inspect_vault_package_command_reads_package_without_building_service(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            package_path = Path(tmpdir) / "vault.zip"
+            self._write_package(package_path, vault_id="vault-inspected")
+
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--device-id",
+                "desktop-shanghai",
+                "inspect-vault-package",
+                "--input-package",
+                str(package_path),
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["vault_id"], "vault-inspected")
+        self.assertFalse(payload["includes_ai_raw"])
+        self.assertEqual(self.created, [])
 
     def test_list_conflicts_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(
