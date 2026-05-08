@@ -12,7 +12,11 @@ from typing import Any, Callable, Optional, Sequence, TextIO
 from vault_core import BlobDownloadSessionResult
 
 from .runner import DesktopSyncRunner
-from .scheduler import DesktopSyncScheduleConfig, DesktopSyncScheduler
+from .scheduler import (
+    DesktopSyncCycleScheduleConfig,
+    DesktopSyncScheduleConfig,
+    DesktopSyncScheduler,
+)
 from .service import DesktopSyncService, build_desktop_sync_service
 from .sync_runtime import DesktopSyncHttpConfig
 
@@ -146,6 +150,20 @@ def create_parser() -> argparse.ArgumentParser:
     sync_cycle_parser.add_argument("--encrypted-map")
     sync_cycle_parser.add_argument("--encrypted-dir")
 
+    sync_cycle_loop_parser = subparsers.add_parser("sync-cycle-loop")
+    sync_cycle_loop_parser.add_argument("--iterations", type=int, required=True)
+    sync_cycle_loop_parser.add_argument("--normalized-at", type=int, required=True)
+    sync_cycle_loop_parser.add_argument("--rewritten-at", type=int, required=True)
+    sync_cycle_loop_parser.add_argument("--interval-seconds", type=float, default=0.0)
+    sync_cycle_loop_parser.add_argument("--step-ms", type=int, default=0)
+    sync_cycle_loop_parser.add_argument("--now-ms", type=int)
+    sync_cycle_loop_parser.add_argument("--submit-created-at", type=int)
+    sync_cycle_loop_parser.add_argument("--file-id", action="append", dest="file_ids")
+    sync_cycle_loop_parser.add_argument("--commit-intent-id")
+    sync_cycle_loop_parser.add_argument("--cleanup-normalized-at", type=int)
+    sync_cycle_loop_parser.add_argument("--encrypted-map")
+    sync_cycle_loop_parser.add_argument("--encrypted-dir")
+
     download_parser = subparsers.add_parser("download-blobs")
     download_parser.add_argument("--blob-id", action="append", dest="blob_ids", required=True)
     download_parser.add_argument("--output-dir")
@@ -247,6 +265,48 @@ def run_cli(
             encrypted_blob_by_file_id=encrypted_blob_by_file_id,
             commit_intent_id=args.commit_intent_id,
             cleanup_normalized_at=args.cleanup_normalized_at,
+        )
+    elif args.command == "sync-cycle-loop":
+        should_submit = any(
+            value is not None
+            for value in (
+                args.submit_created_at,
+                args.file_ids,
+                args.commit_intent_id,
+                args.cleanup_normalized_at,
+                args.encrypted_map,
+                args.encrypted_dir,
+            )
+        )
+        encrypted_blob_by_file_id = None
+        if should_submit:
+            if args.submit_created_at is None:
+                raise ValueError("sync-cycle-loop submit step requires --submit-created-at")
+            if not args.file_ids:
+                raise ValueError("sync-cycle-loop submit step requires at least one --file-id")
+            if args.encrypted_map or args.encrypted_dir:
+                encrypted_blob_by_file_id = _load_encrypted_blob_payloads(
+                    args.file_ids,
+                    encrypted_map=args.encrypted_map,
+                    encrypted_dir=args.encrypted_dir,
+                )
+        result = DesktopSyncScheduler(
+            DesktopSyncRunner(service),
+            sleep=sleep,
+        ).run_cycle_loop(
+            DesktopSyncCycleScheduleConfig(
+                iterations=args.iterations,
+                init_now_ms=args.now_ms,
+                recovery_normalized_at=args.normalized_at,
+                submit_created_at=args.submit_created_at,
+                submit_file_ids=args.file_ids,
+                encrypted_blob_by_file_id=encrypted_blob_by_file_id,
+                commit_intent_id=args.commit_intent_id,
+                cleanup_normalized_at=args.cleanup_normalized_at,
+                pull_rewritten_at=args.rewritten_at,
+                interval_seconds=args.interval_seconds,
+                step_ms=args.step_ms,
+            )
         )
     elif args.command == "download-blobs":
         result = service.download_blobs(args.blob_ids)

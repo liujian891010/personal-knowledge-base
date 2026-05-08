@@ -72,6 +72,25 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
 
 If `--encrypted-map` / `--encrypted-dir` is omitted, the desktop client currently auto-generates a deterministic placeholder encrypted blob from the selected plaintext content. This keeps AG05 wiring moving until a real crypto provider lands.
 
+`sync-cycle-loop` repeats the full cycle with bounded iterations and stepped timestamps:
+
+```powershell
+$env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
+  --vault-root C:\vaults\pkb `
+  --base-url https://sync.example.com `
+  --vault-id vault-001 `
+  --device-id desktop-shanghai `
+  sync-cycle-loop `
+  --iterations 2 `
+  --now-ms 1770000100000 `
+  --normalized-at 1770000100100 `
+  --submit-created-at 1770000100150 `
+  --file-id file-live `
+  --rewritten-at 1770000100200 `
+  --step-ms 1000 `
+  --interval-seconds 2
+```
+
 `submit-commit` payload files use `file_id -> base64 bytes` JSON objects:
 
 ```json

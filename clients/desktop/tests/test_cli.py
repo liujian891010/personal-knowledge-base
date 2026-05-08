@@ -468,6 +468,119 @@ class DesktopCliTests(unittest.TestCase):
             ],
         )
 
+    def test_sync_cycle_loop_command_routes_scheduler_over_full_cycle(self) -> None:
+        slept: list[float] = []
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-cycle-loop",
+            "--iterations",
+            "2",
+            "--now-ms",
+            "1770000040600",
+            "--normalized-at",
+            "1770000040610",
+            "--submit-created-at",
+            "1770000040620",
+            "--file-id",
+            "file-a",
+            "--cleanup-normalized-at",
+            "1770000040621",
+            "--rewritten-at",
+            "1770000040630",
+            "--step-ms",
+            "100",
+            "--interval-seconds",
+            "0.5",
+            sleep=slept.append,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload,
+            {
+                "config": {
+                    "cleanup_normalized_at": 1770000040621,
+                    "commit_intent_id": None,
+                    "encrypted_blob_by_file_id": None,
+                    "init_now_ms": 1770000040600,
+                    "interval_seconds": 0.5,
+                    "iterations": 2,
+                    "pull_rewritten_at": 1770000040630,
+                    "recovery_normalized_at": 1770000040610,
+                    "step_ms": 100,
+                    "submit_created_at": 1770000040620,
+                    "submit_file_ids": ["file-a"],
+                },
+                "iterations": [
+                    {
+                        "cleanup_normalized_at": 1770000040621,
+                        "init_now_ms": 1770000040600,
+                        "iteration": 0,
+                        "pull_rewritten_at": 1770000040630,
+                        "recovery_normalized_at": 1770000040610,
+                        "run_cycle": {
+                            "final_snapshot": {"files": 1, "kind": "status"},
+                            "initialized": {"kind": "init", "value": 1770000040600},
+                            "pull": {"kind": "pull", "rewritten_at": 1770000040630},
+                            "recovery": {"kind": "recover", "normalized_at": 1770000040610},
+                            "submitted": {
+                                "kind": "submit-workspace-commit",
+                                "created_at": 1770000040620,
+                                "commit_intent_id": None,
+                                "encrypted_sizes": None,
+                                "file_ids": ["file-a"],
+                            },
+                        },
+                        "submit_created_at": 1770000040620,
+                    },
+                    {
+                        "cleanup_normalized_at": 1770000040721,
+                        "init_now_ms": 1770000040700,
+                        "iteration": 1,
+                        "pull_rewritten_at": 1770000040730,
+                        "recovery_normalized_at": 1770000040710,
+                        "run_cycle": {
+                            "final_snapshot": {"files": 1, "kind": "status"},
+                            "initialized": {"kind": "init", "value": 1770000040700},
+                            "pull": {"kind": "pull", "rewritten_at": 1770000040730},
+                            "recovery": {"kind": "recover", "normalized_at": 1770000040710},
+                            "submitted": {
+                                "kind": "submit-workspace-commit",
+                                "created_at": 1770000040720,
+                                "commit_intent_id": None,
+                                "encrypted_sizes": None,
+                                "file_ids": ["file-a"],
+                            },
+                        },
+                        "submit_created_at": 1770000040720,
+                    },
+                ],
+            },
+        )
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040600),
+                ("recover", 1770000040610),
+                ("submit-workspace-commit", 1770000040620, ["file-a"], None, 1770000040621, None),
+                ("pull", 1770000040630),
+                ("status", None),
+                ("init", 1770000040700),
+                ("recover", 1770000040710),
+                ("submit-workspace-commit", 1770000040720, ["file-a"], None, 1770000040721, None),
+                ("pull", 1770000040730),
+                ("status", None),
+            ],
+        )
+        self.assertEqual(slept, [0.5])
+
     def test_download_blobs_command_routes_blob_ids_and_base64_encodes_payload(self) -> None:
         exit_code, payload = self._run(
             "--vault-root",
