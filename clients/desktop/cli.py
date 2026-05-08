@@ -138,6 +138,7 @@ def create_parser() -> argparse.ArgumentParser:
     sync_loop_parser.add_argument("--interval-seconds", type=float, default=0.0)
     sync_loop_parser.add_argument("--step-ms", type=int, default=0)
     sync_loop_parser.add_argument("--now-ms", type=int)
+    sync_loop_parser.add_argument("--continue-on-error", action="store_true")
 
     sync_cycle_parser = subparsers.add_parser("sync-cycle")
     sync_cycle_parser.add_argument("--normalized-at", type=int, required=True)
@@ -163,6 +164,7 @@ def create_parser() -> argparse.ArgumentParser:
     sync_cycle_loop_parser.add_argument("--cleanup-normalized-at", type=int)
     sync_cycle_loop_parser.add_argument("--encrypted-map")
     sync_cycle_loop_parser.add_argument("--encrypted-dir")
+    sync_cycle_loop_parser.add_argument("--continue-on-error", action="store_true")
 
     download_parser = subparsers.add_parser("download-blobs")
     download_parser.add_argument("--blob-id", action="append", dest="blob_ids", required=True)
@@ -230,6 +232,7 @@ def run_cli(
                 pull_rewritten_at=args.rewritten_at,
                 interval_seconds=args.interval_seconds,
                 step_ms=args.step_ms,
+                continue_on_error=args.continue_on_error,
             )
         )
     elif args.command == "sync-cycle":
@@ -306,6 +309,7 @@ def run_cli(
                 pull_rewritten_at=args.rewritten_at,
                 interval_seconds=args.interval_seconds,
                 step_ms=args.step_ms,
+                continue_on_error=args.continue_on_error,
             )
         )
     elif args.command == "download-blobs":
