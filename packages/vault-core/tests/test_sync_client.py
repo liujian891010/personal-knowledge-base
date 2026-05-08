@@ -17,6 +17,8 @@ from vault_core import (
     CommitSnapshotEntry,
     CommitSnapshotTable,
     CommitSubmissionBundle,
+    ResolveCommitIntentExecutionResult,
+    ResolveCommitIntentResponsePayload,
     CreateCommitBlobRef,
     CreateCommitExecutionResult,
     CreateCommitRequestPayload,
@@ -29,6 +31,7 @@ from vault_core import (
     execute_commit_preflight,
     execute_create_commit,
     execute_commit_submission,
+    execute_resolve_commit_intent,
 )
 
 
@@ -39,10 +42,14 @@ class FakeSyncCommitTransport:
         blob_check: SyncHttpJsonResponse,
         blob_upload_init: SyncHttpJsonResponse | None = None,
         create_commit: SyncHttpJsonResponse | None = None,
+        resolve_commit_intent: SyncHttpJsonResponse | None = None,
+        manifest: SyncHttpJsonResponse | None = None,
     ) -> None:
         self.blob_check_response = blob_check
         self.blob_upload_init_response = blob_upload_init
         self.create_commit_response = create_commit
+        self.resolve_commit_intent_response = resolve_commit_intent
+        self.manifest_response = manifest
         self.calls: list[tuple[str, str, dict[str, object]]] = []
 
     def post_blob_check(self, vault_id: str, payload: dict[str, object]) -> SyncHttpJsonResponse:
@@ -60,6 +67,18 @@ class FakeSyncCommitTransport:
         if self.create_commit_response is None:
             raise AssertionError("create commit response was not configured")
         return self.create_commit_response
+
+    def post_resolve_commit_intent(self, vault_id: str, payload: dict[str, object]) -> SyncHttpJsonResponse:
+        self.calls.append(("resolve_commit_intent", vault_id, payload))
+        if self.resolve_commit_intent_response is None:
+            raise AssertionError("resolve commit intent response was not configured")
+        return self.resolve_commit_intent_response
+
+    def get_manifest(self, vault_id: str, revision: int) -> SyncHttpJsonResponse:
+        self.calls.append(("get_manifest", vault_id, {"revision": revision}))
+        if self.manifest_response is None:
+            raise AssertionError("manifest response was not configured")
+        return self.manifest_response
 
 
 class FakeSyncBlobUploader:
@@ -480,6 +499,105 @@ class SyncClientTests(unittest.TestCase):
 
         self.assertEqual([call[0] for call in transport.calls], ["blob_check", "blob_upload_init"])
         self.assertEqual([call[0].blob_id for call in uploader.calls], ["blob_a", "blob_b"])
+
+    def test_execute_resolve_commit_intent_fetches_matched_manifest_when_found(self) -> None:
+        journal = _build_submission().journal
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            resolve_commit_intent=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "status": "found",
+                    "matched_revision": 8,
+                    "observed_head_revision": 10,
+                    "head_manifest_summary": "sha256:head10",
+                },
+            ),
+            manifest=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "vault_id": "vault_pkb_001",
+                    "revision": 8,
+                    "base_revision": 7,
+                    "created_by_device": "desktop-shanghai",
+                    "created_at": 1770000020000,
+                    "summary_hash": "sha256:head8",
+                    "files": [],
+                    "tombstones": [],
+                },
+            ),
+        )
+
+        result = execute_resolve_commit_intent(transport, journal)
+
+        self.assertEqual(
+            result,
+            ResolveCommitIntentExecutionResult(
+                request=result.request,
+                response=ResolveCommitIntentResponsePayload(
+                    status="found",
+                    matched_revision=8,
+                    observed_head_revision=10,
+                    head_manifest_summary="sha256:head10",
+                ),
+                matched_manifest=ManifestRecord(
+                    vault_id="vault_pkb_001",
+                    revision=8,
+                    base_revision=7,
+                    created_by_device="desktop-shanghai",
+                    created_at=1770000020000,
+                    summary_hash="sha256:head8",
+                    files=[],
+                    tombstones=[],
+                ),
+            ),
+        )
+        self.assertEqual([call[0] for call in transport.calls], ["resolve_commit_intent", "get_manifest"])
+        self.assertEqual(transport.calls[1][2]["revision"], 8)
+
+    def test_execute_resolve_commit_intent_allows_manifest_404_fallback(self) -> None:
+        journal = _build_submission().journal
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            resolve_commit_intent=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "status": "found",
+                    "matched_revision": 8,
+                    "observed_head_revision": 8,
+                    "head_manifest_summary": "sha256:head8",
+                },
+            ),
+            manifest=SyncHttpJsonResponse(status_code=404, payload={"code": "not_found"}),
+        )
+
+        result = execute_resolve_commit_intent(transport, journal)
+
+        self.assertTrue(result.matched_manifest_missing)
+        self.assertIsNone(result.matched_manifest)
+        self.assertEqual([call[0] for call in transport.calls], ["resolve_commit_intent", "get_manifest"])
+
+    def test_execute_resolve_commit_intent_skips_manifest_fetch_for_non_found_statuses(self) -> None:
+        journal = _build_submission().journal
+        for status in ("not_found", "mismatched"):
+            transport = FakeSyncCommitTransport(
+                blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+                resolve_commit_intent=SyncHttpJsonResponse(
+                    status_code=200,
+                    payload={
+                        "status": status,
+                        "observed_head_revision": 10,
+                        "head_manifest_summary": "sha256:head10",
+                    },
+                ),
+            )
+
+            result = execute_resolve_commit_intent(transport, journal)
+
+            self.assertEqual(result.response.status, status)
+            self.assertIsNone(result.matched_manifest)
+            self.assertFalse(result.matched_manifest_missing)
+            self.assertEqual([call[0] for call in transport.calls], ["resolve_commit_intent"])
 
 
 if __name__ == "__main__":

@@ -16,14 +16,19 @@ from vault_core import (
     CreateCommitResponsePayload,
     ManifestFileEntry,
     ManifestRecord,
+    ResolveCommitIntentRequestPayload,
+    ResolveCommitIntentResponsePayload,
     build_blob_upload_init_request,
     parse_blob_check_response,
     parse_blob_upload_init_response,
     parse_commit_conflict_response,
     parse_create_commit_response,
+    parse_manifest_response,
+    parse_resolve_commit_intent_response,
     serialize_blob_check_request,
     serialize_blob_upload_init_request,
     serialize_create_commit_request,
+    serialize_resolve_commit_intent_request,
 )
 
 
@@ -165,6 +170,113 @@ class SyncApiAdapterTests(unittest.TestCase):
                         expires_at="2026-05-07T12:01:00Z",
                     ),
                 ]
+            ),
+        )
+
+    def test_serialize_and_parse_resolve_commit_intent_payloads(self) -> None:
+        request = ResolveCommitIntentRequestPayload(
+            commit_intent_id="intent_1",
+            intent_manifest_hash="sha256:intent_1",
+        )
+        self.assertEqual(
+            serialize_resolve_commit_intent_request(request),
+            {
+                "commit_intent_id": "intent_1",
+                "intent_manifest_hash": "sha256:intent_1",
+            },
+        )
+
+        found = parse_resolve_commit_intent_response(
+            {
+                "status": "found",
+                "matched_revision": 8,
+                "observed_head_revision": 10,
+                "head_manifest_summary": "sha256:head10",
+            }
+        )
+        self.assertEqual(
+            found,
+            ResolveCommitIntentResponsePayload(
+                status="found",
+                matched_revision=8,
+                observed_head_revision=10,
+                head_manifest_summary="sha256:head10",
+            ),
+        )
+
+        mismatched = parse_resolve_commit_intent_response(
+            {
+                "status": "mismatched",
+                "observed_head_revision": 10,
+                "head_manifest_summary": "sha256:head10",
+            }
+        )
+        self.assertEqual(
+            mismatched,
+            ResolveCommitIntentResponsePayload(
+                status="mismatched",
+                matched_revision=None,
+                observed_head_revision=10,
+                head_manifest_summary="sha256:head10",
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "matched_revision is required"):
+            parse_resolve_commit_intent_response({"status": "found"})
+
+        with self.assertRaisesRegex(ValueError, "only allowed"):
+            parse_resolve_commit_intent_response(
+                {
+                    "status": "not_found",
+                    "matched_revision": 8,
+                }
+            )
+
+    def test_parse_manifest_response_uses_manifest_record_shape(self) -> None:
+        parsed = parse_manifest_response(
+            {
+                "vault_id": "vault_pkb_001",
+                "revision": 8,
+                "base_revision": 7,
+                "created_by_device": "desktop-shanghai",
+                "created_at": 1770000020000,
+                "summary_hash": "sha256:head8",
+                "files": [
+                    {
+                        "file_id": "file_a",
+                        "path": "Notes/A.md",
+                        "type": "note",
+                        "content_hash": "sha256:a",
+                        "blob_id": "blob_a",
+                        "size": 16,
+                        "mtime": 1770000019990,
+                    }
+                ],
+                "tombstones": [],
+            }
+        )
+
+        self.assertEqual(
+            parsed,
+            ManifestRecord(
+                vault_id="vault_pkb_001",
+                revision=8,
+                base_revision=7,
+                created_by_device="desktop-shanghai",
+                created_at=1770000020000,
+                summary_hash="sha256:head8",
+                files=[
+                    ManifestFileEntry(
+                        file_id="file_a",
+                        path="Notes/A.md",
+                        type="note",
+                        content_hash="sha256:a",
+                        blob_id="blob_a",
+                        size=16,
+                        mtime=1770000019990,
+                    )
+                ],
+                tombstones=[],
             ),
         )
 
