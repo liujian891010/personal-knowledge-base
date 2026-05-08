@@ -100,6 +100,10 @@ def _validate_commit_document_paths(document: FileMapDocument) -> None:
             )
 
 
+def _has_unresolved_conflict_copy(document: FileMapDocument) -> bool:
+    return any(record.status == "conflict_copy" for record in document.files)
+
+
 def build_commit_manifest(
     document: FileMapDocument,
     *,
@@ -1058,6 +1062,8 @@ def prepare_frozen_commit_intent(
     created_by_device: str,
     created_at: int,
 ) -> FrozenCommitPreparationBundle:
+    if _has_unresolved_conflict_copy(document):
+        raise ValueError("document contains unresolved conflict_copy entries")
     preparation = prepare_commit_intent(
         connection,
         state=state,
