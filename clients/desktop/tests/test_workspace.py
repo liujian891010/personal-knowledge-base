@@ -101,6 +101,7 @@ class DesktopVaultWorkspaceTests(unittest.TestCase):
             self.assertEqual(workspace.paths.filemap_path, root / ".noteapp" / "filemap.json")
             self.assertEqual(workspace.paths.ledger_path, root / ".noteapp" / "tombstone-ledger.jsonl")
             self.assertEqual(workspace.paths.db_path, root / ".noteapp" / "state.sqlite3")
+            self.assertEqual(workspace.paths.worker_state_path, root / ".noteapp" / "sync-worker-state.json")
             self.assertTrue(workspace.paths.filemap_path.exists())
             self.assertTrue(workspace.paths.ledger_path.exists())
             self.assertTrue(workspace.paths.db_path.exists())

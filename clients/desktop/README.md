@@ -111,6 +111,8 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   --interval-seconds 30
 ```
 
+After each worker run, the desktop client also writes the latest worker summary to `.noteapp/sync-worker-state.json` inside the vault.
+
 `submit-commit` payload files use `file_id -> base64 bytes` JSON objects:
 
 ```json

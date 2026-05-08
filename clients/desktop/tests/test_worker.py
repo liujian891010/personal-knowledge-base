@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from clients.desktop.runner import DesktopSyncCycleResult
-from clients.desktop.worker import DesktopSyncWorker, DesktopSyncWorkerConfig
+from clients.desktop.worker import (
+    DesktopSyncWorker,
+    DesktopSyncWorkerConfig,
+    build_desktop_sync_worker_state_record,
+)
 
 
 class FakeRunner:
@@ -98,6 +105,7 @@ class DesktopSyncWorkerTests(unittest.TestCase):
         )
         self.assertEqual(slept, [2.5])
         self.assertTrue(result.loop.config.continue_on_error)
+        self.assertEqual(result.finished_at_ms, 1770000070000)
 
     def test_run_preserves_explicit_step_and_stop_on_error(self) -> None:
         runner = FakeRunner()
@@ -121,6 +129,52 @@ class DesktopSyncWorkerTests(unittest.TestCase):
         self.assertFalse(result.loop.config.continue_on_error)
         self.assertEqual(runner.calls[0][1], 1770000071111)
         self.assertEqual(runner.calls[0][7], 1770000071222)
+
+    def test_run_writes_state_file_when_state_path_is_provided(self) -> None:
+        runner = FakeRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / ".noteapp" / "sync-worker-state.json"
+            result = DesktopSyncWorker(
+                runner,
+                sleep=lambda _: None,
+                now_ms_provider=lambda: 1770000072000,
+                state_path=state_path,
+            ).run(
+                DesktopSyncWorkerConfig(
+                    iterations=1,
+                    submit_file_ids=["file-a"],
+                )
+            )
+
+            written = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(written["started_at_ms"], 1770000072000)
+            self.assertEqual(written["finished_at_ms"], 1770000072000)
+            self.assertEqual(written["effective_step_ms"], 0)
+            self.assertEqual(written["success_count"], 1)
+            self.assertEqual(written["failure_count"], 0)
+            self.assertEqual(written["state_path"], str(state_path))
+            self.assertEqual(result.state_path, state_path)
+
+    def test_build_state_record_projects_worker_result_summary(self) -> None:
+        runner = FakeRunner()
+
+        result = DesktopSyncWorker(
+            runner,
+            sleep=lambda _: None,
+            now_ms_provider=lambda: 1770000073000,
+        ).run(
+            DesktopSyncWorkerConfig(
+                iterations=1,
+                submit_file_ids=["file-a"],
+            )
+        )
+
+        record = build_desktop_sync_worker_state_record(result)
+        self.assertEqual(record.started_at_ms, 1770000073000)
+        self.assertEqual(record.finished_at_ms, 1770000073000)
+        self.assertEqual(record.success_count, 1)
+        self.assertEqual(record.failure_count, 0)
 
 
 if __name__ == "__main__":
