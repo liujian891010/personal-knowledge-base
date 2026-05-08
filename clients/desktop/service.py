@@ -943,6 +943,7 @@ class DesktopSyncService:
                     continue
                 source_path = _resolve_workspace_file_path(self.workspace.vault_root, item.source_path)
                 move_staging_path = _resolve_pull_apply_staging_path(self.workspace.vault_root, item.file_id)
+                target_path = _resolve_workspace_file_path(self.workspace.vault_root, item.target_path)
                 if source_path.exists():
                     payload = source_path.read_bytes()
                     actual_hash = _compute_content_hash(payload)
@@ -955,6 +956,13 @@ class DesktopSyncService:
                             expected_content_hash=item.content_hash,
                             materialized_at=materialized_at,
                         )
+                        if target_path.exists():
+                            if not target_path.is_file():
+                                raise ValueError(f"pull apply target path is not a file: {item.target_path}")
+                            target_hash = _compute_content_hash(target_path.read_bytes())
+                            if target_hash == item.content_hash:
+                                source_path.unlink(missing_ok=True)
+                                continue
                         if not move_staging_path.exists() or not move_staging_path.is_file():
                             raise FileNotFoundError(
                                 f"staged pull payload required for dirty move conflict: {item.file_id}"
@@ -972,7 +980,6 @@ class DesktopSyncService:
                     continue
                 if move_staging_path.exists():
                     continue
-                target_path = _resolve_workspace_file_path(self.workspace.vault_root, item.target_path)
                 if target_path.exists():
                     payload = target_path.read_bytes()
                     actual_hash = _compute_content_hash(payload)
@@ -1056,6 +1063,14 @@ class DesktopSyncService:
                             expected_content_hash=item.content_hash,
                             materialized_at=materialized_at,
                         )
+                        if target_path.exists():
+                            if not target_path.is_file():
+                                raise ValueError(f"pull apply target path is not a file: {item.target_path}")
+                            target_hash = _compute_content_hash(target_path.read_bytes())
+                            if target_hash == item.content_hash:
+                                source_path.unlink(missing_ok=True)
+                                moved_paths[item.file_id] = target_path
+                                continue
                         staged_source_path = _resolve_pull_apply_staging_path(
                             self.workspace.vault_root,
                             item.file_id,
