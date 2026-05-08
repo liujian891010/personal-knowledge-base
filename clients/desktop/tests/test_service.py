@@ -4,6 +4,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import closing
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -201,6 +202,20 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             self.assertEqual(content_by_file_id, {"file-live": payload})
 
+    def test_load_workspace_content_rejects_workspace_snapshot_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
+            snapshot = service.load_snapshot()
+            live_path = Path(tmpdir) / "Notes" / "Live.md"
+            live_path.write_bytes(payload + b"-drift")
+
+            with mock.patch.object(type(service.workspace), "load_snapshot", return_value=snapshot):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "workspace snapshot drift detected: file-live",
+                ):
+                    service.load_workspace_content(["file-live"])
+
     def test_load_workspace_content_for_document_validates_snapshot_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
@@ -387,6 +402,27 @@ class DesktopSyncServiceTests(unittest.TestCase):
             )
             self.assertEqual(blob_opener.calls[0][2], encrypted_payload)
             self.assertEqual((Path(tmpdir) / "Notes" / "Live.md").read_bytes(), payload)
+
+    def test_submit_workspace_commit_rejects_workspace_snapshot_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, payload, _ = self._seed_workspace(Path(tmpdir))
+            snapshot = service.load_snapshot()
+            live_path = Path(tmpdir) / "Notes" / "Live.md"
+            live_path.write_bytes(payload + b"-drift")
+
+            with mock.patch.object(type(service.workspace), "load_snapshot", return_value=snapshot):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "workspace snapshot drift detected: file-live",
+                ):
+                    service.submit_workspace_commit(
+                        created_at=1770000030200,
+                        file_ids=["file-live"],
+                        commit_intent_id="intent-001",
+                    )
+
+            self.assertEqual(api_opener.calls, [])
+            self.assertEqual(blob_opener.calls, [])
 
     def test_load_worker_state_and_health_routes_workspace_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

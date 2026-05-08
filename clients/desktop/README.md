@@ -126,7 +126,7 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   --interval-seconds 30
 ```
 
-`sync-worker` also accepts `--submit-detected`, which routes the worker through local change detection plus auto-submit instead of explicit `--file-id` selection.
+`sync-worker` also accepts `--submit-detected`, which routes the worker through local change detection plus auto-submit instead of explicit `--file-id` selection. The explicit `--file-id` submit path now also validates the selected workspace files against the frozen filemap metadata before staging, so mid-flight drift aborts instead of producing a mixed snapshot.
 
 After each worker run, the desktop client also writes the latest worker summary to `.noteapp/sync-worker-state.json` inside the vault.
 

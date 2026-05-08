@@ -122,7 +122,7 @@ class DesktopSyncService:
     def load_workspace_content(self, file_ids: Iterable[str]) -> dict[str, bytes]:
         snapshot = self.load_snapshot()
         file_by_id = {record.file_id: record for record in snapshot.document.files}
-        content_by_file_id: dict[str, bytes] = {}
+        selected_records = []
 
         for file_id in file_ids:
             record = file_by_id.get(file_id)
@@ -130,51 +130,46 @@ class DesktopSyncService:
                 raise KeyError(f"file_id not found in workspace filemap: {file_id}")
             if record.status != "active":
                 raise ValueError(f"workspace file is not active: {file_id}")
-            content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
-            content_by_file_id[file_id] = content_path.read_bytes()
+            selected_records.append(record)
 
-        return content_by_file_id
+        return self._load_workspace_content_for_records(selected_records)
 
-    def load_workspace_content_for_document(
-        self,
-        document: FileMapDocument,
-    ) -> dict[str, bytes]:
+    def _build_expected_source_version_token(self, record) -> Optional[str]:
+        meta = record.meta or {}
+        expected_token = meta.get("source_version_token")
+        if isinstance(expected_token, str) and expected_token:
+            return expected_token
+        if record.content_hash is None:
+            return None
+        expected_mtime = meta.get("mtime")
+        expected_size = meta.get("size")
+        if (
+            isinstance(expected_mtime, int)
+            and expected_mtime >= 0
+            and isinstance(expected_size, int)
+            and expected_size >= 0
+        ):
+            return f"mtime:{expected_mtime}:size:{expected_size}:hash:{record.content_hash}"
+        return f"updated_at:{record.updated_at}:hash:{record.content_hash}"
+
+    def _load_workspace_content_for_records(self, records: Iterable[object]) -> dict[str, bytes]:
         drifted_file_ids: list[str] = []
         content_by_file_id: dict[str, bytes] = {}
 
-        for record in document.files:
-            if record.status != "active":
-                continue
+        for record in records:
             content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
             if not content_path.exists() or not content_path.is_file():
                 drifted_file_ids.append(record.file_id)
                 continue
             payload = content_path.read_bytes()
             content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
-            meta = record.meta or {}
             mtime_ms = content_path.stat().st_mtime_ns // 1_000_000
             size_bytes = len(payload)
-            expected_token = meta.get("source_version_token")
-            if not isinstance(expected_token, str) or not expected_token:
-                if record.content_hash is None:
-                    drifted_file_ids.append(record.file_id)
-                    continue
-                expected_mtime = meta.get("mtime")
-                expected_size = meta.get("size")
-                if (
-                    isinstance(expected_mtime, int)
-                    and expected_mtime >= 0
-                    and isinstance(expected_size, int)
-                    and expected_size >= 0
-                ):
-                    expected_token = (
-                        f"mtime:{expected_mtime}:size:{expected_size}:hash:{record.content_hash}"
-                    )
-                else:
-                    expected_token = f"updated_at:{record.updated_at}:hash:{record.content_hash}"
+            expected_token = self._build_expected_source_version_token(record)
             current_token = f"mtime:{mtime_ms}:size:{size_bytes}:hash:{content_hash}"
             if (
-                content_hash != record.content_hash
+                expected_token is None
+                or content_hash != record.content_hash
                 or current_token != expected_token
             ):
                 drifted_file_ids.append(record.file_id)
@@ -186,6 +181,14 @@ class DesktopSyncService:
                 "workspace snapshot drift detected: " + ", ".join(sorted(drifted_file_ids))
             )
         return content_by_file_id
+
+    def load_workspace_content_for_document(
+        self,
+        document: FileMapDocument,
+    ) -> dict[str, bytes]:
+        return self._load_workspace_content_for_records(
+            record for record in document.files if record.status == "active"
+        )
 
     def build_tracked_change_commit_plan(self) -> DesktopTrackedChangeCommitPlan:
         snapshot = self.load_snapshot()
@@ -350,6 +353,48 @@ class DesktopSyncService:
             snapshot_table=snapshot_table,
         )
 
+    def _submit_prepared_commit(
+        self,
+        prepared: DesktopPreparedCommit,
+        *,
+        resolved_cleanup_at: int,
+    ) -> DesktopCommitSessionResult:
+        try:
+            network = self.workspace.runtime.session.submit_commit(
+                prepared.submission,
+                snapshot_table=prepared.snapshot_table,
+            )
+        except Exception:
+            self.cleanup_failed_commit(normalized_at=resolved_cleanup_at)
+            raise
+
+        if network.commit.status != "committed":
+            return DesktopCommitSessionResult(
+                prepared=prepared,
+                network=network,
+                cleanup=self.cleanup_failed_commit(normalized_at=resolved_cleanup_at),
+            )
+
+        response = network.commit.response
+        if response is None:
+            raise ValueError("committed submit_commit result must include response")
+
+        current_tombstones = load_tombstone_ledger(self.workspace.paths.ledger_path)
+        with closing(self.workspace._open_connection()) as connection:
+            finalized = finalize_commit_submission_cleanup(
+                connection,
+                vault_root=self.workspace.vault_root,
+                ledger_path=self.workspace.paths.ledger_path,
+                manifest=prepared.submission.manifest,
+                local_tombstones=current_tombstones,
+                committed_revision=response.new_revision,
+            )
+        return DesktopCommitSessionResult(
+            prepared=prepared,
+            network=network,
+            finalized=finalized,
+        )
+
     def submit_detected_changes(
         self,
         *,
@@ -430,48 +475,18 @@ class DesktopSyncService:
         commit_intent_id: Optional[str] = None,
         cleanup_normalized_at: Optional[int] = None,
     ) -> DesktopCommitSessionResult:
-        prepared = self.prepare_commit(
+        snapshot = self.load_snapshot()
+        prepared = self._prepare_commit_with_snapshot(
+            snapshot,
             created_at=created_at,
             content_by_file_id=content_by_file_id,
             encrypted_blob_by_file_id=encrypted_blob_by_file_id,
             commit_intent_id=commit_intent_id,
         )
         resolved_cleanup_at = created_at if cleanup_normalized_at is None else cleanup_normalized_at
-
-        try:
-            network = self.workspace.runtime.session.submit_commit(
-                prepared.submission,
-                snapshot_table=prepared.snapshot_table,
-            )
-        except Exception:
-            cleanup = self.cleanup_failed_commit(normalized_at=resolved_cleanup_at)
-            raise
-
-        if network.commit.status != "committed":
-            return DesktopCommitSessionResult(
-                prepared=prepared,
-                network=network,
-                cleanup=self.cleanup_failed_commit(normalized_at=resolved_cleanup_at),
-            )
-
-        response = network.commit.response
-        if response is None:
-            raise ValueError("committed submit_commit result must include response")
-
-        current_tombstones = load_tombstone_ledger(self.workspace.paths.ledger_path)
-        with closing(self.workspace._open_connection()) as connection:
-            finalized = finalize_commit_submission_cleanup(
-                connection,
-                vault_root=self.workspace.vault_root,
-                ledger_path=self.workspace.paths.ledger_path,
-                manifest=prepared.submission.manifest,
-                local_tombstones=current_tombstones,
-                committed_revision=response.new_revision,
-            )
-        return DesktopCommitSessionResult(
-            prepared=prepared,
-            network=network,
-            finalized=finalized,
+        return self._submit_prepared_commit(
+            prepared,
+            resolved_cleanup_at=resolved_cleanup_at,
         )
 
     def submit_workspace_commit(
@@ -483,14 +498,29 @@ class DesktopSyncService:
         commit_intent_id: Optional[str] = None,
         cleanup_normalized_at: Optional[int] = None,
     ) -> DesktopCommitSessionResult:
+        snapshot = self.load_snapshot()
         requested_file_ids = list(file_ids)
-        content_by_file_id = self.load_workspace_content(requested_file_ids)
-        return self.submit_commit(
+        file_by_id = {record.file_id: record for record in snapshot.document.files}
+        selected_records = []
+        for file_id in requested_file_ids:
+            record = file_by_id.get(file_id)
+            if record is None:
+                raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+            if record.status != "active":
+                raise ValueError(f"workspace file is not active: {file_id}")
+            selected_records.append(record)
+        content_by_file_id = self._load_workspace_content_for_records(selected_records)
+        prepared = self._prepare_commit_with_snapshot(
+            snapshot,
             created_at=created_at,
             content_by_file_id=content_by_file_id,
             encrypted_blob_by_file_id=encrypted_blob_by_file_id,
             commit_intent_id=commit_intent_id,
-            cleanup_normalized_at=cleanup_normalized_at,
+        )
+        resolved_cleanup_at = created_at if cleanup_normalized_at is None else cleanup_normalized_at
+        return self._submit_prepared_commit(
+            prepared,
+            resolved_cleanup_at=resolved_cleanup_at,
         )
 
 
