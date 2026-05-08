@@ -426,6 +426,58 @@ class DesktopSyncServiceTests(unittest.TestCase):
                     content_by_file_id={"file-live": (target_root / "Notes" / "Live.md").read_bytes()},
                 )
 
+    def test_summarize_vault_aggregates_commit_gate_reasons(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            orphan_path = root / ".noteapp" / "conflict-orphans" / "Orphan.md"
+            orphan_path.parent.mkdir(parents=True, exist_ok=True)
+            orphan_path.write_text("orphan conflict", encoding="utf-8")
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                state = load_vault_state(connection, "vault-001")
+                self.assertIsNotNone(state)
+                upsert_vault_state(
+                    connection,
+                    replace(
+                        state,
+                        has_unresolved_conflicts=False,
+                        last_manifest_summary=None,
+                        last_manifest_summary_status="stale",
+                    ),
+                )
+                upsert_sync_apply_journal(
+                    connection,
+                    SyncApplyJournalRecord(
+                        vault_id="vault-001",
+                        journal_id="journal-123",
+                        target_revision=8,
+                        target_manifest_hash="sha256:head8",
+                        phase="staging",
+                        created_at=1770000040600,
+                        updated_at=1770000040600,
+                        ops_hash="sha256:ops8",
+                    ),
+                )
+
+            summary = service.summarize_vault()
+
+            self.assertIsNone(summary.worker_health)
+            self.assertFalse(summary.commit_gate.can_submit_commit)
+            self.assertEqual(
+                summary.commit_gate.blocking_reasons,
+                [
+                    "sync_apply_journal:staging",
+                    "unresolved_conflicts",
+                    "requires_full_pull",
+                ],
+            )
+            self.assertTrue(summary.commit_gate.has_active_sync_apply_journal)
+            self.assertFalse(summary.commit_gate.has_active_commit_journal)
+            self.assertTrue(summary.commit_gate.requires_full_pull)
+            self.assertTrue(summary.conflicts.actual_has_unresolved_conflicts)
+            self.assertTrue(summary.state.has_unresolved_conflicts)
+            self.assertEqual(summary.changes.change_count, 0)
+
     def test_load_workspace_content_rejects_workspace_snapshot_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))

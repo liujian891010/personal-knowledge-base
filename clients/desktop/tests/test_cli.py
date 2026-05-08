@@ -145,6 +145,53 @@ class FakeService:
         self.calls.append(("worker-health", None))
         return self.worker_health_payload
 
+    def summarize_vault(self):
+        self.calls.append(("vault-summary", None))
+        return {
+            "state": {
+                "vault_id": "vault-001",
+                "last_applied_revision": 7,
+                "remote_head_revision": 7,
+                "acked_revision": 7,
+                "pending_ack_to_server": [],
+                "commit_in_progress": False,
+                "last_manifest_summary": "sha256:head7",
+                "last_manifest_summary_status": "valid",
+                "local_delete_sequence": 1,
+                "has_unresolved_conflicts": False,
+                "schema_version": "v1",
+                "meta": None,
+            },
+            "changes": self.detect_local_changes_payload,
+            "conflicts": {
+                "state": {
+                    "vault_id": "vault-001",
+                    "last_applied_revision": 7,
+                    "remote_head_revision": 7,
+                    "acked_revision": 7,
+                    "pending_ack_to_server": [],
+                    "commit_in_progress": False,
+                    "last_manifest_summary": "sha256:head7",
+                    "last_manifest_summary_status": "valid",
+                    "local_delete_sequence": 1,
+                    "has_unresolved_conflicts": False,
+                    "schema_version": "v1",
+                    "meta": None,
+                },
+                "actual_has_unresolved_conflicts": False,
+                "conflict_copies": [],
+                "conflict_orphans": [],
+            },
+            "worker_health": self.worker_health_payload,
+            "commit_gate": {
+                "can_submit_commit": True,
+                "blocking_reasons": [],
+                "requires_full_pull": False,
+                "has_active_commit_journal": False,
+                "has_active_sync_apply_journal": False,
+            },
+        }
+
     def export_vault_package(self, package_path: Path, *, include_ai_raw: bool = False):
         self.calls.append(("export-vault", str(package_path), include_ai_raw))
         return {
@@ -586,6 +633,24 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "degraded")
         self.assertEqual(self.service.calls, [("worker-health", None)])
+
+    def test_vault_summary_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "vault-summary",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["commit_gate"]["can_submit_commit"])
+        self.assertEqual(payload["changes"]["change_count"], 2)
+        self.assertEqual(self.service.calls, [("vault-summary", None)])
 
     def test_export_vault_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(

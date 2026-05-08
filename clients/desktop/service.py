@@ -479,6 +479,24 @@ class DesktopVaultImportResult:
 
 
 @dataclass(frozen=True)
+class DesktopCommitGateStatus:
+    can_submit_commit: bool
+    blocking_reasons: list[str]
+    requires_full_pull: bool
+    has_active_commit_journal: bool
+    has_active_sync_apply_journal: bool
+
+
+@dataclass(frozen=True)
+class DesktopVaultSummary:
+    state: VaultStateRecord
+    changes: DesktopWorkspaceChangeSet
+    conflicts: DesktopConflictStatus
+    worker_health: Optional[DesktopSyncWorkerHealth]
+    commit_gate: DesktopCommitGateStatus
+
+
+@dataclass(frozen=True)
 class DesktopPullApplySessionResult:
     pull: PullSyncSessionResult
     plan: DesktopPullApplyPlan
@@ -1430,6 +1448,46 @@ class DesktopSyncService:
 
     def load_worker_health(self) -> DesktopSyncWorkerHealth:
         return self.workspace.load_worker_health()
+
+    def summarize_vault(self) -> DesktopVaultSummary:
+        conflicts = self.list_conflicts()
+        changes = self.detect_local_changes()
+        try:
+            worker_health = self.load_worker_health()
+        except FileNotFoundError:
+            worker_health = None
+
+        with closing(self.workspace._open_connection()) as connection:
+            sync_apply_journal = load_sync_apply_journal(connection, self.vault_id)
+            commit_journal = load_commit_intent_journal(connection, self.vault_id)
+
+        state = conflicts.state
+        blocking_reasons: list[str] = []
+        if sync_apply_journal is not None:
+            blocking_reasons.append(f"sync_apply_journal:{sync_apply_journal.phase}")
+        if commit_journal is not None:
+            blocking_reasons.append(f"commit_intent_journal:{commit_journal.status}")
+        if state.commit_in_progress:
+            blocking_reasons.append("commit_in_progress")
+        if conflicts.actual_has_unresolved_conflicts or state.has_unresolved_conflicts:
+            blocking_reasons.append("unresolved_conflicts")
+        requires_full_pull = state.last_manifest_summary_status != "valid" or state.last_manifest_summary is None
+        if requires_full_pull:
+            blocking_reasons.append("requires_full_pull")
+
+        return DesktopVaultSummary(
+            state=state,
+            changes=changes,
+            conflicts=conflicts,
+            worker_health=worker_health,
+            commit_gate=DesktopCommitGateStatus(
+                can_submit_commit=not blocking_reasons,
+                blocking_reasons=blocking_reasons,
+                requires_full_pull=requires_full_pull,
+                has_active_commit_journal=commit_journal is not None,
+                has_active_sync_apply_journal=sync_apply_journal is not None,
+            ),
+        )
 
     def list_conflicts(self) -> DesktopConflictStatus:
         snapshot = self._promote_unresolved_conflict_state_if_needed(self.load_snapshot())

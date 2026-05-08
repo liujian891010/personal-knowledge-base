@@ -167,6 +167,7 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("detect-local-changes")
     subparsers.add_parser("worker-state")
     subparsers.add_parser("worker-health")
+    subparsers.add_parser("vault-summary")
     inspect_vault_parser = subparsers.add_parser("inspect-vault-package")
     inspect_vault_parser.add_argument("--input-package", required=True)
     subparsers.add_parser("list-conflicts")
@@ -333,6 +334,8 @@ def run_cli(
         result = service.load_worker_state()
     elif args.command == "worker-health":
         result = service.load_worker_health()
+    elif args.command == "vault-summary":
+        result = service.summarize_vault()
     elif args.command == "export-vault":
         result = service.export_vault_package(
             Path(args.output_package),
