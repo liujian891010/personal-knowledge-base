@@ -30,7 +30,7 @@ from .models import (
     VaultStateRecord,
     WikiTaskRecord,
 )
-from .operations import add_file, mark_deleted, register_conflict_copy, rename_file
+from .operations import add_file, mark_deleted, register_conflict_copy, remove_conflict_copy, rename_file
 from .paths import allocate_conflict_copy_path, move_conflict_orphan, move_staging_orphan, sanitize_device_name
 from .recovery import (
     apply_commit_success_state,
@@ -396,6 +396,7 @@ __all__ = [
     "replace_active_wiki_task",
     "rebuild_filemap_from_manifest",
     "register_conflict_copy",
+    "remove_conflict_copy",
     "rename_file",
     "requires_full_pull",
     "sanitize_device_name",

@@ -40,6 +40,7 @@ from vault_core import (
     materialize_content_snapshot_plan,
     prepare_commit_submission,
     register_conflict_copy,
+    remove_conflict_copy,
     recover_sync_apply_finalizing_state,
     upsert_vault_state,
     upsert_sync_apply_journal,
@@ -164,6 +165,20 @@ def _has_conflict_orphan_files(vault_root: Path) -> bool:
     if not orphan_root.exists():
         return False
     return any(path.is_file() for path in orphan_root.rglob("*"))
+
+
+def _has_conflict_copy_records(document) -> bool:
+    return any(record.status == "conflict_copy" for record in document.files)
+
+
+def _resolve_conflict_orphan_path(vault_root: Path, relative_path: str) -> Path:
+    orphan_path = _resolve_workspace_file_path(vault_root, relative_path)
+    orphan_root = (vault_root / CONFLICT_ORPHANS_DIRNAME).resolve()
+    try:
+        orphan_path.resolve().relative_to(orphan_root)
+    except ValueError as exc:
+        raise ValueError(f"conflict orphan path is not inside {CONFLICT_ORPHANS_DIRNAME}: {relative_path}") from exc
+    return orphan_path
 
 
 def _serialize_pull_apply_plan(plan: "DesktopPullApplyPlan") -> bytes:
@@ -306,6 +321,15 @@ class DesktopPullApplyRecoveryResult:
     removed_staging_paths: list[Path]
     isolated_staging_paths: Optional[list[Path]] = None
     removed_plan_path: Optional[Path] = None
+
+
+@dataclass(frozen=True)
+class DesktopConflictResolutionResult:
+    state: VaultStateRecord
+    removed_conflict_paths: dict[str, Path]
+    removed_orphan_paths: list[Path]
+    skipped_conflict_file_ids: list[str]
+    skipped_orphan_paths: list[str]
 
 
 @dataclass(frozen=True)
@@ -850,7 +874,7 @@ class DesktopSyncService:
         if snapshot.state.has_unresolved_conflicts:
             return snapshot
         if (
-            not any(record.status == "conflict_copy" for record in snapshot.document.files)
+            not _has_conflict_copy_records(snapshot.document)
             and not _has_conflict_orphan_files(self.workspace.vault_root)
         ):
             return snapshot
@@ -1203,6 +1227,85 @@ class DesktopSyncService:
 
     def load_worker_health(self) -> DesktopSyncWorkerHealth:
         return self.workspace.load_worker_health()
+
+    def resolve_conflicts(
+        self,
+        *,
+        resolved_at: int,
+        conflict_file_ids: Optional[Iterable[str]] = None,
+        orphan_relative_paths: Optional[Iterable[str]] = None,
+    ) -> DesktopConflictResolutionResult:
+        requested_conflict_file_ids = list(dict.fromkeys(conflict_file_ids or []))
+        requested_orphan_paths = list(dict.fromkeys(orphan_relative_paths or []))
+        if not requested_conflict_file_ids and not requested_orphan_paths:
+            raise ValueError("resolve-conflicts requires at least one conflict file_id or orphan path")
+
+        with closing(self.workspace._open_connection()) as connection:
+            self._require_no_active_sync_apply_journal(connection, operation="resolve-conflicts")
+            snapshot = self.workspace._load_snapshot_from_connection(connection)
+            if snapshot.state.commit_in_progress:
+                raise ValueError("resolve-conflicts cannot start while commit_in_progress is true")
+
+            current_document = snapshot.document
+            file_by_id = {record.file_id: record for record in current_document.files}
+            removed_conflict_paths: dict[str, Path] = {}
+            skipped_conflict_file_ids: list[str] = []
+            updated_document = current_document
+            filemap_changed = False
+
+            for file_id in requested_conflict_file_ids:
+                record = file_by_id.get(file_id)
+                if record is None:
+                    skipped_conflict_file_ids.append(file_id)
+                    continue
+                if record.status != "conflict_copy":
+                    raise ValueError(f"workspace file is not a conflict_copy: {file_id}")
+                conflict_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+                if conflict_path.exists() and not conflict_path.is_file():
+                    raise ValueError(f"conflict_copy path is not a file: {record.path}")
+                conflict_path.unlink(missing_ok=True)
+                removed_conflict_paths[file_id] = conflict_path
+                updated_document = remove_conflict_copy(
+                    updated_document,
+                    file_id=file_id,
+                    updated_at=resolved_at,
+                )
+                filemap_changed = True
+
+            removed_orphan_paths: list[Path] = []
+            skipped_orphan_paths: list[str] = []
+            for relative_path in requested_orphan_paths:
+                orphan_path = _resolve_conflict_orphan_path(self.workspace.vault_root, relative_path)
+                if not orphan_path.exists():
+                    skipped_orphan_paths.append(relative_path)
+                    continue
+                if not orphan_path.is_file():
+                    raise ValueError(f"conflict orphan path is not a file: {relative_path}")
+                orphan_path.unlink(missing_ok=True)
+                removed_orphan_paths.append(orphan_path)
+
+            if filemap_changed:
+                write_filemap_atomic(self.workspace.paths.filemap_path, updated_document)
+
+            has_unresolved_conflicts = (
+                _has_conflict_copy_records(updated_document)
+                or _has_conflict_orphan_files(self.workspace.vault_root)
+            )
+            updated_state = snapshot.state
+            if snapshot.state.has_unresolved_conflicts != has_unresolved_conflicts:
+                updated_state = replace(
+                    snapshot.state,
+                    has_unresolved_conflicts=has_unresolved_conflicts,
+                )
+                upsert_vault_state(connection, updated_state)
+
+        return DesktopConflictResolutionResult(
+            state=updated_state,
+            removed_conflict_paths=removed_conflict_paths,
+            removed_orphan_paths=removed_orphan_paths,
+            skipped_conflict_file_ids=skipped_conflict_file_ids,
+            skipped_orphan_paths=skipped_orphan_paths,
+        )
 
     def load_workspace_content(self, file_ids: Iterable[str]) -> dict[str, bytes]:
         snapshot = self.load_snapshot()

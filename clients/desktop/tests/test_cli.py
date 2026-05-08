@@ -144,6 +144,37 @@ class FakeService:
         self.calls.append(("worker-health", None))
         return self.worker_health_payload
 
+    def resolve_conflicts(self, *, resolved_at: int, conflict_file_ids=None, orphan_relative_paths=None):
+        self.calls.append(
+            (
+                "resolve-conflicts",
+                resolved_at,
+                [] if conflict_file_ids is None else list(conflict_file_ids),
+                [] if orphan_relative_paths is None else list(orphan_relative_paths),
+            )
+        )
+        return {
+            "resolved_at": resolved_at,
+            "removed_conflict_paths": {"file-conflict": "C:/vault/Notes/Live (conflict).md"},
+            "removed_orphan_paths": ["C:/vault/.noteapp/conflict-orphans/Orphan.md"],
+            "skipped_conflict_file_ids": [],
+            "skipped_orphan_paths": [],
+            "state": {
+                "vault_id": "vault-001",
+                "last_applied_revision": 7,
+                "remote_head_revision": 7,
+                "acked_revision": 7,
+                "pending_ack_to_server": [],
+                "commit_in_progress": False,
+                "last_manifest_summary": "sha256:head7",
+                "last_manifest_summary_status": "valid",
+                "local_delete_sequence": 1,
+                "has_unresolved_conflicts": False,
+                "schema_version": "v1",
+                "meta": None,
+            },
+        }
+
     def pull_and_ack(self, *, rewritten_at: int):
         self.calls.append(("pull", rewritten_at))
         if self.pull_and_ack_payload is not None:
@@ -451,6 +482,39 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "degraded")
         self.assertEqual(self.service.calls, [("worker-health", None)])
+
+    def test_resolve_conflicts_command_routes_selected_targets(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "resolve-conflicts",
+            "--resolved-at",
+            "1770000040090",
+            "--file-id",
+            "file-conflict",
+            "--orphan-path",
+            ".noteapp/conflict-orphans/Orphan.md",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(payload["state"]["has_unresolved_conflicts"])
+        self.assertEqual(
+            self.service.calls,
+            [
+                (
+                    "resolve-conflicts",
+                    1770000040090,
+                    ["file-conflict"],
+                    [".noteapp/conflict-orphans/Orphan.md"],
+                )
+            ],
+        )
 
     def test_pull_command_routes_rewritten_at(self) -> None:
         exit_code, payload = self._run(
