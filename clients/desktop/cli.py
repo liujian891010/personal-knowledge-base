@@ -8,6 +8,8 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, TextIO
 
+from vault_core import BlobDownloadSessionResult
+
 from .service import DesktopSyncService, build_desktop_sync_service
 from .sync_runtime import DesktopSyncHttpConfig
 
@@ -15,6 +17,14 @@ ServiceBuilder = Callable[[DesktopSyncHttpConfig, Path], DesktopSyncService]
 
 
 def _to_jsonable(value: Any) -> Any:
+    if isinstance(value, BlobDownloadSessionResult):
+        return {
+            "init": _to_jsonable(value.init),
+            "downloaded_blobs_base64": {
+                blob_id: base64.b64encode(payload).decode("ascii")
+                for blob_id, payload in value.downloaded_blobs.items()
+            },
+        }
     if is_dataclass(value):
         return _to_jsonable(asdict(value))
     if isinstance(value, Path):
@@ -66,6 +76,9 @@ def create_parser() -> argparse.ArgumentParser:
     recover_parser = subparsers.add_parser("recover")
     recover_parser.add_argument("--normalized-at", type=int, required=True)
 
+    download_parser = subparsers.add_parser("download-blobs")
+    download_parser.add_argument("--blob-id", action="append", dest="blob_ids", required=True)
+
     submit_parser = subparsers.add_parser("submit-commit")
     submit_parser.add_argument("--created-at", type=int, required=True)
     submit_parser.add_argument("--commit-intent-id")
@@ -100,6 +113,8 @@ def run_cli(
         result = service.pull_and_ack(rewritten_at=args.rewritten_at)
     elif args.command == "recover":
         result = service.resume_commit_recovery(normalized_at=args.normalized_at)
+    elif args.command == "download-blobs":
+        result = service.download_blobs(args.blob_ids)
     elif args.command == "submit-commit":
         result = service.submit_commit(
             created_at=args.created_at,
