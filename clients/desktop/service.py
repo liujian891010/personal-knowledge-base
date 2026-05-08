@@ -78,6 +78,31 @@ class DesktopCommitSessionResult:
 
 
 @dataclass(frozen=True)
+class DesktopPullRequiredBlobFile:
+    file_id: str
+    path: str
+    type: str
+    blob_id: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class DesktopPullRequiredBlobPlan:
+    vault_id: str
+    revision: int
+    files: list[DesktopPullRequiredBlobFile]
+    blob_ids: list[str]
+
+
+@dataclass(frozen=True)
+class DesktopPullRequiredBlobResult:
+    pull: PullSyncSessionResult
+    plan: DesktopPullRequiredBlobPlan
+    download: Optional[BlobDownloadSessionResult]
+    plaintext_by_file_id: dict[str, bytes]
+
+
+@dataclass(frozen=True)
 class DesktopSyncService:
     workspace: DesktopVaultWorkspace
     blob_crypto_provider: DesktopBlobCryptoProvider
@@ -109,6 +134,104 @@ class DesktopSyncService:
 
     def download_blobs(self, blob_ids: Iterable[str]) -> BlobDownloadSessionResult:
         return self.workspace.download_blobs(blob_ids)
+
+    def build_pull_required_blob_plan(
+        self,
+        pull: PullSyncSessionResult,
+    ) -> DesktopPullRequiredBlobPlan:
+        applied = pull.pull.reconcile.applied
+        if applied is None:
+            return DesktopPullRequiredBlobPlan(
+                vault_id=self.vault_id,
+                revision=pull.pull.head.head_revision,
+                files=[],
+                blob_ids=[],
+            )
+        manifest = pull.pull.manifest
+        if manifest is None:
+            if applied.required_blob_ids:
+                raise ValueError("pull result is missing manifest for required blob planning")
+            return DesktopPullRequiredBlobPlan(
+                vault_id=self.vault_id,
+                revision=pull.pull.head.head_revision,
+                files=[],
+                blob_ids=[],
+            )
+
+        required_blob_id_set = set(applied.required_blob_ids)
+        files: list[DesktopPullRequiredBlobFile] = []
+        blob_ids: list[str] = []
+        seen_blob_ids: set[str] = set()
+        content_hash_by_blob_id: dict[str, str] = {}
+        manifest_blob_ids: set[str] = set()
+
+        for entry in manifest.sorted_files():
+            manifest_blob_ids.add(entry.blob_id)
+            if entry.blob_id not in required_blob_id_set:
+                continue
+            previous_content_hash = content_hash_by_blob_id.get(entry.blob_id)
+            if previous_content_hash is not None and previous_content_hash != entry.content_hash:
+                raise ValueError(
+                    f"required blob_id maps to multiple content hashes: {entry.blob_id}"
+                )
+            content_hash_by_blob_id[entry.blob_id] = entry.content_hash
+            files.append(
+                DesktopPullRequiredBlobFile(
+                    file_id=entry.file_id,
+                    path=entry.path,
+                    type=entry.type,
+                    blob_id=entry.blob_id,
+                    content_hash=entry.content_hash,
+                )
+            )
+            if entry.blob_id not in seen_blob_ids:
+                seen_blob_ids.add(entry.blob_id)
+                blob_ids.append(entry.blob_id)
+
+        missing_blob_ids = sorted(required_blob_id_set - manifest_blob_ids)
+        if missing_blob_ids:
+            raise ValueError(
+                "required blob_ids are missing from pull manifest: " + ", ".join(missing_blob_ids)
+            )
+
+        return DesktopPullRequiredBlobPlan(
+            vault_id=manifest.vault_id,
+            revision=manifest.revision,
+            files=files,
+            blob_ids=blob_ids,
+        )
+
+    def download_and_decrypt_pull_required_blobs(
+        self,
+        pull: PullSyncSessionResult,
+    ) -> DesktopPullRequiredBlobResult:
+        plan = self.build_pull_required_blob_plan(pull)
+        download = None
+        downloaded_blobs: dict[str, bytes] = {}
+        if plan.blob_ids:
+            download = self.download_blobs(plan.blob_ids)
+            downloaded_blobs = dict(download.downloaded_blobs)
+
+        plaintext_by_blob_id: dict[str, bytes] = {}
+        plaintext_by_file_id: dict[str, bytes] = {}
+        for item in plan.files:
+            plaintext = plaintext_by_blob_id.get(item.blob_id)
+            if plaintext is None:
+                if item.blob_id not in downloaded_blobs:
+                    raise KeyError(f"downloaded blob payload not found: {item.blob_id}")
+                plaintext = self.blob_crypto_provider.decrypt_payload(
+                    downloaded_blobs[item.blob_id],
+                    content_hash=item.content_hash,
+                )
+                plaintext_by_blob_id[item.blob_id] = plaintext
+            plaintext_by_file_id[item.file_id] = plaintext
+
+        return DesktopPullRequiredBlobResult(
+            pull=pull,
+            plan=plan,
+            download=download,
+            plaintext_by_file_id=plaintext_by_file_id,
+        )
 
     def detect_local_changes(self) -> DesktopWorkspaceChangeSet:
         return self.workspace.detect_local_changes()

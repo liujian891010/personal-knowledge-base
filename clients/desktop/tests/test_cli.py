@@ -31,6 +31,7 @@ class FakeService:
         self.fail_submit_workspace_at_calls: set[int] = set()
         self.skip_submit_detected_if_needed = False
         self.pull_and_ack_payload = None
+        self.download_and_decrypt_pull_payload = None
         self.detect_local_changes_payload = {
             "vault_id": "vault-001",
             "tracked_record_count": 2,
@@ -163,6 +164,17 @@ class FakeService:
             ),
             downloaded_blobs={blob_id: b"xyz" for blob_id in blob_ids},
         )
+
+    def download_and_decrypt_pull_required_blobs(self, pull_result):
+        self.calls.append(("download-and-decrypt-pull-required-blobs", pull_result))
+        if self.download_and_decrypt_pull_payload is not None:
+            return self.download_and_decrypt_pull_payload
+        return {
+            "pull": pull_result,
+            "plan": {"blob_ids": [], "files": [], "revision": 0, "vault_id": "vault-001"},
+            "download": None,
+            "plaintext_by_file_id_base64": {},
+        }
 
     def submit_commit(
         self,
@@ -549,6 +561,76 @@ class DesktopCliTests(unittest.TestCase):
                 },
             )
             self.assertEqual((Path(tmpdir) / "blob-a.blob").read_bytes(), b"xyz")
+
+    def test_pull_command_can_download_and_decrypt_required_blobs(self) -> None:
+        self.service.pull_and_ack_payload = {
+            "pull": {
+                "reconcile": {
+                    "applied": {
+                        "required_blob_ids": ["blob-a"],
+                    }
+                }
+            }
+        }
+        self.service.download_and_decrypt_pull_payload = {
+            "pull": self.service.pull_and_ack_payload,
+            "plan": {
+                "vault_id": "vault-001",
+                "revision": 8,
+                "blob_ids": ["blob-a"],
+                "files": [
+                    {
+                        "file_id": "file-a",
+                        "path": "Notes/A.md",
+                        "type": "note",
+                        "blob_id": "blob-a",
+                        "content_hash": "sha256:abc",
+                    }
+                ],
+            },
+            "download": {
+                "init": {
+                    "request": {"blob_ids": ["blob-a"]},
+                    "response": {
+                        "downloads": [
+                            {
+                                "blob_id": "blob-a",
+                                "download_url": "https://blob.example.com/download/blob-a",
+                                "encrypted_size": 3,
+                                "expires_at": "2026-05-08T12:00:00Z",
+                                "headers": None,
+                            }
+                        ]
+                    },
+                },
+                "downloaded_blobs_base64": {
+                    "blob-a": base64.b64encode(b"xyz").decode("ascii"),
+                },
+            },
+            "plaintext_by_file_id_base64": {
+                "file-a": base64.b64encode(b"# A\n").decode("ascii"),
+            },
+        }
+
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "pull",
+            "--rewritten-at",
+            "1770000040100",
+            "--download-required-blobs",
+            "--decrypt-required-blobs",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload, self.service.download_and_decrypt_pull_payload)
+        self.assertEqual([call[0] for call in self.service.calls], ["pull", "download-and-decrypt-pull-required-blobs"])
 
     def test_recover_command_routes_normalized_at(self) -> None:
         exit_code, payload = self._run(

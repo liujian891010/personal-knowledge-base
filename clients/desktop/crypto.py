@@ -12,6 +12,9 @@ class DesktopBlobCryptoProvider(Protocol):
     def encrypt_payload(self, payload: bytes) -> bytes:
         ...
 
+    def decrypt_payload(self, encrypted_payload: bytes, *, content_hash: str) -> bytes:
+        ...
+
     def build_encrypted_blob_map(
         self,
         content_by_file_id: Mapping[str, bytes],
@@ -26,6 +29,12 @@ class PlaceholderDesktopBlobCryptoProvider:
 
     def encrypt_payload(self, payload: bytes) -> bytes:
         return build_placeholder_encrypted_blob_payload(payload)
+
+    def decrypt_payload(self, encrypted_payload: bytes, *, content_hash: str) -> bytes:
+        return decrypt_placeholder_encrypted_blob_payload(
+            encrypted_payload,
+            content_hash=content_hash,
+        )
 
     def build_encrypted_blob_map(
         self,
@@ -45,6 +54,27 @@ def build_placeholder_encrypted_blob_payload(payload: bytes) -> bytes:
     """Deterministic placeholder envelope until a real crypto provider lands."""
     tag = hashlib.sha256(b"pkb-placeholder-blob-v1\x00" + payload).digest()[:16]
     return payload + tag
+
+
+def decrypt_placeholder_encrypted_blob_payload(
+    encrypted_payload: bytes,
+    *,
+    content_hash: str,
+) -> bytes:
+    if len(encrypted_payload) < 16:
+        raise ValueError("placeholder encrypted blob is shorter than authentication tag")
+    payload = encrypted_payload[:-16]
+    tag = encrypted_payload[-16:]
+    expected_tag = hashlib.sha256(b"pkb-placeholder-blob-v1\x00" + payload).digest()[:16]
+    if tag != expected_tag:
+        raise ValueError("placeholder encrypted blob tag mismatch")
+    actual_content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
+    if actual_content_hash != content_hash:
+        raise ValueError(
+            "placeholder decrypted content hash mismatch: "
+            f"expected {content_hash}, got {actual_content_hash}"
+        )
+    return payload
 
 
 def build_placeholder_encrypted_blob_map(

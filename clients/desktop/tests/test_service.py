@@ -11,11 +11,28 @@ from pathlib import Path
 from urllib.request import Request
 
 from clients.desktop import DesktopSyncHttpConfig, build_desktop_sync_service
-from clients.desktop.crypto import build_placeholder_blob_id, build_placeholder_encrypted_blob_payload
+from clients.desktop.crypto import (
+    build_placeholder_blob_id,
+    build_placeholder_encrypted_blob_payload,
+    decrypt_placeholder_encrypted_blob_payload,
+)
 from clients.desktop.worker import write_desktop_sync_worker_state
 from vault_core import (
+    AppliedManifestResult,
+    BlobDownloadCapability,
+    BlobDownloadInitExecutionResult,
+    BlobDownloadInitRequestPayload,
+    BlobDownloadInitResponsePayload,
+    BlobDownloadSessionResult,
     FileMapDocument,
     FileRecord,
+    ManifestConvergenceResult,
+    ManifestFileEntry,
+    ManifestRecord,
+    PullReconcileSessionResult,
+    PullSyncSessionResult,
+    ReconcileResult,
+    VaultHeadResponsePayload,
     VaultStateRecord,
     load_commit_intent_journal,
     load_vault_state,
@@ -112,6 +129,17 @@ class CustomBlobCryptoProvider:
         tag = len(payload).to_bytes(16, "big")
         return payload + tag
 
+    def decrypt_payload(self, encrypted_payload: bytes, *, content_hash: str) -> bytes:
+        if len(encrypted_payload) < 16:
+            raise ValueError("encrypted payload is too short")
+        payload = encrypted_payload[:-16]
+        expected_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
+        if expected_hash != content_hash:
+            raise ValueError(
+                f"decrypted payload hash mismatch: expected {content_hash}, got {expected_hash}"
+            )
+        return payload
+
     def build_encrypted_blob_map(self, content_by_file_id: dict[str, bytes]) -> dict[str, bytes]:
         return {
             file_id: self.encrypt_payload(payload)
@@ -120,6 +148,77 @@ class CustomBlobCryptoProvider:
 
 
 class DesktopSyncServiceTests(unittest.TestCase):
+    def _build_pull_result(
+        self,
+        *,
+        required_blob_ids: list[str],
+        manifest_files: list[ManifestFileEntry],
+        revision: int = 8,
+    ) -> PullSyncSessionResult:
+        manifest = ManifestRecord(
+            vault_id="vault-001",
+            revision=revision,
+            base_revision=max(revision - 1, 0),
+            created_by_device="desktop-remote",
+            created_at=1770000030500,
+            summary_hash=f"sha256:head{revision}",
+            files=manifest_files,
+            tombstones=[],
+        )
+        return PullSyncSessionResult(
+            pull=PullReconcileSessionResult(
+                head=VaultHeadResponsePayload(
+                    vault_id="vault-001",
+                    head_revision=revision,
+                    manifest_summary=f"sha256:head{revision}",
+                ),
+                manifest=manifest,
+                reconcile=ReconcileResult(
+                    plan=type(
+                        "FakePlan",
+                        (),
+                        {
+                            "target_revision": revision,
+                            "should_download_manifest": True,
+                            "requires_full_pull": False,
+                            "can_use_summary_shortcut": False,
+                        },
+                    )(),
+                    state=VaultStateRecord(
+                        vault_id="vault-001",
+                        last_applied_revision=revision,
+                        remote_head_revision=revision,
+                        acked_revision=revision,
+                        pending_ack_to_server=[revision],
+                        commit_in_progress=False,
+                        last_manifest_summary=f"sha256:head{revision}",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=1,
+                    ),
+                    applied=AppliedManifestResult(
+                        convergence=ManifestConvergenceResult(
+                            filemap=FileMapDocument(vault_id="vault-001", updated_at=1770000030600),
+                            tombstones=[],
+                            reclaimed_tombstones=[],
+                        ),
+                        state=VaultStateRecord(
+                            vault_id="vault-001",
+                            last_applied_revision=revision,
+                            remote_head_revision=revision,
+                            acked_revision=revision,
+                            pending_ack_to_server=[revision],
+                            commit_in_progress=False,
+                            last_manifest_summary=f"sha256:head{revision}",
+                            last_manifest_summary_status="valid",
+                            local_delete_sequence=1,
+                        ),
+                        required_blob_ids=required_blob_ids,
+                    ),
+                ),
+            ),
+            ack=None,
+        )
+
     def _seed_workspace(
         self,
         root: Path,
@@ -224,6 +323,17 @@ class DesktopSyncServiceTests(unittest.TestCase):
             content_by_file_id = service.load_workspace_content_for_document(snapshot.document)
 
             self.assertEqual(content_by_file_id, {"file-live": payload})
+
+    def test_placeholder_decrypt_round_trip_validates_content_hash(self) -> None:
+        payload = b"# round trip\n"
+        encrypted_payload = build_placeholder_encrypted_blob_payload(payload)
+
+        decrypted = decrypt_placeholder_encrypted_blob_payload(
+            encrypted_payload,
+            content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+        )
+
+        self.assertEqual(decrypted, payload)
 
     def test_prepare_commit_materializes_snapshot_and_blob_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -423,6 +533,153 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             self.assertEqual(api_opener.calls, [])
             self.assertEqual(blob_opener.calls, [])
+
+    def test_build_pull_required_blob_plan_collects_manifest_file_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            pull = self._build_pull_result(
+                required_blob_ids=["blob-shared"],
+                manifest_files=[
+                    ManifestFileEntry(
+                        file_id="file-a",
+                        path="Notes/A.md",
+                        type="note",
+                        content_hash="sha256:shared",
+                        blob_id="blob-shared",
+                        size=10,
+                        mtime=1770000030001,
+                    ),
+                    ManifestFileEntry(
+                        file_id="file-b",
+                        path="Notes/B.md",
+                        type="note",
+                        content_hash="sha256:shared",
+                        blob_id="blob-shared",
+                        size=10,
+                        mtime=1770000030002,
+                    ),
+                ],
+            )
+
+            plan = service.build_pull_required_blob_plan(pull)
+
+            self.assertEqual(plan.vault_id, "vault-001")
+            self.assertEqual(plan.revision, 8)
+            self.assertEqual(plan.blob_ids, ["blob-shared"])
+            self.assertEqual([item.file_id for item in plan.files], ["file-a", "file-b"])
+
+    def test_download_and_decrypt_pull_required_blobs_reuses_shared_blob_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            payload = b"# shared\n"
+            content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
+            encrypted_payload = build_placeholder_encrypted_blob_payload(payload)
+            pull = self._build_pull_result(
+                required_blob_ids=["blob-shared"],
+                manifest_files=[
+                    ManifestFileEntry(
+                        file_id="file-a",
+                        path="Notes/A.md",
+                        type="note",
+                        content_hash=content_hash,
+                        blob_id="blob-shared",
+                        size=len(payload),
+                        mtime=1770000030001,
+                    ),
+                    ManifestFileEntry(
+                        file_id="file-b",
+                        path="Notes/B.md",
+                        type="note",
+                        content_hash=content_hash,
+                        blob_id="blob-shared",
+                        size=len(payload),
+                        mtime=1770000030002,
+                    ),
+                ],
+            )
+            download_result = BlobDownloadSessionResult(
+                init=BlobDownloadInitExecutionResult(
+                    request=BlobDownloadInitRequestPayload(blob_ids=["blob-shared"]),
+                    response=BlobDownloadInitResponsePayload(
+                        downloads=[
+                            BlobDownloadCapability(
+                                blob_id="blob-shared",
+                                download_url="https://blob.example.com/download/blob-shared",
+                                encrypted_size=len(encrypted_payload),
+                                expires_at="2026-05-08T12:00:00Z",
+                            )
+                        ]
+                    ),
+                ),
+                downloaded_blobs={"blob-shared": encrypted_payload},
+            )
+
+            with mock.patch.object(
+                type(service),
+                "download_blobs",
+                return_value=download_result,
+            ) as download_mock:
+                resolved = service.download_and_decrypt_pull_required_blobs(pull)
+
+            download_mock.assert_called_once_with(["blob-shared"])
+            self.assertEqual(resolved.plan.blob_ids, ["blob-shared"])
+            self.assertEqual(resolved.download, download_result)
+            self.assertEqual(resolved.plaintext_by_file_id["file-a"], payload)
+            self.assertEqual(resolved.plaintext_by_file_id["file-b"], payload)
+
+    def test_build_pull_required_blob_plan_rejects_required_blob_ids_missing_from_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            pull = self._build_pull_result(
+                required_blob_ids=["blob-missing"],
+                manifest_files=[],
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "required blob_ids are missing from pull manifest: blob-missing",
+            ):
+                service.build_pull_required_blob_plan(pull)
+
+    def test_download_and_decrypt_pull_required_blobs_rejects_missing_downloaded_blob_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            payload = b"# decrypt\n"
+            content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
+            pull = self._build_pull_result(
+                required_blob_ids=["blob-live"],
+                manifest_files=[
+                    ManifestFileEntry(
+                        file_id="file-a",
+                        path="Notes/A.md",
+                        type="note",
+                        content_hash=content_hash,
+                        blob_id="blob-live",
+                        size=len(payload),
+                        mtime=1770000030001,
+                    )
+                ],
+            )
+            download_result = BlobDownloadSessionResult(
+                init=BlobDownloadInitExecutionResult(
+                    request=BlobDownloadInitRequestPayload(blob_ids=["blob-live"]),
+                    response=BlobDownloadInitResponsePayload(
+                        downloads=[
+                            BlobDownloadCapability(
+                                blob_id="blob-live",
+                                download_url="https://blob.example.com/download/blob-live",
+                                encrypted_size=len(payload) + 16,
+                                expires_at="2026-05-08T12:00:00Z",
+                            )
+                        ]
+                    ),
+                ),
+                downloaded_blobs={},
+            )
+
+            with mock.patch.object(type(service), "download_blobs", return_value=download_result):
+                with self.assertRaisesRegex(KeyError, "downloaded blob payload not found: blob-live"):
+                    service.download_and_decrypt_pull_required_blobs(pull)
 
     def test_load_worker_state_and_health_routes_workspace_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
