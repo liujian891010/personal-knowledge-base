@@ -16,6 +16,24 @@ from .sync_runtime import DesktopSyncHttpConfig
 ServiceBuilder = Callable[[DesktopSyncHttpConfig, Path], DesktopSyncService]
 
 
+def _resolve_blob_output_path(output_dir: Path, blob_id: str) -> Path:
+    if not blob_id or blob_id in {".", ".."}:
+        raise ValueError(f"blob_id is not safe for output path: {blob_id!r}")
+    if Path(blob_id).name != blob_id or "/" in blob_id or "\\" in blob_id:
+        raise ValueError(f"blob_id is not safe for output path: {blob_id!r}")
+    return output_dir / f"{blob_id}.blob"
+
+
+def _write_downloaded_blobs(output_dir: Path, downloaded_blobs: dict[str, bytes]) -> dict[str, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written_paths: dict[str, Path] = {}
+    for blob_id, payload in downloaded_blobs.items():
+        output_path = _resolve_blob_output_path(output_dir, blob_id)
+        output_path.write_bytes(payload)
+        written_paths[blob_id] = output_path
+    return written_paths
+
+
 def _to_jsonable(value: Any) -> Any:
     if isinstance(value, BlobDownloadSessionResult):
         return {
@@ -78,6 +96,7 @@ def create_parser() -> argparse.ArgumentParser:
 
     download_parser = subparsers.add_parser("download-blobs")
     download_parser.add_argument("--blob-id", action="append", dest="blob_ids", required=True)
+    download_parser.add_argument("--output-dir")
 
     submit_parser = subparsers.add_parser("submit-commit")
     submit_parser.add_argument("--created-at", type=int, required=True)
@@ -115,6 +134,14 @@ def run_cli(
         result = service.resume_commit_recovery(normalized_at=args.normalized_at)
     elif args.command == "download-blobs":
         result = service.download_blobs(args.blob_ids)
+        if args.output_dir:
+            output_dir = Path(args.output_dir)
+            result = {
+                "init": _to_jsonable(result.init),
+                "written_blob_paths": _to_jsonable(
+                    _write_downloaded_blobs(output_dir, result.downloaded_blobs)
+                ),
+            }
     elif args.command == "submit-commit":
         result = service.submit_commit(
             created_at=args.created_at,

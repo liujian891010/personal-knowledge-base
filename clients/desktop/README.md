@@ -53,3 +53,17 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   --device-id desktop-shanghai `
   download-blobs --blob-id blob-a --blob-id blob-b
 ```
+
+Use `--output-dir` to materialize downloaded blobs as local files named `<blob-id>.blob`:
+
+```powershell
+$env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
+  --vault-root C:\vaults\pkb `
+  --base-url https://sync.example.com `
+  --vault-id vault-001 `
+  --device-id desktop-shanghai `
+  download-blobs `
+  --blob-id blob-a `
+  --blob-id blob-b `
+  --output-dir .\downloaded-blobs
+```
