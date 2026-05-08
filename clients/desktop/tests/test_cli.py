@@ -188,6 +188,45 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(payload, {"kind": "recover", "normalized_at": 1770000040200})
         self.assertEqual(self.service.calls, [("recover", 1770000040200)])
 
+    def test_sync_once_command_routes_runner_sequence(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-once",
+            "--now-ms",
+            "1770000040250",
+            "--normalized-at",
+            "1770000040260",
+            "--rewritten-at",
+            "1770000040270",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload,
+            {
+                "final_snapshot": {"files": 1, "kind": "status"},
+                "initialized": {"kind": "init", "value": 1770000040250},
+                "pull": {"kind": "pull", "rewritten_at": 1770000040270},
+                "recovery": {"kind": "recover", "normalized_at": 1770000040260},
+            },
+        )
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040250),
+                ("recover", 1770000040260),
+                ("pull", 1770000040270),
+                ("status", None),
+            ],
+        )
+
     def test_download_blobs_command_routes_blob_ids_and_base64_encodes_payload(self) -> None:
         exit_code, payload = self._run(
             "--vault-root",

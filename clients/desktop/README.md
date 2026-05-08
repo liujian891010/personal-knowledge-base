@@ -22,6 +22,20 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   pull --rewritten-at 1770000100100
 ```
 
+`sync-once` is the current one-shot automation boundary:
+
+```powershell
+$env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
+  --vault-root C:\vaults\pkb `
+  --base-url https://sync.example.com `
+  --vault-id vault-001 `
+  --device-id desktop-shanghai `
+  sync-once `
+  --now-ms 1770000100000 `
+  --normalized-at 1770000100100 `
+  --rewritten-at 1770000100200
+```
+
 `submit-commit` payload files use `file_id -> base64 bytes` JSON objects:
 
 ```json
