@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NoteApp Sync Shell</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Local-first shell prototype</p>
+          <h1>Desktop Sync Center</h1>
+          <p class="hero-text">
+            A static shell that consumes the current <code>sync-center</code> and
+            <code>sync-activity</code> contracts without rebuilding desktop logic.
+          </p>
+        </div>
+        <div class="hero-status" id="hero-status">
+          <span class="hero-status-label">Payload</span>
+          <strong id="payload-kind">Not loaded</strong>
+          <span id="payload-detail">Load the sample contract or paste your own JSON.</span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="control-panel">
+          <section class="control-card">
+            <h2>Contract Input</h2>
+            <p>
+              Load the bundled sample, paste a CLI JSON payload, or import a local file.
+            </p>
+            <div class="control-actions">
+              <button id="load-sample-button" class="solid">Load Sample</button>
+              <label class="ghost file-picker">
+                Import JSON
+                <input id="file-input" type="file" accept="application/json" />
+              </label>
+            </div>
+            <textarea
+              id="payload-input"
+              spellcheck="false"
+              placeholder='Paste a `sync-center` or `sync-activity` JSON payload here'
+            ></textarea>
+            <div class="control-actions">
+              <button id="apply-input-button" class="solid">Apply JSON</button>
+              <button id="clear-input-button" class="ghost">Clear</button>
+            </div>
+          </section>
+
+          <section class="control-card">
+            <h2>Action Contract</h2>
+            <p id="action-contract-help">
+              Select an action from the panel, cards, or activity area to preview the shell
+              command contract.
+            </p>
+            <pre id="action-contract-output">No action selected.</pre>
+          </section>
+        </aside>
+
+        <section class="dashboard">
+          <div class="panel-card" id="panel-card"></div>
+          <div class="summary-grid" id="summary-grid"></div>
+          <div class="cards-grid" id="cards-grid"></div>
+          <div class="activity-card" id="activity-card"></div>
+        </section>
+      </main>
+    </div>
+
+    <template id="action-chip-template">
+      <button class="action-chip" type="button">
+        <span class="action-label"></span>
+        <span class="action-command"></span>
+      </button>
+    </template>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,349 @@
+{
+  "cards": [
+    {
+      "card_id": "conflicts",
+      "kind": "conflicts",
+      "level": "warning",
+      "title": "2 unresolved local conflict artifacts",
+      "body": "Conflict copies and orphan conflict files must be reviewed or cleared before commit submission can reopen.",
+      "badge_count": 2,
+      "actions": [
+        {
+          "action_id": "list-conflicts",
+          "label": "Review Conflicts",
+          "enabled": true,
+          "emphasis": "primary",
+          "command": "list-conflicts",
+          "argv": [],
+          "reason": null,
+          "requires_confirmation": false
+        },
+        {
+          "action_id": "resolve-conflicts-all",
+          "label": "Resolve All Local Artifacts",
+          "enabled": true,
+          "emphasis": "warning",
+          "command": "resolve-conflicts",
+          "argv": ["--all"],
+          "reason": "Deletes all listed local conflict-copy artifacts after user confirmation.",
+          "requires_confirmation": true
+        }
+      ]
+    },
+    {
+      "card_id": "local-changes",
+      "kind": "changes",
+      "level": "info",
+      "title": "3 local changes are waiting",
+      "body": "Tracked modifications, missing files, or untracked files are ready for the next submit or sync cycle.",
+      "badge_count": 3,
+      "actions": [
+        {
+          "action_id": "detect-local-changes",
+          "label": "Inspect Local Changes",
+          "enabled": true,
+          "emphasis": "normal",
+          "command": "detect-local-changes",
+          "argv": [],
+          "reason": null,
+          "requires_confirmation": false
+        },
+        {
+          "action_id": "submit-detected-commit",
+          "label": "Submit Local Changes",
+          "enabled": false,
+          "emphasis": "primary",
+          "command": "submit-detected-commit",
+          "argv": ["--created-at", "1770001040123"],
+          "reason": "unresolved_conflicts, requires_full_pull",
+          "requires_confirmation": false
+        }
+      ]
+    },
+    {
+      "card_id": "activity",
+      "kind": "activity",
+      "level": "danger",
+      "title": "4 recent sync actions recorded",
+      "body": "Latest action `pull` finished with status `failed` from `card:healthy`: RuntimeError: network down",
+      "badge_count": 4,
+      "actions": [
+        {
+          "action_id": "sync-activity",
+          "label": "Open Activity Feed",
+          "enabled": true,
+          "emphasis": "primary",
+          "command": "sync-activity",
+          "argv": ["--limit", "20"],
+          "reason": null,
+          "requires_confirmation": false
+        }
+      ]
+    }
+  ],
+  "panel": {
+    "level": "warning",
+    "headline": "Resolve conflicts before the next commit",
+    "detail": "The vault has unresolved local conflict copies and commit submission is still blocked.",
+    "conflict_badge_count": 2,
+    "change_badge_count": 3,
+    "primary_action": {
+      "action_id": "list-conflicts",
+      "label": "Review Conflicts",
+      "enabled": true,
+      "emphasis": "primary",
+      "command": "list-conflicts",
+      "argv": [],
+      "reason": null,
+      "requires_confirmation": false
+    },
+    "secondary_actions": [
+      {
+        "action_id": "show-vault-summary",
+        "label": "Open Summary",
+        "enabled": true,
+        "emphasis": "normal",
+        "command": "vault-summary",
+        "argv": [],
+        "reason": null,
+        "requires_confirmation": false
+      },
+      {
+        "action_id": "resolve-conflicts-all",
+        "label": "Resolve All Local Artifacts",
+        "enabled": true,
+        "emphasis": "warning",
+        "command": "resolve-conflicts",
+        "argv": ["--all"],
+        "reason": "Deletes all listed local conflict-copy artifacts after user confirmation.",
+        "requires_confirmation": true
+      }
+    ],
+    "summary": {
+      "state": {
+        "vault_id": "vault-001",
+        "last_applied_revision": 7,
+        "remote_head_revision": 8,
+        "acked_revision": 7,
+        "pending_ack_to_server": [],
+        "commit_in_progress": false,
+        "last_manifest_summary": "sha256:head7",
+        "last_manifest_summary_status": "valid",
+        "local_delete_sequence": 1,
+        "has_unresolved_conflicts": true,
+        "schema_version": "v1",
+        "meta": {
+          "device_id": "desktop-shanghai"
+        }
+      },
+      "changes": {
+        "vault_id": "vault-001",
+        "tracked_record_count": 5,
+        "change_count": 3,
+        "modified_file_ids": ["file-live"],
+        "missing_file_ids": ["file-archive"],
+        "changes": [
+          {
+            "kind": "modified",
+            "path": "Notes/Live.md",
+            "file_id": "file-live",
+            "file_type": "note",
+            "record_status": "active",
+            "content_hash": "sha256:abc",
+            "size_bytes": 1280,
+            "mtime_ms": 1770001040001
+          },
+          {
+            "kind": "missing",
+            "path": "Notes/Archive.md",
+            "file_id": "file-archive",
+            "file_type": "note",
+            "record_status": "active",
+            "content_hash": "sha256:def",
+            "size_bytes": null,
+            "mtime_ms": null
+          },
+          {
+            "kind": "untracked",
+            "path": "Inbox/New capture.md",
+            "file_id": null,
+            "file_type": "note",
+            "record_status": null,
+            "content_hash": "sha256:ghi",
+            "size_bytes": 418,
+            "mtime_ms": 1770001040042
+          }
+        ]
+      },
+      "conflicts": {
+        "state": {
+          "vault_id": "vault-001",
+          "last_applied_revision": 7,
+          "remote_head_revision": 8,
+          "acked_revision": 7,
+          "pending_ack_to_server": [],
+          "commit_in_progress": false,
+          "last_manifest_summary": "sha256:head7",
+          "last_manifest_summary_status": "valid",
+          "local_delete_sequence": 1,
+          "has_unresolved_conflicts": true,
+          "schema_version": "v1",
+          "meta": null
+        },
+        "actual_has_unresolved_conflicts": true,
+        "conflict_copies": [
+          {
+            "kind": "conflict_copy",
+            "file_id": "file-conflict",
+            "path": "Notes/Live (conflict 2026-04-29 Desktop-Win).md",
+            "exists_on_disk": true,
+            "conflict_source_file_id": "file-live",
+            "content_hash": "sha256:live-conflict"
+          }
+        ],
+        "conflict_orphans": [
+          {
+            "kind": "conflict_orphan",
+            "file_id": null,
+            "path": ".noteapp/conflict-orphans/Orphan.md",
+            "exists_on_disk": true,
+            "conflict_source_file_id": null,
+            "content_hash": null
+          }
+        ]
+      },
+      "worker_health": {
+        "status": "degraded",
+        "started_at_ms": 1770001030000,
+        "finished_at_ms": 1770001034000,
+        "success_count": 12,
+        "failure_count": 1,
+        "stopped_early": false,
+        "state_path": "C:/vault/.noteapp/sync-worker-state.json",
+        "latest_failure": {
+          "iteration": 7,
+          "error_type": "RuntimeError",
+          "error_message": "pull failed at call 0"
+        }
+      },
+      "commit_gate": {
+        "can_submit_commit": false,
+        "blocking_reasons": ["unresolved_conflicts", "requires_full_pull"],
+        "requires_full_pull": true,
+        "has_active_commit_journal": false,
+        "has_active_sync_apply_journal": false
+      }
+    }
+  },
+  "summary": {
+    "state": {
+      "vault_id": "vault-001",
+      "last_applied_revision": 7,
+      "remote_head_revision": 8,
+      "acked_revision": 7,
+      "pending_ack_to_server": [],
+      "commit_in_progress": false,
+      "last_manifest_summary": "sha256:head7",
+      "last_manifest_summary_status": "valid",
+      "local_delete_sequence": 1,
+      "has_unresolved_conflicts": true,
+      "schema_version": "v1",
+      "meta": {
+        "device_id": "desktop-shanghai"
+      }
+    },
+    "changes": {
+      "vault_id": "vault-001",
+      "tracked_record_count": 5,
+      "change_count": 3,
+      "modified_file_ids": ["file-live"],
+      "missing_file_ids": ["file-archive"],
+      "changes": []
+    },
+    "conflicts": {
+      "state": {
+        "vault_id": "vault-001",
+        "last_applied_revision": 7,
+        "remote_head_revision": 8,
+        "acked_revision": 7,
+        "pending_ack_to_server": [],
+        "commit_in_progress": false,
+        "last_manifest_summary": "sha256:head7",
+        "last_manifest_summary_status": "valid",
+        "local_delete_sequence": 1,
+        "has_unresolved_conflicts": true,
+        "schema_version": "v1",
+        "meta": null
+      },
+      "actual_has_unresolved_conflicts": true,
+      "conflict_copies": [],
+      "conflict_orphans": []
+    },
+    "worker_health": {
+      "status": "degraded",
+      "started_at_ms": 1770001030000,
+      "finished_at_ms": 1770001034000,
+      "success_count": 12,
+      "failure_count": 1,
+      "stopped_early": false,
+      "state_path": "C:/vault/.noteapp/sync-worker-state.json",
+      "latest_failure": {
+        "iteration": 7,
+        "error_type": "RuntimeError",
+        "error_message": "pull failed at call 0"
+      }
+    },
+    "commit_gate": {
+      "can_submit_commit": false,
+      "blocking_reasons": ["unresolved_conflicts", "requires_full_pull"],
+      "requires_full_pull": true,
+      "has_active_commit_journal": false,
+      "has_active_sync_apply_journal": false
+    }
+  },
+  "recent_activity": {
+    "records": [
+      {
+        "activity_id": "activity-001",
+        "occurred_at_ms": 1770001038000,
+        "level": "success",
+        "action_id": "show-vault-summary",
+        "command": "vault-summary",
+        "status": "executed",
+        "source": "panel",
+        "message": null
+      },
+      {
+        "activity_id": "activity-002",
+        "occurred_at_ms": 1770001039000,
+        "level": "warning",
+        "action_id": "worker-health",
+        "command": "worker-health",
+        "status": "disabled",
+        "source": "card:worker-health",
+        "message": "No worker state recorded yet"
+      },
+      {
+        "activity_id": "activity-003",
+        "occurred_at_ms": 1770001040000,
+        "level": "danger",
+        "action_id": "open-shell-debug",
+        "command": "open-shell-debug",
+        "status": "unsupported",
+        "source": "panel",
+        "message": "unsupported sync action command: open-shell-debug"
+      },
+      {
+        "activity_id": "activity-004",
+        "occurred_at_ms": 1770001040100,
+        "level": "danger",
+        "action_id": "pull",
+        "command": "pull",
+        "status": "failed",
+        "source": "card:healthy",
+        "message": "RuntimeError: network down"
+      }
+    ],
+    "total_count": 4
+  }
+}

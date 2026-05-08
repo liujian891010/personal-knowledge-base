@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "echo \"dev script placeholder\"",
-    "build": "echo \"build script placeholder\""
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs"
   }
 }
