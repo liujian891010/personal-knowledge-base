@@ -439,11 +439,34 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 build_placeholder_encrypted_blob_payload(updated_payload),
             )
 
-    def test_submit_detected_changes_rejects_unsupported_untracked_files(self) -> None:
+    def test_submit_detected_changes_rejects_modified_conflict_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
-            extra_path = Path(tmpdir) / "Notes" / "Extra.md"
-            extra_path.write_text("# extra\n", encoding="utf-8")
+            service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                FileMapDocument(
+                    vault_id="vault-001",
+                    updated_at=1770000030100,
+                    files=[
+                        FileRecord(
+                            file_id="file-live",
+                            path="Notes/Live.md",
+                            type="note",
+                            status="conflict_copy",
+                            updated_at=1770000030090,
+                            content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                            conflict_source_file_id="file-source",
+                            meta={
+                                "blob_id": "blob-live",
+                                "size": len(payload),
+                                "mtime": 1770000030080,
+                                "mime_type": "text/markdown",
+                            },
+                        )
+                    ],
+                ),
+            )
+            (Path(tmpdir) / "Notes" / "Live.md").write_bytes(payload + b"updated")
 
             with self.assertRaisesRegex(ValueError, "unsupported items"):
                 service.submit_detected_changes(created_at=1770000030200)
@@ -464,6 +487,31 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(blob_opener.calls, [])
             self.assertEqual(result.prepared.submission.manifest.files, [])
             self.assertEqual(len(result.prepared.submission.manifest.tombstones), 1)
+
+    def test_submit_detected_changes_commits_untracked_file_as_new_active_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, _, _ = self._seed_workspace(Path(tmpdir))
+            (Path(tmpdir) / "Notes" / "Live.md").unlink()
+            new_payload = b"# New note\n"
+            new_path = Path(tmpdir) / "Notes" / "New.md"
+            new_path.write_bytes(new_payload)
+
+            result = service.submit_detected_changes(
+                created_at=1770000030200,
+                commit_intent_id="intent-add-001",
+            )
+
+            self.assertEqual(result.network.commit.status, "committed")
+            self.assertEqual(
+                [call[0:2] for call in api_opener.calls],
+                [
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/check"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/upload-init"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/commits"),
+                ],
+            )
+            self.assertEqual(len(blob_opener.calls), 1)
+            self.assertEqual(blob_opener.calls[0][2], build_placeholder_encrypted_blob_payload(new_payload))
 
 
 if __name__ == "__main__":

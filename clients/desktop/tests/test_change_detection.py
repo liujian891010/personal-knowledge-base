@@ -141,7 +141,7 @@ class DesktopChangeDetectionTests(unittest.TestCase):
             root = Path(tmpdir)
             (root / "Notes").mkdir(parents=True, exist_ok=True)
             (root / "Notes" / "Tracked.md").write_bytes(b"# tracked\n")
-            (root / "Notes" / "Loose.md").write_bytes(b"# loose\n")
+            (root / "Notes" / "Tracked.md").write_bytes(b"# tracked-updated\n")
 
             document = FileMapDocument(
                 vault_id="vault-001",
@@ -151,9 +151,10 @@ class DesktopChangeDetectionTests(unittest.TestCase):
                         file_id="file-tracked",
                         path="Notes/Tracked.md",
                         type="note",
-                        status="active",
+                        status="conflict_copy",
                         updated_at=1770000050000,
                         content_hash="sha256:stale",
+                        conflict_source_file_id="file-source",
                     )
                 ],
             )
@@ -188,6 +189,20 @@ class DesktopChangeDetectionTests(unittest.TestCase):
         self.assertEqual(plan.document.files[0].status, "deleted")
         self.assertEqual(plan.local_delete_sequence, 5)
         self.assertEqual(plan.tombstones[0].file_id, "file-missing")
+
+    def test_build_tracked_change_commit_plan_adds_untracked_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Notes").mkdir(parents=True, exist_ok=True)
+            payload = b"# new\n"
+            (root / "Notes" / "New.md").write_bytes(payload)
+
+            plan = build_tracked_change_commit_plan(root, FileMapDocument(vault_id="vault-001", updated_at=1770000050500))
+
+            self.assertEqual(plan.change_set.change_count, 1)
+            self.assertEqual(len(plan.document.files), 1)
+            self.assertEqual(plan.document.files[0].path, "Notes/New.md")
+            self.assertEqual(plan.content_by_file_id[plan.document.files[0].file_id], payload)
 
 
 if __name__ == "__main__":
