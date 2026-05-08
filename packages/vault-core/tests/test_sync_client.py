@@ -20,6 +20,7 @@ from vault_core import (
     CommitIntentJournalRecord,
     CommitNetworkPlan,
     CommitPreflightResult,
+    CommitRecoverySessionResult,
     CommitSubmissionExecutionResult,
     CommitSnapshotEntry,
     CommitSnapshotTable,
@@ -56,6 +57,7 @@ from vault_core import (
     execute_blob_downloads,
     execute_blob_uploads,
     execute_commit_preflight,
+    execute_commit_recovery_session,
     execute_create_commit,
     execute_commit_submission,
     execute_pull_reconcile_session,
@@ -1287,6 +1289,126 @@ class SyncClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "blob downloader is required"):
             session.download_blobs(vault_id="vault_pkb_001", blob_ids=["blob_a"])
+
+    def test_execute_commit_recovery_session_uses_local_recovery_when_remote_confirmation_is_not_needed(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=False,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+
+                result = execute_commit_recovery_session(
+                    transport,
+                    connection,
+                    vault_root=root,
+                    vault_id="vault_pkb_001",
+                    normalized_at=1770000021001,
+                )
+
+                self.assertIsInstance(result, CommitRecoverySessionResult)
+                self.assertEqual(result.mode, "idle")
+                self.assertIsNotNone(result.local)
+                self.assertIsNone(result.submitted)
+                self.assertEqual(transport.calls, [])
+
+    def test_execute_commit_recovery_session_uses_resolve_intent_for_submitted_confirmation(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            resolve_commit_intent=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "status": "found",
+                    "matched_revision": 8,
+                    "observed_head_revision": 8,
+                    "head_manifest_summary": "sha256:head8",
+                },
+            ),
+            manifest=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "vault_id": "vault_pkb_001",
+                    "revision": 8,
+                    "base_revision": 7,
+                    "created_by_device": "desktop-shanghai",
+                    "created_at": 1770000020000,
+                    "summary_hash": "sha256:head8",
+                    "files": [],
+                    "tombstones": [],
+                },
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ledger_path = root / "tombstone-ledger.jsonl"
+            db_path = root / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(
+                    connection,
+                    VaultStateRecord(
+                        vault_id="vault_pkb_001",
+                        last_applied_revision=7,
+                        remote_head_revision=7,
+                        acked_revision=7,
+                        pending_ack_to_server=[],
+                        commit_in_progress=True,
+                        last_manifest_summary="sha256:head7",
+                        last_manifest_summary_status="valid",
+                        local_delete_sequence=0,
+                    ),
+                )
+                upsert_commit_intent_journal(
+                    connection,
+                    CommitIntentJournalRecord(
+                        vault_id="vault_pkb_001",
+                        commit_intent_id="intent_1",
+                        intent_manifest_hash="sha256:intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        status="submitted",
+                        intent_delete_seq_upper_bound=None,
+                        created_at=1770000019995,
+                        updated_at=1770000019995,
+                    ),
+                )
+
+                result = execute_commit_recovery_session(
+                    transport,
+                    connection,
+                    vault_root=root,
+                    vault_id="vault_pkb_001",
+                    normalized_at=1770000021001,
+                    ledger_path=ledger_path,
+                    local_tombstones=[],
+                )
+
+                self.assertEqual(result.mode, "submitted_confirmation")
+                self.assertIsNone(result.local)
+                self.assertIsNotNone(result.submitted)
+                self.assertEqual(result.submitted.recovery.state.last_applied_revision, 8)
+                self.assertEqual(
+                    [call[0] for call in transport.calls],
+                    ["resolve_commit_intent", "get_manifest"],
+                )
 
 
 if __name__ == "__main__":
