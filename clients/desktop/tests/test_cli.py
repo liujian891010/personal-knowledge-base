@@ -1689,7 +1689,7 @@ class DesktopCliTests(unittest.TestCase):
                 ("recover", 1770000040540),
                 ("recover-pull-apply", 1770000040540),
                 ("pull-and-apply", 1770000040560),
-                ("submit-workspace-commit", 1770000040550, ["file-a"], None, 1770000040551, None),
+                ("submit-workspace-commit", 1770000040561, ["file-a"], None, 1770000040562, None),
                 ("status", None),
             ],
         )

@@ -48,6 +48,20 @@ class DesktopSyncRunner:
             return getattr(state, "last_manifest_summary_status", None) != "valid"
         return getattr(recovery, "mode", None) in {"degraded", "orphaned"}
 
+    @staticmethod
+    def _normalize_post_pull_submit_times(
+        *,
+        submit_created_at: Optional[int],
+        cleanup_normalized_at: Optional[int],
+        pull_rewritten_at: int,
+    ) -> tuple[Optional[int], Optional[int]]:
+        if submit_created_at is None:
+            return None, cleanup_normalized_at
+        normalized_submit_created_at = max(submit_created_at, pull_rewritten_at + 1)
+        if cleanup_normalized_at is None:
+            return normalized_submit_created_at, None
+        return normalized_submit_created_at, max(cleanup_normalized_at, normalized_submit_created_at + 1)
+
     def run_once(
         self,
         *,
@@ -92,9 +106,15 @@ class DesktopSyncRunner:
         pull_apply_recovery = self.service.resume_pull_apply_recovery(
             normalized_at=recovery_normalized_at,
         )
+        pull_before_submit = self._recovery_requires_pull_before_submit(pull_apply_recovery)
         pull: object | None = None
-        if self._recovery_requires_pull_before_submit(pull_apply_recovery):
+        if pull_before_submit:
             pull = self.service.pull_and_apply(rewritten_at=pull_rewritten_at)
+            submit_created_at, cleanup_normalized_at = self._normalize_post_pull_submit_times(
+                submit_created_at=submit_created_at,
+                cleanup_normalized_at=cleanup_normalized_at,
+                pull_rewritten_at=pull_rewritten_at,
+            )
 
         resolved_submit_file_ids = None if submit_file_ids is None else list(submit_file_ids)
         if submit_created_at is None:

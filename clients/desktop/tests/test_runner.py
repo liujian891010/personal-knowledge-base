@@ -306,7 +306,7 @@ class DesktopSyncRunnerTests(unittest.TestCase):
                 ("recover", 1770000051410),
                 ("recover-pull-apply", 1770000051410),
                 ("pull-and-apply", 1770000051430),
-                ("submit", 1770000051420, ["file-a"], None, None, None),
+                ("submit", 1770000051431, ["file-a"], None, None, None),
                 ("status", None),
             ],
         )
