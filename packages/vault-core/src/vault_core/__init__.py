@@ -94,6 +94,7 @@ from .sync_api import (
 )
 from .sync_client import (
     AckExecutionResult,
+    CommitRecoverySessionResult,
     BlobDownloadSessionResult,
     BlobDownloadInitExecutionResult,
     CommitPreflightResult,
@@ -116,6 +117,7 @@ from .sync_client import (
     execute_blob_uploads,
     execute_commit_preflight,
     execute_create_commit,
+    execute_commit_recovery_session,
     execute_commit_submission,
     execute_pull_reconcile_session,
     execute_pull_sync_session,
@@ -270,6 +272,7 @@ __all__ = [
     "ResolveCommitIntentRequestPayload",
     "ResolveCommitIntentResponsePayload",
     "AckExecutionResult",
+    "CommitRecoverySessionResult",
     "BlobDownloadSessionResult",
     "BlobDownloadInitExecutionResult",
     "CommitPreflightResult",
@@ -332,6 +335,7 @@ __all__ = [
     "execute_blob_uploads",
     "execute_commit_preflight",
     "execute_create_commit",
+    "execute_commit_recovery_session",
     "execute_commit_submission",
     "execute_pull_reconcile_session",
     "execute_pull_sync_session",

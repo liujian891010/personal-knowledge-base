@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Optional, Protocol
 
 from .models import CommitIntentJournalRecord, FileMapDocument, ManifestRecord, TombstoneRecord, VaultStateRecord
-from .sqlite_store import load_commit_intent_journal, recover_submitted_commit_miss
+from .sqlite_store import load_commit_intent_journal, load_vault_state, recover_submitted_commit_miss
 from .sync_apply import SubmittedRecoveryResult, recover_submitted_commit_flow
 from .sync_api import (
     AckRequestPayload,
@@ -45,11 +45,14 @@ from .sync_commit import (
     BlobUploadPlan,
     BlobUploadPlanEntry,
     CommitNetworkPlan,
+    LocalCommitRecoveryResult,
     CommitSnapshotTable,
     CommitSubmissionBundle,
     CreateCommitRequestPayload,
     build_blob_check_request,
     build_commit_network_plan,
+    plan_commit_recovery,
+    recover_local_commit_state,
     resolve_blob_check_result,
 )
 
@@ -202,6 +205,13 @@ class PullSyncSessionResult:
 
 
 @dataclass(frozen=True)
+class CommitRecoverySessionResult:
+    mode: str
+    local: Optional[LocalCommitRecoveryResult] = None
+    submitted: Optional[SubmittedResolveIntentRecoveryExecutionResult] = None
+
+
+@dataclass(frozen=True)
 class VaultSyncSession:
     transport: SyncCommitTransport
     uploader: Optional[SyncBlobUploader] = None
@@ -327,6 +337,26 @@ class VaultSyncSession:
             self.downloader,
             vault_id=vault_id,
             blob_ids=blob_ids,
+        )
+
+    def resume_commit_recovery(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        vault_root: Path,
+        vault_id: str,
+        normalized_at: int,
+        ledger_path: Optional[Path] = None,
+        local_tombstones: Iterable[TombstoneRecord] = (),
+    ) -> CommitRecoverySessionResult:
+        return execute_commit_recovery_session(
+            self.transport,
+            connection,
+            vault_root=vault_root,
+            vault_id=vault_id,
+            normalized_at=normalized_at,
+            ledger_path=ledger_path,
+            local_tombstones=local_tombstones,
         )
 
 
@@ -696,6 +726,51 @@ def execute_pull_sync_session(
             transport,
             pull.reconcile.state,
         ),
+    )
+
+
+def execute_commit_recovery_session(
+    transport: SyncCommitTransport,
+    connection: sqlite3.Connection,
+    *,
+    vault_root: Path,
+    vault_id: str,
+    normalized_at: int,
+    ledger_path: Optional[Path] = None,
+    local_tombstones: Iterable[TombstoneRecord] = (),
+) -> CommitRecoverySessionResult:
+    state = load_vault_state(connection, vault_id)
+    if state is None:
+        raise KeyError(f"vault_state not found: {vault_id}")
+    journal = load_commit_intent_journal(connection, vault_id)
+    plan = plan_commit_recovery(state, journal=journal)
+
+    if plan.mode != "submitted_confirmation":
+        local = recover_local_commit_state(
+            connection,
+            vault_id=vault_id,
+            vault_root=vault_root,
+        )
+        return CommitRecoverySessionResult(
+            mode=plan.mode,
+            local=local,
+            submitted=None,
+        )
+
+    if ledger_path is None:
+        raise ValueError("ledger_path is required for submitted confirmation recovery")
+    submitted = execute_submitted_recovery_via_resolve_intent(
+        transport,
+        connection,
+        ledger_path=ledger_path,
+        vault_id=vault_id,
+        local_tombstones=local_tombstones,
+        normalized_at=normalized_at,
+    )
+    return CommitRecoverySessionResult(
+        mode=plan.mode,
+        local=None,
+        submitted=submitted,
     )
 
 
