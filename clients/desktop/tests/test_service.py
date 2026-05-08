@@ -715,6 +715,60 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertIsNotNone(result.payload)
             self.assertFalse(result.payload.state.has_unresolved_conflicts)
 
+    def test_list_sync_activity_returns_recent_window_and_total_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            service.execute_sync_action("show-vault-summary", now_ms=1770000040901)
+            service.execute_sync_action("worker-health", now_ms=1770000040902)
+
+            feed = service.list_sync_activity(limit=1)
+
+            self.assertEqual(feed.total_count, 2)
+            self.assertEqual(len(feed.records), 1)
+            self.assertEqual(feed.records[0].action_id, "worker-health")
+            self.assertEqual(feed.records[0].status, "disabled")
+            self.assertEqual(feed.records[0].level, "warning")
+            self.assertEqual(feed.records[0].message, "No worker state recorded yet")
+
+    def test_build_sync_center_model_includes_recent_activity_feed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            service.execute_sync_action("show-vault-summary", now_ms=1770000040901)
+
+            center = service.build_sync_center_model(now_ms=1770000040999)
+
+            self.assertEqual(center.recent_activity.total_count, 1)
+            self.assertEqual(len(center.recent_activity.records), 1)
+            self.assertEqual(center.recent_activity.records[0].action_id, "show-vault-summary")
+            self.assertEqual(center.recent_activity.records[0].status, "executed")
+
+    def test_execute_sync_action_records_unsupported_activity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            action = service._build_panel_action(
+                action_id="open-shell-debug",
+                label="Open Shell Debug",
+                command="open-shell-debug",
+            )
+
+            with mock.patch.object(type(service), "_find_sync_action", return_value=(action, "panel")):
+                result = service.execute_sync_action("open-shell-debug", now_ms=1770000040903)
+
+            self.assertEqual(result.status, "unsupported")
+            feed = service.list_sync_activity(limit=5)
+            self.assertEqual(feed.total_count, 1)
+            self.assertEqual(feed.records[0].action_id, "open-shell-debug")
+            self.assertEqual(feed.records[0].status, "unsupported")
+            self.assertEqual(feed.records[0].level, "danger")
+            self.assertEqual(
+                feed.records[0].message,
+                "unsupported sync action command: open-shell-debug",
+            )
+
     def test_load_workspace_content_rejects_workspace_snapshot_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))

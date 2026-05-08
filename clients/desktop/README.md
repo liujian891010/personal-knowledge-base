@@ -172,6 +172,10 @@ Use `sync-panel` when a shell or future Tauri UI wants a direct presentation mod
 
 Use `sync-center` when a shell wants a richer multi-card experience instead of a single top-level panel. The response groups recovery, conflict, baseline rebuild, local-change, and worker-health concerns into separate cards, each with its own severity and executable actions, while still carrying the underlying `sync-panel` and `vault-summary`.
 
+`sync-center` now also includes a `recent_activity` feed sourced from `.noteapp/sync-activity.log.jsonl`, so a shell can render the latest executed, disabled, or unsupported sync actions without watching stdout or reconstructing command history itself.
+
+Use `sync-activity --limit <n>` to read that persisted action feed directly. Records are returned in append order, expose a total activity count alongside the latest window, and currently cover `execute-sync-action` dispatch results such as executed pulls, disabled worker-health reads, and unsupported shell actions.
+
 Use `execute-sync-action --action-id <id>` when a shell wants to execute one of those action contracts without re-implementing command dispatch. The current boundary can directly run recovery, pull, conflict listing/clearing, local-change scan, worker-health readout, and detected-change submit from the previously generated action ids.
 
 Use `detect-local-changes` to scan the current vault root for tracked file modifications, missing tracked files, and untracked local files before wiring automatic submit flows. A local rename still appears as a `missing + untracked` pair at scan time. `.ai/raw/` and `.ai/log.md` stay outside the regular sync set and are ignored by this scan.

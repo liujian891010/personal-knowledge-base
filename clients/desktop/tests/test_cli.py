@@ -124,6 +124,21 @@ class FakeService:
                 "error_message": "submit failed at call 0",
             },
         }
+        self.sync_activity_payload = {
+            "records": [
+                {
+                    "activity_id": "activity-001",
+                    "occurred_at_ms": 1770000040666,
+                    "level": "success",
+                    "action_id": "list-conflicts",
+                    "command": "list-conflicts",
+                    "status": "executed",
+                    "source": "card:conflicts",
+                    "message": None,
+                }
+            ],
+            "total_count": 1,
+        }
 
     def ensure_initialized(self, *, now_ms=None):
         self.calls.append(("init", now_ms))
@@ -252,7 +267,12 @@ class FakeService:
             ],
             "panel": self.build_sync_panel_model(now_ms=now_ms),
             "summary": self.summarize_vault(),
+            "recent_activity": self.sync_activity_payload,
         }
+
+    def list_sync_activity(self, *, limit=20):
+        self.calls.append(("sync-activity", limit))
+        return self.sync_activity_payload
 
     def execute_sync_action(self, action_id: str, *, now_ms=None):
         self.calls.append(("execute-sync-action", action_id, now_ms))
@@ -775,6 +795,7 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["cards"][0]["card_id"], "conflicts")
         self.assertEqual(payload["panel"]["primary_action"]["action_id"], "list-conflicts")
+        self.assertEqual(payload["recent_activity"]["records"][0]["action_id"], "list-conflicts")
         self.assertEqual(
             self.service.calls,
             [
@@ -784,6 +805,26 @@ class DesktopCliTests(unittest.TestCase):
                 ("vault-summary", None),
             ],
         )
+
+    def test_sync_activity_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-activity",
+            "--limit",
+            "5",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["total_count"], 1)
+        self.assertEqual(payload["records"][0]["action_id"], "list-conflicts")
+        self.assertEqual(self.service.calls, [("sync-activity", 5)])
 
     def test_execute_sync_action_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(
