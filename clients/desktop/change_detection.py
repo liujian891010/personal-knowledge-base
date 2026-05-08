@@ -8,7 +8,7 @@ from typing import Callable, Iterable, Optional
 
 from vault_core import FileMapDocument, FileRecord, TombstoneRecord
 from vault_core.constants import NOTEAPP_DIRNAME, VAULTINFO_FILENAME
-from vault_core.operations import add_file, mark_deleted
+from vault_core.operations import add_file, mark_deleted, rename_file
 
 from .crypto import build_placeholder_blob_id
 
@@ -191,6 +191,45 @@ def _resolve_mime_type(record: FileRecord, relative_path: str) -> Optional[str]:
     return guessed
 
 
+def _match_local_rename_candidates(
+    change_set: DesktopWorkspaceChangeSet,
+    document: FileMapDocument,
+) -> dict[str, DesktopWorkspaceChangeRecord]:
+    active_record_by_file_id = {
+        record.file_id: record
+        for record in document.files
+        if record.status == "active"
+    }
+    missing_by_key: dict[tuple[str, str], list[DesktopWorkspaceChangeRecord]] = {}
+    untracked_by_key: dict[tuple[str, str], list[DesktopWorkspaceChangeRecord]] = {}
+
+    for change in change_set.changes:
+        if change.content_hash is None:
+            continue
+        if change.kind == "missing" and change.file_id is not None:
+            record = active_record_by_file_id.get(change.file_id)
+            if record is None:
+                continue
+            key = (change.content_hash, record.type)
+            missing_by_key.setdefault(key, []).append(change)
+            continue
+        if change.kind == "untracked":
+            key = (change.content_hash, change.file_type)
+            untracked_by_key.setdefault(key, []).append(change)
+
+    rename_targets_by_file_id: dict[str, DesktopWorkspaceChangeRecord] = {}
+    for key, missing_changes in missing_by_key.items():
+        untracked_changes = untracked_by_key.get(key, [])
+        if len(missing_changes) != 1 or len(untracked_changes) != 1:
+            continue
+        missing_change = missing_changes[0]
+        untracked_change = untracked_changes[0]
+        if missing_change.file_id is None or missing_change.path == untracked_change.path:
+            continue
+        rename_targets_by_file_id[missing_change.file_id] = untracked_change
+    return rename_targets_by_file_id
+
+
 def build_tracked_change_commit_plan(
     vault_root: Path,
     document: FileMapDocument,
@@ -228,6 +267,11 @@ def build_tracked_change_commit_plan(
     resolved_tombstones = list(tombstones or [])
     local_delete_sequence = current_local_delete_sequence
     resolve_file_id = build_placeholder_file_id if file_id_builder is None else file_id_builder
+    record_by_file_id = {record.file_id: record for record in document.files}
+    rename_targets_by_file_id = _match_local_rename_candidates(change_set, document)
+    consumed_untracked_paths = {
+        change.path for change in rename_targets_by_file_id.values()
+    }
 
     updated_files: list[FileRecord] = []
 
@@ -269,7 +313,72 @@ def build_tracked_change_commit_plan(
         latest_updated_at = max(latest_updated_at, mtime_ms)
 
     working_document = document.replace_files(updated_files, updated_at=latest_updated_at)
-    missing_file_id_set = set(change_set.missing_file_ids)
+    for file_id, rename_target in sorted(
+        rename_targets_by_file_id.items(),
+        key=lambda item: (item[1].path, item[0]),
+    ):
+        current_record = record_by_file_id.get(file_id)
+        if current_record is None:
+            raise KeyError(f"file_id not found in document: {file_id}")
+
+        relative_path = _normalize_relative_path(rename_target.path)
+        path = _resolve_workspace_file_path(vault_root, relative_path)
+        payload = path.read_bytes()
+        stat = path.stat()
+        content_hash = _compute_content_hash(payload)
+        if content_hash != current_record.content_hash:
+            raise ValueError(
+                f"rename candidate content hash mismatch for file_id: {file_id}"
+            )
+        mtime_ms = stat.st_mtime_ns // 1_000_000
+        renamed_at = max(working_document.updated_at, current_record.updated_at, mtime_ms) + 1
+        working_document = rename_file(
+            working_document,
+            file_id=file_id,
+            new_path=relative_path,
+            updated_at=renamed_at,
+        )
+        rewritten_files: list[FileRecord] = []
+        for record in working_document.files:
+            if record.file_id != file_id:
+                rewritten_files.append(record)
+                continue
+            meta = dict(record.meta or {})
+            blob_id = meta.get("blob_id")
+            resolved_blob_id = (
+                blob_id
+                if isinstance(blob_id, str) and blob_id
+                else build_placeholder_blob_id(content_hash)
+            )
+            meta.update(
+                {
+                    "blob_id": resolved_blob_id,
+                    "size": len(payload),
+                    "mtime": mtime_ms,
+                    "mime_type": _resolve_mime_type(record, relative_path),
+                }
+            )
+            rewritten_files.append(
+                FileRecord(
+                    file_id=record.file_id,
+                    path=relative_path,
+                    type=record.type,
+                    status=record.status,
+                    updated_at=renamed_at,
+                    content_hash=content_hash,
+                    last_known_revision=record.last_known_revision,
+                    conflict_source_file_id=record.conflict_source_file_id,
+                    meta=meta,
+                )
+            )
+        working_document = working_document.replace_files(
+            rewritten_files,
+            updated_at=max(working_document.updated_at, renamed_at),
+        )
+        content_by_file_id[file_id] = payload
+        latest_updated_at = max(latest_updated_at, renamed_at)
+
+    missing_file_id_set = set(change_set.missing_file_ids) - set(rename_targets_by_file_id)
     for record in document.files:
         if record.file_id not in missing_file_id_set:
             continue
@@ -287,6 +396,8 @@ def build_tracked_change_commit_plan(
 
     for change in change_set.changes:
         if change.kind != "untracked":
+            continue
+        if change.path in consumed_untracked_paths:
             continue
         relative_path = _normalize_relative_path(change.path)
         path = _resolve_workspace_file_path(vault_root, relative_path)

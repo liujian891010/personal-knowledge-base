@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -203,6 +204,46 @@ class DesktopChangeDetectionTests(unittest.TestCase):
             self.assertEqual(len(plan.document.files), 1)
             self.assertEqual(plan.document.files[0].path, "Notes/New.md")
             self.assertEqual(plan.content_by_file_id[plan.document.files[0].file_id], payload)
+
+    def test_build_tracked_change_commit_plan_folds_missing_and_untracked_into_rename(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Notes").mkdir(parents=True, exist_ok=True)
+            payload = b"# same content\n"
+            (root / "Notes" / "Renamed.md").write_bytes(payload)
+
+            document = FileMapDocument(
+                vault_id="vault-001",
+                updated_at=1770000050600,
+                files=[
+                    FileRecord(
+                        file_id="file-live",
+                        path="Notes/Live.md",
+                        type="note",
+                        status="active",
+                        updated_at=1770000050000,
+                        content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                        meta={
+                            "blob_id": "blob-live",
+                            "size": len(payload),
+                            "mtime": 1770000050000,
+                            "mime_type": "text/markdown",
+                        },
+                    )
+                ],
+            )
+
+            plan = build_tracked_change_commit_plan(root, document)
+
+            self.assertEqual(plan.change_set.change_count, 2)
+            self.assertEqual(plan.change_set.missing_file_ids, ["file-live"])
+            self.assertEqual(len(plan.document.files), 1)
+            self.assertEqual(plan.document.files[0].file_id, "file-live")
+            self.assertEqual(plan.document.files[0].path, "Notes/Renamed.md")
+            self.assertEqual(plan.document.files[0].status, "active")
+            self.assertEqual(plan.document.files[0].meta["blob_id"], "blob-live")
+            self.assertEqual(plan.tombstones, [])
+            self.assertEqual(plan.content_by_file_id, {"file-live": payload})
 
 
 if __name__ == "__main__":

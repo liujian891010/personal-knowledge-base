@@ -513,6 +513,33 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(len(blob_opener.calls), 1)
             self.assertEqual(blob_opener.calls[0][2], build_placeholder_encrypted_blob_payload(new_payload))
 
+    def test_submit_detected_changes_folds_local_rename_to_existing_file_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, payload, _ = self._seed_workspace(Path(tmpdir))
+            (Path(tmpdir) / "Notes" / "Live.md").unlink()
+            renamed_path = Path(tmpdir) / "Notes" / "Renamed.md"
+            renamed_path.write_bytes(payload)
+
+            result = service.submit_detected_changes(
+                created_at=1770000030200,
+                commit_intent_id="intent-rename-001",
+            )
+
+            self.assertEqual(result.network.commit.status, "committed")
+            self.assertEqual(
+                [call[0:2] for call in api_opener.calls],
+                [
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/check"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/upload-init"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/commits"),
+                ],
+            )
+            self.assertEqual(len(blob_opener.calls), 1)
+            self.assertEqual(blob_opener.calls[0][2], build_placeholder_encrypted_blob_payload(payload))
+            self.assertEqual(result.prepared.submission.manifest.files[0].file_id, "file-live")
+            self.assertEqual(result.prepared.submission.manifest.files[0].path, "Notes/Renamed.md")
+            self.assertEqual(result.prepared.submission.manifest.tombstones, [])
+
 
 if __name__ == "__main__":
     unittest.main()
