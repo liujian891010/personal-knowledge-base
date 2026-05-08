@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+import unittest
+
+from clients.desktop.runner import DesktopSyncCycleResult
+from clients.desktop.worker import DesktopSyncWorker, DesktopSyncWorkerConfig
+
+
+class FakeRunner:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int | None, int, int | None, list[str] | None, dict[str, bytes] | None, str | None, int | None, int]] = []
+
+    def run_cycle(
+        self,
+        *,
+        init_now_ms=None,
+        recovery_normalized_at: int,
+        submit_created_at=None,
+        submit_file_ids=None,
+        encrypted_blob_by_file_id=None,
+        commit_intent_id=None,
+        cleanup_normalized_at=None,
+        pull_rewritten_at: int,
+    ) -> DesktopSyncCycleResult:
+        resolved_file_ids = None if submit_file_ids is None else list(submit_file_ids)
+        self.calls.append(
+            (
+                init_now_ms,
+                recovery_normalized_at,
+                submit_created_at,
+                resolved_file_ids,
+                encrypted_blob_by_file_id,
+                commit_intent_id,
+                cleanup_normalized_at,
+                pull_rewritten_at,
+            )
+        )
+        return DesktopSyncCycleResult(
+            initialized={"step": "init", "now_ms": init_now_ms},
+            recovery={"step": "recover", "normalized_at": recovery_normalized_at},
+            submitted=(
+                None
+                if submit_created_at is None
+                else {"step": "submit", "created_at": submit_created_at}
+            ),
+            pull={"step": "pull", "rewritten_at": pull_rewritten_at},
+            final_snapshot={"step": "status", "iteration": len(self.calls) - 1},
+        )
+
+
+class DesktopSyncWorkerTests(unittest.TestCase):
+    def test_run_auto_plans_time_and_step_from_interval(self) -> None:
+        runner = FakeRunner()
+        slept: list[float] = []
+
+        result = DesktopSyncWorker(
+            runner,
+            sleep=slept.append,
+            now_ms_provider=lambda: 1770000070000,
+        ).run(
+            DesktopSyncWorkerConfig(
+                iterations=2,
+                interval_seconds=2.5,
+                submit_file_ids=["file-a"],
+            )
+        )
+
+        self.assertEqual(result.started_at_ms, 1770000070000)
+        self.assertEqual(result.effective_step_ms, 2500)
+        self.assertEqual(result.time_plan.recovery_normalized_at, 1770000070010)
+        self.assertEqual(result.time_plan.submit_created_at, 1770000070020)
+        self.assertEqual(result.time_plan.cleanup_normalized_at, 1770000070021)
+        self.assertEqual(result.time_plan.pull_rewritten_at, 1770000070030)
+        self.assertEqual(
+            runner.calls,
+            [
+                (
+                    1770000070000,
+                    1770000070010,
+                    1770000070020,
+                    ["file-a"],
+                    None,
+                    None,
+                    1770000070021,
+                    1770000070030,
+                ),
+                (
+                    1770000072500,
+                    1770000072510,
+                    1770000072520,
+                    ["file-a"],
+                    None,
+                    None,
+                    1770000072521,
+                    1770000072530,
+                ),
+            ],
+        )
+        self.assertEqual(slept, [2.5])
+        self.assertTrue(result.loop.config.continue_on_error)
+
+    def test_run_preserves_explicit_step_and_stop_on_error(self) -> None:
+        runner = FakeRunner()
+
+        result = DesktopSyncWorker(
+            runner,
+            sleep=lambda _: None,
+            now_ms_provider=lambda: 1770000071000,
+        ).run(
+            DesktopSyncWorkerConfig(
+                iterations=1,
+                interval_seconds=5.0,
+                step_ms=99,
+                continue_on_error=False,
+                recovery_normalized_at=1770000071111,
+                pull_rewritten_at=1770000071222,
+            )
+        )
+
+        self.assertEqual(result.effective_step_ms, 99)
+        self.assertFalse(result.loop.config.continue_on_error)
+        self.assertEqual(runner.calls[0][1], 1770000071111)
+        self.assertEqual(runner.calls[0][7], 1770000071222)
+
+
+if __name__ == "__main__":
+    unittest.main()
