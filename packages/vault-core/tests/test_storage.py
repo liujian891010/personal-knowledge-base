@@ -5199,6 +5199,7 @@ class VaultCoreStorageTests(unittest.TestCase):
                 )
 
                 self.assertIsInstance(applied, AppliedManifestResult)
+                self.assertEqual(applied.required_blob_ids, ["blob_live"])
                 self.assertEqual(applied.state.last_applied_revision, 8)
                 self.assertEqual(applied.state.remote_head_revision, 8)
                 self.assertEqual(applied.state.acked_revision, 8)
@@ -5492,6 +5493,7 @@ class VaultCoreStorageTests(unittest.TestCase):
                 self.assertTrue(reconciled.plan.requires_full_pull)
                 self.assertFalse(reconciled.plan.can_use_summary_shortcut)
                 self.assertIsNotNone(reconciled.applied)
+                self.assertEqual(reconciled.applied.required_blob_ids, ["blob_live"])
                 self.assertFalse(should_block_new_commit(reconciled.state))
                 self.assertFalse(requires_full_pull(reconciled.state, observed_head_revision=8))
                 self.assertEqual(
@@ -5556,6 +5558,7 @@ class VaultCoreStorageTests(unittest.TestCase):
                 self.assertFalse(reconciled.plan.requires_full_pull)
                 self.assertTrue(reconciled.plan.can_use_summary_shortcut)
                 self.assertIsNotNone(reconciled.applied)
+                self.assertEqual(reconciled.applied.required_blob_ids, [])
                 self.assertEqual(reconciled.state.last_applied_revision, 10)
                 self.assertEqual(reconciled.state.remote_head_revision, 10)
                 self.assertEqual(reconciled.state.acked_revision, 10)
