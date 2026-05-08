@@ -9,6 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from clients.desktop.cli import run_cli
+from vault_core import (
+    BlobDownloadCapability,
+    BlobDownloadInitExecutionResult,
+    BlobDownloadInitRequestPayload,
+    BlobDownloadInitResponsePayload,
+    BlobDownloadSessionResult,
+)
 
 
 @dataclass
@@ -36,6 +43,26 @@ class FakeService:
     def resume_commit_recovery(self, *, normalized_at: int):
         self.calls.append(("recover", normalized_at))
         return {"kind": "recover", "normalized_at": normalized_at}
+
+    def download_blobs(self, blob_ids):
+        self.calls.append(("download-blobs", list(blob_ids)))
+        return BlobDownloadSessionResult(
+            init=BlobDownloadInitExecutionResult(
+                request=BlobDownloadInitRequestPayload(blob_ids=list(blob_ids)),
+                response=BlobDownloadInitResponsePayload(
+                    downloads=[
+                        BlobDownloadCapability(
+                            blob_id=blob_id,
+                            download_url=f"https://blob.example.com/download/{blob_id}",
+                            encrypted_size=3,
+                            expires_at="2026-05-08T12:00:00Z",
+                        )
+                        for blob_id in blob_ids
+                    ]
+                ),
+            ),
+            downloaded_blobs={blob_id: b"xyz" for blob_id in blob_ids},
+        )
 
     def submit_commit(
         self,
@@ -160,6 +187,56 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload, {"kind": "recover", "normalized_at": 1770000040200})
         self.assertEqual(self.service.calls, [("recover", 1770000040200)])
+
+    def test_download_blobs_command_routes_blob_ids_and_base64_encodes_payload(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "download-blobs",
+            "--blob-id",
+            "blob-a",
+            "--blob-id",
+            "blob-b",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload,
+            {
+                "downloaded_blobs_base64": {
+                    "blob-a": "eHl6",
+                    "blob-b": "eHl6",
+                },
+                "init": {
+                    "request": {"blob_ids": ["blob-a", "blob-b"]},
+                    "response": {
+                        "downloads": [
+                            {
+                                "blob_id": "blob-a",
+                                "download_url": "https://blob.example.com/download/blob-a",
+                                "encrypted_size": 3,
+                                "expires_at": "2026-05-08T12:00:00Z",
+                                "headers": None,
+                            },
+                            {
+                                "blob_id": "blob-b",
+                                "download_url": "https://blob.example.com/download/blob-b",
+                                "encrypted_size": 3,
+                                "expires_at": "2026-05-08T12:00:00Z",
+                                "headers": None,
+                            },
+                        ]
+                    },
+                },
+            },
+        )
+        self.assertEqual(self.service.calls, [("download-blobs", ["blob-a", "blob-b"])])
 
     def test_submit_commit_command_decodes_payload_files_and_routes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
