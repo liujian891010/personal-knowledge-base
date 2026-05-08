@@ -36,6 +36,8 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   --rewritten-at 1770000100200
 ```
 
+For `sync-once`, `sync-loop`, `sync-cycle`, and `sync-cycle-loop`, these orchestration timestamps can now be omitted. The desktop client will derive a consistent ordered set from the current clock, while still allowing any explicit argument to override the generated value.
+
 `sync-loop` runs bounded repeated `sync-once` iterations, with optional timestamp stepping and sleep interval:
 
 ```powershell

@@ -4,6 +4,7 @@ import argparse
 import base64
 import json
 import sys
+from time import time
 from time import sleep as default_sleep
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -19,8 +20,10 @@ from .scheduler import (
 )
 from .service import DesktopSyncService, build_desktop_sync_service
 from .sync_runtime import DesktopSyncHttpConfig
+from .timing import resolve_desktop_sync_time_plan
 
 ServiceBuilder = Callable[[DesktopSyncHttpConfig, Path], DesktopSyncService]
+NowMsProvider = Callable[[], int]
 
 
 def _resolve_blob_output_path(output_dir: Path, blob_id: str) -> Path:
@@ -127,22 +130,22 @@ def create_parser() -> argparse.ArgumentParser:
     recover_parser.add_argument("--normalized-at", type=int, required=True)
 
     sync_once_parser = subparsers.add_parser("sync-once")
-    sync_once_parser.add_argument("--normalized-at", type=int, required=True)
-    sync_once_parser.add_argument("--rewritten-at", type=int, required=True)
+    sync_once_parser.add_argument("--normalized-at", type=int)
+    sync_once_parser.add_argument("--rewritten-at", type=int)
     sync_once_parser.add_argument("--now-ms", type=int)
 
     sync_loop_parser = subparsers.add_parser("sync-loop")
     sync_loop_parser.add_argument("--iterations", type=int, required=True)
-    sync_loop_parser.add_argument("--normalized-at", type=int, required=True)
-    sync_loop_parser.add_argument("--rewritten-at", type=int, required=True)
+    sync_loop_parser.add_argument("--normalized-at", type=int)
+    sync_loop_parser.add_argument("--rewritten-at", type=int)
     sync_loop_parser.add_argument("--interval-seconds", type=float, default=0.0)
     sync_loop_parser.add_argument("--step-ms", type=int, default=0)
     sync_loop_parser.add_argument("--now-ms", type=int)
     sync_loop_parser.add_argument("--continue-on-error", action="store_true")
 
     sync_cycle_parser = subparsers.add_parser("sync-cycle")
-    sync_cycle_parser.add_argument("--normalized-at", type=int, required=True)
-    sync_cycle_parser.add_argument("--rewritten-at", type=int, required=True)
+    sync_cycle_parser.add_argument("--normalized-at", type=int)
+    sync_cycle_parser.add_argument("--rewritten-at", type=int)
     sync_cycle_parser.add_argument("--now-ms", type=int)
     sync_cycle_parser.add_argument("--submit-created-at", type=int)
     sync_cycle_parser.add_argument("--file-id", action="append", dest="file_ids")
@@ -153,8 +156,8 @@ def create_parser() -> argparse.ArgumentParser:
 
     sync_cycle_loop_parser = subparsers.add_parser("sync-cycle-loop")
     sync_cycle_loop_parser.add_argument("--iterations", type=int, required=True)
-    sync_cycle_loop_parser.add_argument("--normalized-at", type=int, required=True)
-    sync_cycle_loop_parser.add_argument("--rewritten-at", type=int, required=True)
+    sync_cycle_loop_parser.add_argument("--normalized-at", type=int)
+    sync_cycle_loop_parser.add_argument("--rewritten-at", type=int)
     sync_cycle_loop_parser.add_argument("--interval-seconds", type=float, default=0.0)
     sync_cycle_loop_parser.add_argument("--step-ms", type=int, default=0)
     sync_cycle_loop_parser.add_argument("--now-ms", type=int)
@@ -194,9 +197,15 @@ def run_cli(
     stdout: TextIO,
     service_builder: ServiceBuilder = build_cli_service,
     sleep: Callable[[float], None] = default_sleep,
+    now_ms_provider: Optional[NowMsProvider] = None,
 ) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
+    resolved_now_ms_provider = (
+        (lambda: int(time() * 1000))
+        if now_ms_provider is None
+        else now_ms_provider
+    )
 
     config = DesktopSyncHttpConfig(
         base_url=args.base_url,
@@ -215,21 +224,33 @@ def run_cli(
     elif args.command == "recover":
         result = service.resume_commit_recovery(normalized_at=args.normalized_at)
     elif args.command == "sync-once":
-        result = DesktopSyncRunner(service).run_once(
+        time_plan = resolve_desktop_sync_time_plan(
+            base_now_ms=resolved_now_ms_provider(),
             init_now_ms=args.now_ms,
             recovery_normalized_at=args.normalized_at,
             pull_rewritten_at=args.rewritten_at,
         )
+        result = DesktopSyncRunner(service).run_once(
+            init_now_ms=time_plan.init_now_ms,
+            recovery_normalized_at=time_plan.recovery_normalized_at,
+            pull_rewritten_at=time_plan.pull_rewritten_at,
+        )
     elif args.command == "sync-loop":
+        time_plan = resolve_desktop_sync_time_plan(
+            base_now_ms=resolved_now_ms_provider(),
+            init_now_ms=args.now_ms,
+            recovery_normalized_at=args.normalized_at,
+            pull_rewritten_at=args.rewritten_at,
+        )
         result = DesktopSyncScheduler(
             DesktopSyncRunner(service),
             sleep=sleep,
         ).run_loop(
             DesktopSyncScheduleConfig(
                 iterations=args.iterations,
-                init_now_ms=args.now_ms,
-                recovery_normalized_at=args.normalized_at,
-                pull_rewritten_at=args.rewritten_at,
+                init_now_ms=time_plan.init_now_ms,
+                recovery_normalized_at=time_plan.recovery_normalized_at,
+                pull_rewritten_at=time_plan.pull_rewritten_at,
                 interval_seconds=args.interval_seconds,
                 step_ms=args.step_ms,
                 continue_on_error=args.continue_on_error,
@@ -249,8 +270,6 @@ def run_cli(
         )
         encrypted_blob_by_file_id = None
         if should_submit:
-            if args.submit_created_at is None:
-                raise ValueError("sync-cycle submit step requires --submit-created-at")
             if not args.file_ids:
                 raise ValueError("sync-cycle submit step requires at least one --file-id")
             if args.encrypted_map or args.encrypted_dir:
@@ -259,15 +278,24 @@ def run_cli(
                     encrypted_map=args.encrypted_map,
                     encrypted_dir=args.encrypted_dir,
                 )
-        result = DesktopSyncRunner(service).run_cycle(
+        time_plan = resolve_desktop_sync_time_plan(
+            base_now_ms=resolved_now_ms_provider(),
             init_now_ms=args.now_ms,
             recovery_normalized_at=args.normalized_at,
-            pull_rewritten_at=args.rewritten_at,
             submit_created_at=args.submit_created_at,
+            cleanup_normalized_at=args.cleanup_normalized_at,
+            pull_rewritten_at=args.rewritten_at,
+            submit_requested=should_submit,
+        )
+        result = DesktopSyncRunner(service).run_cycle(
+            init_now_ms=time_plan.init_now_ms,
+            recovery_normalized_at=time_plan.recovery_normalized_at,
+            pull_rewritten_at=time_plan.pull_rewritten_at,
+            submit_created_at=time_plan.submit_created_at,
             submit_file_ids=args.file_ids,
             encrypted_blob_by_file_id=encrypted_blob_by_file_id,
             commit_intent_id=args.commit_intent_id,
-            cleanup_normalized_at=args.cleanup_normalized_at,
+            cleanup_normalized_at=time_plan.cleanup_normalized_at,
         )
     elif args.command == "sync-cycle-loop":
         should_submit = any(
@@ -283,8 +311,6 @@ def run_cli(
         )
         encrypted_blob_by_file_id = None
         if should_submit:
-            if args.submit_created_at is None:
-                raise ValueError("sync-cycle-loop submit step requires --submit-created-at")
             if not args.file_ids:
                 raise ValueError("sync-cycle-loop submit step requires at least one --file-id")
             if args.encrypted_map or args.encrypted_dir:
@@ -293,20 +319,29 @@ def run_cli(
                     encrypted_map=args.encrypted_map,
                     encrypted_dir=args.encrypted_dir,
                 )
+        time_plan = resolve_desktop_sync_time_plan(
+            base_now_ms=resolved_now_ms_provider(),
+            init_now_ms=args.now_ms,
+            recovery_normalized_at=args.normalized_at,
+            submit_created_at=args.submit_created_at,
+            cleanup_normalized_at=args.cleanup_normalized_at,
+            pull_rewritten_at=args.rewritten_at,
+            submit_requested=should_submit,
+        )
         result = DesktopSyncScheduler(
             DesktopSyncRunner(service),
             sleep=sleep,
         ).run_cycle_loop(
             DesktopSyncCycleScheduleConfig(
                 iterations=args.iterations,
-                init_now_ms=args.now_ms,
-                recovery_normalized_at=args.normalized_at,
-                submit_created_at=args.submit_created_at,
+                init_now_ms=time_plan.init_now_ms,
+                recovery_normalized_at=time_plan.recovery_normalized_at,
+                submit_created_at=time_plan.submit_created_at,
                 submit_file_ids=args.file_ids,
                 encrypted_blob_by_file_id=encrypted_blob_by_file_id,
                 commit_intent_id=args.commit_intent_id,
-                cleanup_normalized_at=args.cleanup_normalized_at,
-                pull_rewritten_at=args.rewritten_at,
+                cleanup_normalized_at=time_plan.cleanup_normalized_at,
+                pull_rewritten_at=time_plan.pull_rewritten_at,
                 interval_seconds=args.interval_seconds,
                 step_ms=args.step_ms,
                 continue_on_error=args.continue_on_error,

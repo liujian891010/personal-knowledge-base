@@ -142,13 +142,14 @@ class DesktopCliTests(unittest.TestCase):
         self.created.append((config, vault_root))
         return self.service
 
-    def _run(self, *argv: str, sleep=None):
+    def _run(self, *argv: str, sleep=None, now_ms_provider=None):
         stdout = io.StringIO()
         exit_code = run_cli(
             argv,
             stdout=stdout,
             service_builder=self._builder,
             sleep=(lambda _: None) if sleep is None else sleep,
+            now_ms_provider=(lambda: 1770000040000) if now_ms_provider is None else now_ms_provider,
         )
         return exit_code, json.loads(stdout.getvalue())
 
@@ -273,6 +274,31 @@ class DesktopCliTests(unittest.TestCase):
             ],
         )
 
+    def test_sync_once_command_can_auto_generate_time_arguments(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-once",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040000),
+                ("recover", 1770000040010),
+                ("pull", 1770000040020),
+                ("status", None),
+            ],
+        )
+        self.assertEqual(payload["pull"]["rewritten_at"], 1770000040020)
+
     def test_sync_loop_command_routes_scheduler_sequence(self) -> None:
         slept: list[float] = []
         exit_code, payload = self._run(
@@ -378,6 +404,39 @@ class DesktopCliTests(unittest.TestCase):
         )
         self.assertEqual(slept, [1.25, 1.25])
 
+    def test_sync_loop_command_can_auto_generate_time_arguments(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-loop",
+            "--iterations",
+            "2",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["config"]["init_now_ms"], 1770000040000)
+        self.assertEqual(payload["config"]["recovery_normalized_at"], 1770000040010)
+        self.assertEqual(payload["config"]["pull_rewritten_at"], 1770000040020)
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040000),
+                ("recover", 1770000040010),
+                ("pull", 1770000040020),
+                ("status", None),
+                ("init", 1770000040000),
+                ("recover", 1770000040010),
+                ("pull", 1770000040020),
+                ("status", None),
+            ],
+        )
+
     def test_sync_cycle_command_routes_optional_workspace_submit(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             encrypted_dir = Path(tmpdir) / "encrypted"
@@ -477,11 +536,39 @@ class DesktopCliTests(unittest.TestCase):
             [
                 ("init", 1770000040530),
                 ("recover", 1770000040540),
-                ("submit-workspace-commit", 1770000040550, ["file-a"], None, None, None),
+                ("submit-workspace-commit", 1770000040550, ["file-a"], None, 1770000040551, None),
                 ("pull", 1770000040560),
                 ("status", None),
             ],
         )
+
+    def test_sync_cycle_command_can_auto_generate_time_arguments(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-cycle",
+            "--file-id",
+            "file-a",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040000),
+                ("recover", 1770000040010),
+                ("submit-workspace-commit", 1770000040020, ["file-a"], None, 1770000040021, None),
+                ("pull", 1770000040030),
+                ("status", None),
+            ],
+        )
+        self.assertEqual(payload["submitted"]["created_at"], 1770000040020)
 
     def test_sync_cycle_loop_command_routes_scheduler_over_full_cycle(self) -> None:
         slept: list[float] = []
@@ -601,6 +688,47 @@ class DesktopCliTests(unittest.TestCase):
             ],
         )
         self.assertEqual(slept, [0.5])
+
+    def test_sync_cycle_loop_command_can_auto_generate_time_arguments(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-cycle-loop",
+            "--iterations",
+            "2",
+            "--file-id",
+            "file-a",
+            "--step-ms",
+            "50",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["config"]["init_now_ms"], 1770000040000)
+        self.assertEqual(payload["config"]["recovery_normalized_at"], 1770000040010)
+        self.assertEqual(payload["config"]["submit_created_at"], 1770000040020)
+        self.assertEqual(payload["config"]["cleanup_normalized_at"], 1770000040021)
+        self.assertEqual(payload["config"]["pull_rewritten_at"], 1770000040030)
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040000),
+                ("recover", 1770000040010),
+                ("submit-workspace-commit", 1770000040020, ["file-a"], None, 1770000040021, None),
+                ("pull", 1770000040030),
+                ("status", None),
+                ("init", 1770000040050),
+                ("recover", 1770000040060),
+                ("submit-workspace-commit", 1770000040070, ["file-a"], None, 1770000040071, None),
+                ("pull", 1770000040080),
+                ("status", None),
+            ],
+        )
 
     def test_sync_loop_command_can_continue_on_error(self) -> None:
         self.service.fail_recover_at_calls = {1}
