@@ -784,6 +784,7 @@ class DesktopCliTests(unittest.TestCase):
                     "recovery_normalized_at": 1770000040610,
                     "step_ms": 100,
                     "submit_created_at": 1770000040620,
+                    "submit_detected": False,
                     "submit_file_ids": ["file-a"],
                 },
                 "iterations": [
@@ -853,6 +854,117 @@ class DesktopCliTests(unittest.TestCase):
             ],
         )
         self.assertEqual(slept, [0.5])
+
+    def test_sync_cycle_command_can_submit_detected_changes(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-cycle",
+            "--now-ms",
+            "1770000040640",
+            "--normalized-at",
+            "1770000040650",
+            "--submit-created-at",
+            "1770000040660",
+            "--submit-detected",
+            "--commit-intent-id",
+            "intent-detected-010",
+            "--cleanup-normalized-at",
+            "1770000040661",
+            "--rewritten-at",
+            "1770000040670",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["submitted"]["kind"], "submit-detected-commit")
+        self.assertEqual(payload["submitted"]["commit_intent_id"], "intent-detected-010")
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040640),
+                ("recover", 1770000040650),
+                ("submit-detected-commit", 1770000040660, "intent-detected-010", 1770000040661),
+                ("pull", 1770000040670),
+                ("status", None),
+            ],
+        )
+
+    def test_sync_cycle_loop_command_can_submit_detected_changes(self) -> None:
+        slept: list[float] = []
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-cycle-loop",
+            "--iterations",
+            "2",
+            "--submit-detected",
+            "--interval-seconds",
+            "0.25",
+            sleep=slept.append,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["config"]["submit_detected"])
+        self.assertEqual(payload["iterations"][0]["run_cycle"]["submitted"]["kind"], "submit-detected-commit")
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040000),
+                ("recover", 1770000040010),
+                ("submit-detected-commit", 1770000040020, None, 1770000040021),
+                ("pull", 1770000040030),
+                ("status", None),
+                ("init", 1770000040000),
+                ("recover", 1770000040010),
+                ("submit-detected-commit", 1770000040020, None, 1770000040021),
+                ("pull", 1770000040030),
+                ("status", None),
+            ],
+        )
+        self.assertEqual(slept, [0.25])
+
+    def test_sync_worker_command_can_submit_detected_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exit_code, payload = self._run(
+                "--vault-root",
+                tmpdir,
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "sync-worker",
+                "--iterations",
+                "1",
+                "--submit-detected",
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(payload["config"]["submit_detected"])
+            self.assertEqual(payload["loop"]["iterations"][0]["run_cycle"]["submitted"]["kind"], "submit-detected-commit")
+            self.assertEqual(
+                self.service.calls,
+                [
+                    ("init", 1770000040000),
+                    ("recover", 1770000040010),
+                    ("submit-detected-commit", 1770000040020, None, 1770000040021),
+                    ("pull", 1770000040030),
+                    ("status", None),
+                ],
+            )
 
     def test_sync_cycle_loop_command_can_auto_generate_time_arguments(self) -> None:
         exit_code, payload = self._run(

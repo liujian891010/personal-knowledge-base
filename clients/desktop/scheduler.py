@@ -54,6 +54,7 @@ class DesktopSyncCycleScheduleConfig:
     init_now_ms: Optional[int] = None
     submit_created_at: Optional[int] = None
     submit_file_ids: Optional[list[str]] = None
+    submit_detected: bool = False
     encrypted_blob_by_file_id: Optional[dict[str, bytes]] = None
     commit_intent_id: Optional[str] = None
     cleanup_normalized_at: Optional[int] = None
@@ -70,14 +71,24 @@ class DesktopSyncCycleScheduleConfig:
         if self.submit_created_at is None:
             if self.submit_file_ids:
                 raise ValueError("submit_file_ids require submit_created_at")
+            if self.submit_detected:
+                raise ValueError("submit_detected requires submit_created_at")
             if self.encrypted_blob_by_file_id is not None:
                 raise ValueError("encrypted_blob_by_file_id requires submit_created_at")
             if self.commit_intent_id is not None:
                 raise ValueError("commit_intent_id requires submit_created_at")
             if self.cleanup_normalized_at is not None:
                 raise ValueError("cleanup_normalized_at requires submit_created_at")
-        elif not self.submit_file_ids:
-            raise ValueError("submit_created_at requires submit_file_ids")
+        else:
+            if self.submit_detected:
+                if self.submit_file_ids:
+                    raise ValueError("submit_detected cannot be combined with submit_file_ids")
+                if self.encrypted_blob_by_file_id is not None:
+                    raise ValueError(
+                        "submit_detected cannot be combined with encrypted_blob_by_file_id"
+                    )
+            elif not self.submit_file_ids:
+                raise ValueError("submit_created_at requires submit_file_ids or submit_detected")
 
 
 @dataclass(frozen=True)
@@ -188,6 +199,7 @@ class DesktopSyncScheduler:
                     recovery_normalized_at=recovery_normalized_at,
                     submit_created_at=submit_created_at,
                     submit_file_ids=config.submit_file_ids,
+                    submit_detected=config.submit_detected,
                     encrypted_blob_by_file_id=config.encrypted_blob_by_file_id,
                     commit_intent_id=config.commit_intent_id,
                     cleanup_normalized_at=cleanup_normalized_at,

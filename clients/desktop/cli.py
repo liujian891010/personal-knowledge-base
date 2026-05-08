@@ -154,6 +154,7 @@ def create_parser() -> argparse.ArgumentParser:
     sync_cycle_parser.add_argument("--now-ms", type=int)
     sync_cycle_parser.add_argument("--submit-created-at", type=int)
     sync_cycle_parser.add_argument("--file-id", action="append", dest="file_ids")
+    sync_cycle_parser.add_argument("--submit-detected", action="store_true")
     sync_cycle_parser.add_argument("--commit-intent-id")
     sync_cycle_parser.add_argument("--cleanup-normalized-at", type=int)
     sync_cycle_parser.add_argument("--encrypted-map")
@@ -168,6 +169,7 @@ def create_parser() -> argparse.ArgumentParser:
     sync_cycle_loop_parser.add_argument("--now-ms", type=int)
     sync_cycle_loop_parser.add_argument("--submit-created-at", type=int)
     sync_cycle_loop_parser.add_argument("--file-id", action="append", dest="file_ids")
+    sync_cycle_loop_parser.add_argument("--submit-detected", action="store_true")
     sync_cycle_loop_parser.add_argument("--commit-intent-id")
     sync_cycle_loop_parser.add_argument("--cleanup-normalized-at", type=int)
     sync_cycle_loop_parser.add_argument("--encrypted-map")
@@ -182,6 +184,7 @@ def create_parser() -> argparse.ArgumentParser:
     sync_worker_parser.add_argument("--normalized-at", type=int)
     sync_worker_parser.add_argument("--submit-created-at", type=int)
     sync_worker_parser.add_argument("--file-id", action="append", dest="file_ids")
+    sync_worker_parser.add_argument("--submit-detected", action="store_true")
     sync_worker_parser.add_argument("--commit-intent-id")
     sync_worker_parser.add_argument("--cleanup-normalized-at", type=int)
     sync_worker_parser.add_argument("--rewritten-at", type=int)
@@ -290,26 +293,34 @@ def run_cli(
         )
     elif args.command == "sync-cycle":
         should_submit = any(
-            value is not None
-            for value in (
-                args.submit_created_at,
-                args.file_ids,
-                args.commit_intent_id,
-                args.cleanup_normalized_at,
-                args.encrypted_map,
-                args.encrypted_dir,
+            (
+                args.submit_created_at is not None,
+                bool(args.file_ids),
+                args.submit_detected,
+                args.commit_intent_id is not None,
+                args.cleanup_normalized_at is not None,
+                args.encrypted_map is not None,
+                args.encrypted_dir is not None,
             )
         )
         encrypted_blob_by_file_id = None
         if should_submit:
-            if not args.file_ids:
-                raise ValueError("sync-cycle submit step requires at least one --file-id")
-            if args.encrypted_map or args.encrypted_dir:
-                encrypted_blob_by_file_id = _load_encrypted_blob_payloads(
-                    args.file_ids,
-                    encrypted_map=args.encrypted_map,
-                    encrypted_dir=args.encrypted_dir,
-                )
+            if args.submit_detected:
+                if args.file_ids:
+                    raise ValueError("sync-cycle --submit-detected cannot be combined with --file-id")
+                if args.encrypted_map or args.encrypted_dir:
+                    raise ValueError(
+                        "sync-cycle --submit-detected cannot be combined with encrypted payload inputs"
+                    )
+            else:
+                if not args.file_ids:
+                    raise ValueError("sync-cycle submit step requires at least one --file-id")
+                if args.encrypted_map or args.encrypted_dir:
+                    encrypted_blob_by_file_id = _load_encrypted_blob_payloads(
+                        args.file_ids,
+                        encrypted_map=args.encrypted_map,
+                        encrypted_dir=args.encrypted_dir,
+                    )
         time_plan = resolve_desktop_sync_time_plan(
             base_now_ms=resolved_now_ms_provider(),
             init_now_ms=args.now_ms,
@@ -325,32 +336,43 @@ def run_cli(
             pull_rewritten_at=time_plan.pull_rewritten_at,
             submit_created_at=time_plan.submit_created_at,
             submit_file_ids=args.file_ids,
+            submit_detected=args.submit_detected,
             encrypted_blob_by_file_id=encrypted_blob_by_file_id,
             commit_intent_id=args.commit_intent_id,
             cleanup_normalized_at=time_plan.cleanup_normalized_at,
         )
     elif args.command == "sync-cycle-loop":
         should_submit = any(
-            value is not None
-            for value in (
-                args.submit_created_at,
-                args.file_ids,
-                args.commit_intent_id,
-                args.cleanup_normalized_at,
-                args.encrypted_map,
-                args.encrypted_dir,
+            (
+                args.submit_created_at is not None,
+                bool(args.file_ids),
+                args.submit_detected,
+                args.commit_intent_id is not None,
+                args.cleanup_normalized_at is not None,
+                args.encrypted_map is not None,
+                args.encrypted_dir is not None,
             )
         )
         encrypted_blob_by_file_id = None
         if should_submit:
-            if not args.file_ids:
-                raise ValueError("sync-cycle-loop submit step requires at least one --file-id")
-            if args.encrypted_map or args.encrypted_dir:
-                encrypted_blob_by_file_id = _load_encrypted_blob_payloads(
-                    args.file_ids,
-                    encrypted_map=args.encrypted_map,
-                    encrypted_dir=args.encrypted_dir,
-                )
+            if args.submit_detected:
+                if args.file_ids:
+                    raise ValueError(
+                        "sync-cycle-loop --submit-detected cannot be combined with --file-id"
+                    )
+                if args.encrypted_map or args.encrypted_dir:
+                    raise ValueError(
+                        "sync-cycle-loop --submit-detected cannot be combined with encrypted payload inputs"
+                    )
+            else:
+                if not args.file_ids:
+                    raise ValueError("sync-cycle-loop submit step requires at least one --file-id")
+                if args.encrypted_map or args.encrypted_dir:
+                    encrypted_blob_by_file_id = _load_encrypted_blob_payloads(
+                        args.file_ids,
+                        encrypted_map=args.encrypted_map,
+                        encrypted_dir=args.encrypted_dir,
+                    )
         time_plan = resolve_desktop_sync_time_plan(
             base_now_ms=resolved_now_ms_provider(),
             init_now_ms=args.now_ms,
@@ -370,6 +392,7 @@ def run_cli(
                 recovery_normalized_at=time_plan.recovery_normalized_at,
                 submit_created_at=time_plan.submit_created_at,
                 submit_file_ids=args.file_ids,
+                submit_detected=args.submit_detected,
                 encrypted_blob_by_file_id=encrypted_blob_by_file_id,
                 commit_intent_id=args.commit_intent_id,
                 cleanup_normalized_at=time_plan.cleanup_normalized_at,
@@ -390,6 +413,13 @@ def run_cli(
                 )
         elif args.encrypted_map or args.encrypted_dir:
             raise ValueError("sync-worker encrypted payloads require at least one --file-id")
+        if args.submit_detected:
+            if args.file_ids:
+                raise ValueError("sync-worker --submit-detected cannot be combined with --file-id")
+            if args.encrypted_map or args.encrypted_dir:
+                raise ValueError(
+                    "sync-worker --submit-detected cannot be combined with encrypted payload inputs"
+                )
         result = DesktopSyncWorker(
             DesktopSyncRunner(service),
             sleep=sleep,
@@ -405,6 +435,7 @@ def run_cli(
                 recovery_normalized_at=args.normalized_at,
                 submit_created_at=args.submit_created_at,
                 submit_file_ids=args.file_ids,
+                submit_detected=args.submit_detected,
                 commit_intent_id=args.commit_intent_id,
                 cleanup_normalized_at=args.cleanup_normalized_at,
                 pull_rewritten_at=args.rewritten_at,

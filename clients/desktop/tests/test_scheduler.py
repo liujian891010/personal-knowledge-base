@@ -13,7 +13,7 @@ from clients.desktop.scheduler import (
 class FakeRunner:
     def __init__(self) -> None:
         self.calls: list[tuple[int | None, int, int]] = []
-        self.cycle_calls: list[tuple[int | None, int, int | None, list[str] | None, dict[str, bytes] | None, str | None, int | None, int]] = []
+        self.cycle_calls: list[tuple[int | None, int, int | None, list[str] | None, bool, dict[str, bytes] | None, str | None, int | None, int]] = []
         self.fail_once_at_iterations: set[int] = set()
         self.fail_cycle_at_iterations: set[int] = set()
 
@@ -41,6 +41,7 @@ class FakeRunner:
         recovery_normalized_at: int,
         submit_created_at=None,
         submit_file_ids=None,
+        submit_detected=False,
         encrypted_blob_by_file_id=None,
         commit_intent_id=None,
         cleanup_normalized_at=None,
@@ -53,6 +54,7 @@ class FakeRunner:
                 recovery_normalized_at,
                 submit_created_at,
                 resolved_file_ids,
+                submit_detected,
                 encrypted_blob_by_file_id,
                 commit_intent_id,
                 cleanup_normalized_at,
@@ -68,7 +70,7 @@ class FakeRunner:
                 None
                 if submit_created_at is None
                 else {
-                    "step": "submit",
+                    "step": "submit-detected" if submit_detected else "submit",
                     "created_at": submit_created_at,
                     "file_ids": resolved_file_ids,
                 }
@@ -189,6 +191,7 @@ class DesktopSyncSchedulerTests(unittest.TestCase):
                     1770000062100,
                     1770000062150,
                     ["file-a"],
+                    False,
                     {"file-a": b"enc-a"},
                     "intent-100",
                     1770000062151,
@@ -199,6 +202,7 @@ class DesktopSyncSchedulerTests(unittest.TestCase):
                     1770000062140,
                     1770000062190,
                     ["file-a"],
+                    False,
                     {"file-a": b"enc-a"},
                     "intent-100",
                     1770000062191,
@@ -210,6 +214,40 @@ class DesktopSyncSchedulerTests(unittest.TestCase):
         self.assertEqual(result.iterations[1].run_cycle.submitted["created_at"], 1770000062190)
         self.assertEqual(result.success_count, 2)
         self.assertEqual(result.failure_count, 0)
+
+    def test_run_cycle_loop_supports_detected_submit_mode(self) -> None:
+        runner = FakeRunner()
+
+        result = DesktopSyncScheduler(runner, sleep=lambda _: None).run_cycle_loop(
+            DesktopSyncCycleScheduleConfig(
+                iterations=1,
+                init_now_ms=1770000062250,
+                recovery_normalized_at=1770000062260,
+                submit_created_at=1770000062270,
+                submit_detected=True,
+                commit_intent_id="intent-detected-200",
+                cleanup_normalized_at=1770000062271,
+                pull_rewritten_at=1770000062280,
+            )
+        )
+
+        self.assertEqual(
+            runner.cycle_calls,
+            [
+                (
+                    1770000062250,
+                    1770000062260,
+                    1770000062270,
+                    None,
+                    True,
+                    None,
+                    "intent-detected-200",
+                    1770000062271,
+                    1770000062280,
+                )
+            ],
+        )
+        self.assertEqual(result.iterations[0].run_cycle.submitted["step"], "submit-detected")
 
     def test_run_loop_can_continue_on_error_and_capture_failure(self) -> None:
         runner = FakeRunner()
@@ -274,6 +312,16 @@ class DesktopSyncSchedulerTests(unittest.TestCase):
             DesktopSyncCycleScheduleConfig(
                 iterations=1,
                 recovery_normalized_at=1,
+                submit_file_ids=["file-a"],
+                pull_rewritten_at=3,
+            )
+
+        with self.assertRaisesRegex(ValueError, "submit_detected"):
+            DesktopSyncCycleScheduleConfig(
+                iterations=1,
+                recovery_normalized_at=1,
+                submit_created_at=2,
+                submit_detected=True,
                 submit_file_ids=["file-a"],
                 pull_rewritten_at=3,
             )

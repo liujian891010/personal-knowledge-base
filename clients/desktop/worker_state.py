@@ -65,6 +65,7 @@ class DesktopSyncWorkerConfig:
     recovery_normalized_at: Optional[int] = None
     submit_created_at: Optional[int] = None
     submit_file_ids: Optional[list[str]] = None
+    submit_detected: bool = False
     commit_intent_id: Optional[str] = None
     cleanup_normalized_at: Optional[int] = None
     pull_rewritten_at: Optional[int] = None

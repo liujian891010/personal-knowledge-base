@@ -17,7 +17,7 @@ from clients.desktop.worker import (
 
 class FakeRunner:
     def __init__(self) -> None:
-        self.calls: list[tuple[int | None, int, int | None, list[str] | None, dict[str, bytes] | None, str | None, int | None, int]] = []
+        self.calls: list[tuple[int | None, int, int | None, list[str] | None, bool, dict[str, bytes] | None, str | None, int | None, int]] = []
 
     def run_cycle(
         self,
@@ -26,6 +26,7 @@ class FakeRunner:
         recovery_normalized_at: int,
         submit_created_at=None,
         submit_file_ids=None,
+        submit_detected=False,
         encrypted_blob_by_file_id=None,
         commit_intent_id=None,
         cleanup_normalized_at=None,
@@ -38,6 +39,7 @@ class FakeRunner:
                 recovery_normalized_at,
                 submit_created_at,
                 resolved_file_ids,
+                submit_detected,
                 encrypted_blob_by_file_id,
                 commit_intent_id,
                 cleanup_normalized_at,
@@ -88,6 +90,7 @@ class DesktopSyncWorkerTests(unittest.TestCase):
                     1770000070010,
                     1770000070020,
                     ["file-a"],
+                    False,
                     None,
                     None,
                     1770000070021,
@@ -98,6 +101,7 @@ class DesktopSyncWorkerTests(unittest.TestCase):
                     1770000072510,
                     1770000072520,
                     ["file-a"],
+                    False,
                     None,
                     None,
                     1770000072521,
@@ -130,7 +134,40 @@ class DesktopSyncWorkerTests(unittest.TestCase):
         self.assertEqual(result.effective_step_ms, 99)
         self.assertFalse(result.loop.config.continue_on_error)
         self.assertEqual(runner.calls[0][1], 1770000071111)
-        self.assertEqual(runner.calls[0][7], 1770000071222)
+        self.assertEqual(runner.calls[0][8], 1770000071222)
+
+    def test_run_can_schedule_detected_submit_mode(self) -> None:
+        runner = FakeRunner()
+
+        result = DesktopSyncWorker(
+            runner,
+            sleep=lambda _: None,
+            now_ms_provider=lambda: 1770000071500,
+        ).run(
+            DesktopSyncWorkerConfig(
+                iterations=1,
+                submit_detected=True,
+                commit_intent_id="intent-detected-300",
+            )
+        )
+
+        self.assertTrue(result.loop.config.submit_detected)
+        self.assertEqual(
+            runner.calls,
+            [
+                (
+                    1770000071500,
+                    1770000071510,
+                    1770000071520,
+                    None,
+                    True,
+                    None,
+                    "intent-detected-300",
+                    1770000071521,
+                    1770000071530,
+                )
+            ],
+        )
 
     def test_run_writes_state_file_when_state_path_is_provided(self) -> None:
         runner = FakeRunner()

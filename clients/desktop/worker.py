@@ -51,13 +51,13 @@ class DesktopSyncWorker:
     def run(self, config: DesktopSyncWorkerConfig) -> DesktopSyncWorkerResult:
         started_at_ms = self.now_ms_provider()
         submit_requested = any(
-            value is not None
-            for value in (
-                config.submit_created_at,
-                config.submit_file_ids,
-                config.commit_intent_id,
-                config.cleanup_normalized_at,
-                config.encrypted_blob_by_file_id,
+            (
+                config.submit_created_at is not None,
+                bool(config.submit_file_ids),
+                config.submit_detected,
+                config.commit_intent_id is not None,
+                config.cleanup_normalized_at is not None,
+                config.encrypted_blob_by_file_id is not None,
             )
         )
         time_plan = resolve_desktop_sync_time_plan(
@@ -84,6 +84,7 @@ class DesktopSyncWorker:
                 recovery_normalized_at=time_plan.recovery_normalized_at,
                 submit_created_at=time_plan.submit_created_at,
                 submit_file_ids=config.submit_file_ids,
+                submit_detected=config.submit_detected,
                 encrypted_blob_by_file_id=config.encrypted_blob_by_file_id,
                 commit_intent_id=config.commit_intent_id,
                 cleanup_normalized_at=time_plan.cleanup_normalized_at,
