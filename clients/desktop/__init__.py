@@ -10,6 +10,9 @@ from .runner import (
     build_desktop_sync_runner,
 )
 from .scheduler import (
+    DesktopSyncCycleIterationResult,
+    DesktopSyncCycleLoopResult,
+    DesktopSyncCycleScheduleConfig,
     DesktopSyncIterationResult,
     DesktopSyncLoopResult,
     DesktopSyncScheduleConfig,
@@ -46,6 +49,9 @@ __all__ = [
     "DesktopSyncRunner",
     "DesktopSyncIterationResult",
     "DesktopSyncLoopResult",
+    "DesktopSyncCycleIterationResult",
+    "DesktopSyncCycleLoopResult",
+    "DesktopSyncCycleScheduleConfig",
     "DesktopSyncScheduleConfig",
     "DesktopSyncScheduler",
     "DesktopSyncService",
