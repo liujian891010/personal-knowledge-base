@@ -14,6 +14,13 @@ class BlobCheckResponsePayload:
 
 
 @dataclass(frozen=True)
+class VaultHeadResponsePayload:
+    vault_id: str
+    head_revision: int
+    manifest_summary: Optional[str]
+
+
+@dataclass(frozen=True)
 class BlobUploadInitRequestItem:
     blob_id: str
     encrypted_size: int
@@ -51,6 +58,16 @@ class ResolveCommitIntentResponsePayload:
     matched_revision: Optional[int]
     observed_head_revision: Optional[int]
     head_manifest_summary: Optional[str]
+
+
+@dataclass(frozen=True)
+class AckRequestPayload:
+    revisions: list[int]
+
+
+@dataclass(frozen=True)
+class AckResponsePayload:
+    max_acked_revision: int
 
 
 @dataclass(frozen=True)
@@ -157,6 +174,17 @@ def serialize_blob_check_request(request: BlobCheckRequest) -> dict[str, object]
     }
 
 
+def parse_vault_head_response(payload: Mapping[str, object]) -> VaultHeadResponsePayload:
+    manifest_summary = payload.get("manifest_summary")
+    if manifest_summary is not None and (not isinstance(manifest_summary, str) or not manifest_summary):
+        raise ValueError("manifest_summary must be a non-empty string or null")
+    return VaultHeadResponsePayload(
+        vault_id=_require_string(payload, "vault_id"),
+        head_revision=_require_non_negative_int(payload, "head_revision"),
+        manifest_summary=manifest_summary,
+    )
+
+
 def parse_blob_check_response(payload: Mapping[str, object]) -> BlobCheckResponsePayload:
     return BlobCheckResponsePayload(
         existing_blob_ids=_require_string_list(payload, "existing_blob_ids"),
@@ -257,6 +285,29 @@ def parse_manifest_response(
     if not isinstance(payload, dict):
         raise ValueError("manifest response payload must be an object")
     return ManifestRecord.from_dict(dict(payload))
+
+
+def serialize_ack_request(
+    request: AckRequestPayload,
+) -> dict[str, object]:
+    if not request.revisions:
+        raise ValueError("ack request must contain at least one revision")
+    for revision in request.revisions:
+        if not isinstance(revision, int) or revision <= 0:
+            raise ValueError("ack request revisions must be positive integers")
+    if len(set(request.revisions)) != len(request.revisions):
+        raise ValueError("ack request revisions must be unique")
+    return {
+        "revisions": list(request.revisions),
+    }
+
+
+def parse_ack_response(
+    payload: Mapping[str, object],
+) -> AckResponsePayload:
+    return AckResponsePayload(
+        max_acked_revision=_require_positive_int(payload, "max_acked_revision"),
+    )
 
 
 def serialize_create_commit_request(

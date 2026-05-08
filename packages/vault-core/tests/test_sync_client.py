@@ -6,6 +6,7 @@ from contextlib import closing
 from pathlib import Path
 
 from vault_core import (
+    AckExecutionResult,
     BlobCheckResult,
     BlobUploadCapability,
     BlobUploadInitRequestPayload,
@@ -19,8 +20,10 @@ from vault_core import (
     CommitSnapshotEntry,
     CommitSnapshotTable,
     CommitSubmissionBundle,
+    FileMapDocument,
     ResolveCommitIntentExecutionResult,
     ResolveCommitIntentResponsePayload,
+    PullReconcileSessionResult,
     SubmittedResolveIntentRecoveryExecutionResult,
     CreateCommitBlobRef,
     CreateCommitExecutionResult,
@@ -30,6 +33,7 @@ from vault_core import (
     ManifestRecord,
     SyncHttpJsonResponse,
     TombstoneRecord,
+    VaultHeadResponsePayload,
     VaultStateRecord,
     bootstrap_database,
     compute_manifest_summary_hash,
@@ -39,10 +43,12 @@ from vault_core import (
     open_database,
     upsert_commit_intent_journal,
     upsert_vault_state,
+    execute_ack_revisions,
     execute_blob_uploads,
     execute_commit_preflight,
     execute_create_commit,
     execute_commit_submission,
+    execute_pull_reconcile_session,
     execute_resolve_commit_intent,
     execute_submitted_recovery_via_resolve_intent,
 )
@@ -57,12 +63,16 @@ class FakeSyncCommitTransport:
         create_commit: SyncHttpJsonResponse | None = None,
         resolve_commit_intent: SyncHttpJsonResponse | None = None,
         manifest: SyncHttpJsonResponse | None = None,
+        head: SyncHttpJsonResponse | None = None,
+        ack: SyncHttpJsonResponse | None = None,
     ) -> None:
         self.blob_check_response = blob_check
         self.blob_upload_init_response = blob_upload_init
         self.create_commit_response = create_commit
         self.resolve_commit_intent_response = resolve_commit_intent
         self.manifest_response = manifest
+        self.head_response = head
+        self.ack_response = ack
         self.calls: list[tuple[str, str, dict[str, object]]] = []
 
     def post_blob_check(self, vault_id: str, payload: dict[str, object]) -> SyncHttpJsonResponse:
@@ -92,6 +102,18 @@ class FakeSyncCommitTransport:
         if self.manifest_response is None:
             raise AssertionError("manifest response was not configured")
         return self.manifest_response
+
+    def get_vault_head(self, vault_id: str) -> SyncHttpJsonResponse:
+        self.calls.append(("get_vault_head", vault_id, {}))
+        if self.head_response is None:
+            raise AssertionError("head response was not configured")
+        return self.head_response
+
+    def post_ack(self, vault_id: str, payload: dict[str, object]) -> SyncHttpJsonResponse:
+        self.calls.append(("post_ack", vault_id, payload))
+        if self.ack_response is None:
+            raise AssertionError("ack response was not configured")
+        return self.ack_response
 
 
 class FakeSyncBlobUploader:
@@ -829,6 +851,164 @@ class SyncClientTests(unittest.TestCase):
 
                 self.assertIsNotNone(load_commit_intent_journal(connection, "vault_pkb_001"))
                 self.assertTrue(load_vault_state(connection, "vault_pkb_001").commit_in_progress)
+
+    def test_execute_ack_revisions_posts_protocol_payload(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            ack=SyncHttpJsonResponse(
+                status_code=200,
+                payload={"max_acked_revision": 10},
+            ),
+        )
+
+        result = execute_ack_revisions(
+            transport,
+            "vault_pkb_001",
+            [8, 10],
+        )
+
+        self.assertEqual(
+            result,
+            AckExecutionResult(
+                request=result.request,
+                response=result.response,
+            ),
+        )
+        self.assertEqual(result.response.max_acked_revision, 10)
+        self.assertEqual([call[0] for call in transport.calls], ["post_ack"])
+        self.assertEqual(transport.calls[0][2]["revisions"], [8, 10])
+
+    def test_execute_pull_reconcile_session_fetches_manifest_when_head_advances(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            head=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "vault_id": "vault_pkb_001",
+                    "head_revision": 8,
+                    "manifest_summary": "sha256:head8",
+                },
+            ),
+            manifest=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "vault_id": "vault_pkb_001",
+                    "revision": 8,
+                    "base_revision": 7,
+                    "created_by_device": "desktop-shanghai",
+                    "created_at": 1770000021000,
+                    "summary_hash": "sha256:head8",
+                    "files": [],
+                    "tombstones": [],
+                },
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            filemap_path = root / "filemap.json"
+            ledger_path = root / "tombstone-ledger.jsonl"
+            db_path = root / "state.sqlite3"
+            current_document = FileMapDocument(
+                vault_id="vault_pkb_001",
+                updated_at=1770000020000,
+                files=[],
+            )
+            current_state = VaultStateRecord(
+                vault_id="vault_pkb_001",
+                last_applied_revision=7,
+                remote_head_revision=7,
+                acked_revision=7,
+                pending_ack_to_server=[],
+                commit_in_progress=False,
+                last_manifest_summary="sha256:head7",
+                last_manifest_summary_status="valid",
+                local_delete_sequence=0,
+            )
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(connection, current_state)
+
+                result = execute_pull_reconcile_session(
+                    transport,
+                    connection,
+                    filemap_path=filemap_path,
+                    ledger_path=ledger_path,
+                    current_document=current_document,
+                    current_state=current_state,
+                    local_tombstones=[],
+                    rewritten_at=1770000021001,
+                )
+
+                self.assertIsInstance(result, PullReconcileSessionResult)
+                self.assertEqual(
+                    result.head,
+                    VaultHeadResponsePayload(
+                        vault_id="vault_pkb_001",
+                        head_revision=8,
+                        manifest_summary="sha256:head8",
+                    ),
+                )
+                self.assertIsNotNone(result.manifest)
+                self.assertEqual(result.reconcile.state.last_applied_revision, 8)
+                self.assertEqual(result.reconcile.state.pending_ack_to_server, [8])
+                self.assertEqual([call[0] for call in transport.calls], ["get_vault_head", "get_manifest"])
+
+    def test_execute_pull_reconcile_session_skips_manifest_when_head_not_advanced(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            head=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "vault_id": "vault_pkb_001",
+                    "head_revision": 7,
+                    "manifest_summary": "sha256:head7",
+                },
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            filemap_path = root / "filemap.json"
+            ledger_path = root / "tombstone-ledger.jsonl"
+            db_path = root / "state.sqlite3"
+            current_document = FileMapDocument(
+                vault_id="vault_pkb_001",
+                updated_at=1770000020000,
+                files=[],
+            )
+            current_state = VaultStateRecord(
+                vault_id="vault_pkb_001",
+                last_applied_revision=7,
+                remote_head_revision=7,
+                acked_revision=7,
+                pending_ack_to_server=[],
+                commit_in_progress=False,
+                last_manifest_summary="sha256:head7",
+                last_manifest_summary_status="valid",
+                local_delete_sequence=0,
+            )
+
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                upsert_vault_state(connection, current_state)
+
+                result = execute_pull_reconcile_session(
+                    transport,
+                    connection,
+                    filemap_path=filemap_path,
+                    ledger_path=ledger_path,
+                    current_document=current_document,
+                    current_state=current_state,
+                    local_tombstones=[],
+                    rewritten_at=1770000021001,
+                )
+
+                self.assertIsNone(result.manifest)
+                self.assertIsNone(result.reconcile.applied)
+                self.assertEqual(result.reconcile.state, current_state)
+                self.assertEqual([call[0] for call in transport.calls], ["get_vault_head"])
 
 
 if __name__ == "__main__":

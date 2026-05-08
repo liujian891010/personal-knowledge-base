@@ -2,6 +2,8 @@ import unittest
 from pathlib import Path
 
 from vault_core import (
+    AckRequestPayload,
+    AckResponsePayload,
     BlobCheckRequest,
     BlobCheckResponsePayload,
     BlobUploadCapability,
@@ -18,6 +20,8 @@ from vault_core import (
     ManifestRecord,
     ResolveCommitIntentRequestPayload,
     ResolveCommitIntentResponsePayload,
+    VaultHeadResponsePayload,
+    parse_ack_response,
     build_blob_upload_init_request,
     parse_blob_check_response,
     parse_blob_upload_init_response,
@@ -25,6 +29,8 @@ from vault_core import (
     parse_create_commit_response,
     parse_manifest_response,
     parse_resolve_commit_intent_response,
+    parse_vault_head_response,
+    serialize_ack_request,
     serialize_blob_check_request,
     serialize_blob_upload_init_request,
     serialize_create_commit_request,
@@ -74,6 +80,37 @@ class SyncApiAdapterTests(unittest.TestCase):
         self.assertEqual(
             parsed_empty,
             BlobCheckResponsePayload(existing_blob_ids=[], missing_blob_ids=[]),
+        )
+
+    def test_parse_vault_head_response_validates_nullable_manifest_summary(self) -> None:
+        parsed = parse_vault_head_response(
+            {
+                "vault_id": "vault_pkb_001",
+                "head_revision": 8,
+                "manifest_summary": "sha256:head8",
+            }
+        )
+        self.assertEqual(
+            parsed,
+            VaultHeadResponsePayload(
+                vault_id="vault_pkb_001",
+                head_revision=8,
+                manifest_summary="sha256:head8",
+            ),
+        )
+        self.assertEqual(
+            parse_vault_head_response(
+                {
+                    "vault_id": "vault_pkb_001",
+                    "head_revision": 0,
+                    "manifest_summary": None,
+                }
+            ),
+            VaultHeadResponsePayload(
+                vault_id="vault_pkb_001",
+                head_revision=0,
+                manifest_summary=None,
+            ),
         )
 
     def test_build_and_serialize_blob_upload_init_request_uses_protocol_items(self) -> None:
@@ -279,6 +316,24 @@ class SyncApiAdapterTests(unittest.TestCase):
                 tombstones=[],
             ),
         )
+
+    def test_serialize_and_parse_ack_payloads(self) -> None:
+        request = AckRequestPayload(revisions=[8, 10])
+        self.assertEqual(
+            serialize_ack_request(request),
+            {
+                "revisions": [8, 10],
+            },
+        )
+        self.assertEqual(
+            parse_ack_response({"max_acked_revision": 10}),
+            AckResponsePayload(max_acked_revision=10),
+        )
+
+        with self.assertRaisesRegex(ValueError, "at least one revision"):
+            serialize_ack_request(AckRequestPayload(revisions=[]))
+        with self.assertRaisesRegex(ValueError, "must be unique"):
+            serialize_ack_request(AckRequestPayload(revisions=[8, 8]))
 
     def test_serialize_create_commit_request_omits_optional_delete_seq_when_absent(self) -> None:
         manifest = ManifestRecord(
