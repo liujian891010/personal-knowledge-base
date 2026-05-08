@@ -280,6 +280,47 @@ class DesktopVaultWorkspaceTests(unittest.TestCase):
             self.assertEqual(health.status, "healthy")
             self.assertEqual(health.success_count, 1)
 
+    def test_detect_local_changes_scans_workspace_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            workspace = build_desktop_vault_workspace(
+                DesktopSyncHttpConfig(
+                    base_url="https://sync.example.com",
+                    vault_id="vault-001",
+                    device_id="desktop-shanghai",
+                ),
+                root,
+            )
+            workspace.ensure_initialized(now_ms=1770000022000)
+            note_path = root / "Notes" / "Live.md"
+            note_path.parent.mkdir(parents=True, exist_ok=True)
+            note_path.write_text("# local\n", encoding="utf-8")
+
+            from vault_core import FileMapDocument, FileRecord, write_filemap_atomic
+
+            write_filemap_atomic(
+                workspace.paths.filemap_path,
+                FileMapDocument(
+                    vault_id="vault-001",
+                    updated_at=1770000022100,
+                    files=[
+                        FileRecord(
+                            file_id="file-live",
+                            path="Notes/Live.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000022090,
+                            content_hash="sha256:stale",
+                        )
+                    ],
+                ),
+            )
+
+            changes = workspace.detect_local_changes()
+
+            self.assertEqual(changes.modified_file_ids, ["file-live"])
+            self.assertEqual(changes.missing_file_ids, [])
+
 
 if __name__ == "__main__":
     unittest.main()

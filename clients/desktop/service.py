@@ -30,6 +30,7 @@ from vault_core import (
 )
 from vault_core.sync_http import UrlopenLike
 
+from .change_detection import DesktopWorkspaceChangeSet
 from .crypto import build_placeholder_encrypted_blob_map
 from .sync_runtime import DesktopSyncHttpConfig
 from .worker_state import DesktopSyncWorkerHealth, DesktopSyncWorkerStateRecord
@@ -99,6 +100,9 @@ class DesktopSyncService:
 
     def download_blobs(self, blob_ids: Iterable[str]) -> BlobDownloadSessionResult:
         return self.workspace.download_blobs(blob_ids)
+
+    def detect_local_changes(self) -> DesktopWorkspaceChangeSet:
+        return self.workspace.detect_local_changes()
 
     def load_worker_state(self) -> DesktopSyncWorkerStateRecord:
         return self.workspace.load_worker_state()

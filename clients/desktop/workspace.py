@@ -24,6 +24,7 @@ from vault_core import (
 from vault_core.constants import FILEMAP_FILENAME, NOTEAPP_DIRNAME, TOMBSTONE_LEDGER_FILENAME
 from vault_core.sync_http import UrlopenLike
 
+from .change_detection import DesktopWorkspaceChangeSet, detect_local_workspace_changes
 from .sync_runtime import (
     DesktopSyncHttpConfig,
     DesktopSyncRuntime,
@@ -166,6 +167,12 @@ class DesktopVaultWorkspace:
         return self.runtime.session.download_blobs(
             vault_id=self.vault_id,
             blob_ids=blob_ids,
+        )
+
+    def detect_local_changes(self) -> DesktopWorkspaceChangeSet:
+        return detect_local_workspace_changes(
+            self.vault_root,
+            self.load_snapshot().document,
         )
 
     def load_worker_state(self) -> DesktopSyncWorkerStateRecord:
