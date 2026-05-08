@@ -33,6 +33,7 @@ from vault_core import (
     load_tombstone_ledger,
     load_vault_state,
     materialize_blob_staging_plan,
+    move_staging_orphan,
     materialize_content_snapshot_plan,
     prepare_commit_submission,
     recover_sync_apply_finalizing_state,
@@ -399,6 +400,23 @@ class DesktopSyncService:
         with closing(self.workspace._open_connection()) as connection:
             journal = load_sync_apply_journal(connection, self.vault_id)
             if journal is None:
+                isolated_paths = self._isolate_unjournaled_pull_apply_staging()
+                removed_plan_path = self._cleanup_pull_apply_plan_file()
+                if isolated_paths or removed_plan_path is not None:
+                    with closing(self.workspace._open_connection()) as refresh_connection:
+                        state = load_vault_state(refresh_connection, self.vault_id)
+                        if state is None:
+                            raise KeyError(f"vault_state not found: {self.vault_id}")
+                        stale_state = apply_manifest_summary_stale(state)
+                        upsert_vault_state(refresh_connection, stale_state)
+                    return DesktopPullApplyRecoveryResult(
+                        mode="orphaned",
+                        journal_phase=None,
+                        state=stale_state,
+                        removed_staging_paths=[],
+                        isolated_staging_paths=isolated_paths,
+                        removed_plan_path=removed_plan_path,
+                    )
                 return DesktopPullApplyRecoveryResult(
                     mode="idle",
                     journal_phase=None,
@@ -1224,6 +1242,22 @@ class DesktopSyncService:
             isolated_staging_paths=isolated_paths,
             removed_plan_path=self._cleanup_pull_apply_plan_file(),
         )
+
+    def _isolate_unjournaled_pull_apply_staging(self) -> list[Path]:
+        staging_root = self.workspace.vault_root / STAGING_DIRNAME
+        if not staging_root.exists():
+            return []
+        moved_paths: list[Path] = []
+        for staging_path in sorted(
+            (
+                path
+                for path in staging_root.rglob("*")
+                if path.is_file() and path.name.endswith(".staging") and not path.name.endswith(".blob.staging")
+            ),
+            key=lambda item: str(item.relative_to(staging_root)),
+        ):
+            moved_paths.append(move_staging_orphan(self.workspace.vault_root, staging_path))
+        return moved_paths
 
     def _workspace_matches_document(self, document) -> bool:
         for record in document.files:
