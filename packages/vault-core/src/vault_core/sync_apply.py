@@ -54,6 +54,7 @@ class SubmittedConfirmationExecutionResult:
 @dataclass(frozen=True)
 class CommitRecoveryExecutionResult:
     mode: str
+    requires_full_pull: bool = False
     local: Optional[LocalCommitRecoveryResult] = None
     submitted: Optional[SubmittedConfirmationExecutionResult] = None
 
@@ -347,6 +348,7 @@ def resume_commit_recovery(
         )
         return CommitRecoveryExecutionResult(
             mode=plan.mode,
+            requires_full_pull=requires_full_pull(local.state),
             local=local,
             submitted=None,
         )
@@ -382,6 +384,7 @@ def resume_commit_recovery(
     )
     return CommitRecoveryExecutionResult(
         mode=plan.mode,
+        requires_full_pull=submitted.recovery.requires_full_pull,
         local=None,
         submitted=submitted,
     )

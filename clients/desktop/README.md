@@ -96,7 +96,7 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
 
 If `--encrypted-map` / `--encrypted-dir` is omitted, the desktop client currently auto-generates a deterministic placeholder encrypted blob from the selected plaintext content. This keeps AG05 wiring moving until a real crypto provider lands.
 
-When commit recovery or pull-apply recovery leaves the local manifest summary in a `stale` state, `sync-cycle` now promotes the full pull-apply step ahead of the optional submit step so the cycle re-establishes a valid remote baseline before attempting a new commit. In that reordered branch, the submit/cleanup timestamps are also rebased forward to stay monotonic after the pull timestamp.
+When commit recovery or pull-apply recovery leaves the local manifest summary in a `stale` state, `sync-cycle` now promotes the full pull-apply step ahead of the optional submit step so the cycle re-establishes a valid remote baseline before attempting a new commit. Those recovery results now also expose a top-level `requires_full_pull` flag so orchestration can consume the boundary directly instead of inferring it from nested payload shape. In that reordered branch, the submit/cleanup timestamps are also rebased forward to stay monotonic after the pull timestamp.
 
 When you want the cycle to detect and submit local changes automatically instead of enumerating `--file-id`, use `--submit-detected`:
 

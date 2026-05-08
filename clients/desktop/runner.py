@@ -41,10 +41,6 @@ class DesktopSyncRunner:
         if isinstance(recovery, dict):
             if isinstance(recovery.get("requires_full_pull"), bool):
                 return bool(recovery["requires_full_pull"])
-            for key in ("local", "submitted", "recovery"):
-                nested = recovery.get(key)
-                if nested is not None and DesktopSyncRunner._recovery_requires_pull_before_submit(nested):
-                    return True
             state = recovery.get("state")
             if isinstance(state, dict):
                 return state.get("last_manifest_summary_status") != "valid"
@@ -52,10 +48,6 @@ class DesktopSyncRunner:
         requires_full_pull = getattr(recovery, "requires_full_pull", None)
         if isinstance(requires_full_pull, bool):
             return requires_full_pull
-        for key in ("local", "submitted", "recovery"):
-            nested = getattr(recovery, key, None)
-            if nested is not None and DesktopSyncRunner._recovery_requires_pull_before_submit(nested):
-                return True
         state = getattr(recovery, "state", None)
         if state is not None:
             return getattr(state, "last_manifest_summary_status", None) != "valid"

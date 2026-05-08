@@ -278,6 +278,7 @@ class DesktopPullApplyFinalizeResult:
 @dataclass(frozen=True)
 class DesktopPullApplyRecoveryResult:
     mode: str
+    requires_full_pull: bool
     journal_phase: Optional[str]
     state: Optional[VaultStateRecord]
     removed_staging_paths: list[Path]
@@ -411,6 +412,7 @@ class DesktopSyncService:
                         upsert_vault_state(refresh_connection, stale_state)
                     return DesktopPullApplyRecoveryResult(
                         mode="orphaned",
+                        requires_full_pull=True,
                         journal_phase=None,
                         state=stale_state,
                         removed_staging_paths=[],
@@ -419,6 +421,7 @@ class DesktopSyncService:
                     )
                 return DesktopPullApplyRecoveryResult(
                     mode="idle",
+                    requires_full_pull=False,
                     journal_phase=None,
                     state=None,
                     removed_staging_paths=[],
@@ -456,6 +459,7 @@ class DesktopSyncService:
                     return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
                 return DesktopPullApplyRecoveryResult(
                     mode="replayed",
+                    requires_full_pull=False if finalized is None else finalized.state.last_manifest_summary_status != "valid",
                     journal_phase=journal.phase,
                     state=None if finalized is None else finalized.state,
                     removed_staging_paths=[] if finalized is None else finalized.removed_staging_paths,
@@ -475,6 +479,7 @@ class DesktopSyncService:
             removed = self._cleanup_pull_apply_staging_artifacts()
             return DesktopPullApplyRecoveryResult(
                 mode="finalized",
+                requires_full_pull=state.last_manifest_summary_status != "valid",
                 journal_phase=finalizing_journal.phase,
                 state=state,
                 removed_staging_paths=removed,
@@ -495,6 +500,7 @@ class DesktopSyncService:
             removed = self._cleanup_pull_apply_staging_artifacts()
             return DesktopPullApplyRecoveryResult(
                 mode="finalized",
+                requires_full_pull=state.last_manifest_summary_status != "valid",
                 journal_phase="materializing",
                 state=state,
                 removed_staging_paths=removed,
@@ -1241,6 +1247,7 @@ class DesktopSyncService:
         isolated_paths = isolate_staging_orphans(self.workspace.vault_root)
         return DesktopPullApplyRecoveryResult(
             mode="degraded",
+            requires_full_pull=True,
             journal_phase=journal.phase,
             state=degraded_state,
             removed_staging_paths=[],

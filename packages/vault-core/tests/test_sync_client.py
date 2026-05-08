@@ -1398,6 +1398,7 @@ class SyncClientTests(unittest.TestCase):
 
                 self.assertIsInstance(result, CommitRecoverySessionResult)
                 self.assertEqual(result.mode, "idle")
+                self.assertFalse(result.requires_full_pull)
                 self.assertIsNotNone(result.local)
                 self.assertIsNone(result.submitted)
                 self.assertEqual(transport.calls, [])
@@ -1475,6 +1476,7 @@ class SyncClientTests(unittest.TestCase):
                 )
 
                 self.assertEqual(result.mode, "submitted_confirmation")
+                self.assertFalse(result.requires_full_pull)
                 self.assertIsNone(result.local)
                 self.assertIsNotNone(result.submitted)
                 self.assertEqual(result.submitted.recovery.state.last_applied_revision, 8)
