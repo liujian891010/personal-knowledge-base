@@ -1002,8 +1002,17 @@ class DesktopSyncService:
                 deleted_paths.append(delete_path)
 
             for item in plan.writes:
+                output_path = _resolve_workspace_file_path(self.workspace.vault_root, item.target_path)
                 staging_path = _resolve_workspace_file_path(self.workspace.vault_root, item.staging_path)
                 if not staging_path.exists() or not staging_path.is_file():
+                    if output_path.exists():
+                        if not output_path.is_file():
+                            raise ValueError(f"pull apply target path is not a file: {item.target_path}")
+                        payload = output_path.read_bytes()
+                        actual_hash = _compute_content_hash(payload)
+                        if actual_hash == item.content_hash:
+                            written_paths[item.file_id] = output_path
+                            continue
                     raise FileNotFoundError(f"staged pull payload not found: {item.staging_path}")
                 payload = staging_path.read_bytes()
                 actual_hash = _compute_content_hash(payload)
@@ -1012,7 +1021,6 @@ class DesktopSyncService:
                         f"staged pull payload hash mismatch for file_id {item.file_id}: "
                         f"expected {item.content_hash}, got {actual_hash}"
                     )
-                output_path = _resolve_workspace_file_path(self.workspace.vault_root, item.target_path)
                 if item.previous_path == item.target_path:
                     self._preserve_dirty_pull_conflict_copy(
                         connection,
