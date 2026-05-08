@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Optional
 
-from vault_core import FileMapDocument, FileRecord
+from vault_core import FileMapDocument, FileRecord, TombstoneRecord
 from vault_core.constants import NOTEAPP_DIRNAME, VAULTINFO_FILENAME
+from vault_core.operations import mark_deleted
 
 from .crypto import build_placeholder_blob_id
 
@@ -80,6 +81,8 @@ class DesktopTrackedChangeCommitPlan:
     change_set: DesktopWorkspaceChangeSet
     document: FileMapDocument
     content_by_file_id: dict[str, bytes]
+    tombstones: list[TombstoneRecord]
+    local_delete_sequence: int
 
 
 def _build_modified_record(
@@ -184,12 +187,18 @@ def _resolve_mime_type(record: FileRecord, relative_path: str) -> Optional[str]:
 def build_tracked_change_commit_plan(
     vault_root: Path,
     document: FileMapDocument,
+    *,
+    tombstones: Optional[Iterable[TombstoneRecord]] = None,
+    current_local_delete_sequence: int = 0,
+    deleted_by_device: Optional[str] = None,
 ) -> DesktopTrackedChangeCommitPlan:
     change_set = detect_local_workspace_changes(vault_root, document)
     unsupported = [
         change
         for change in change_set.changes
-        if change.kind != "modified" or change.record_status != "active" or change.file_id is None
+        if change.kind not in {"modified", "missing"}
+        or change.record_status != "active"
+        or change.file_id is None
     ]
     if unsupported:
         unsupported_kinds = ", ".join(
@@ -199,13 +208,17 @@ def build_tracked_change_commit_plan(
             "detected local changes include unsupported items for tracked submit: "
             + unsupported_kinds
         )
-    if not change_set.modified_file_ids:
-        raise ValueError("no modified tracked files detected")
+    if not change_set.modified_file_ids and not change_set.missing_file_ids:
+        raise ValueError("no supported tracked changes detected")
 
     modified_file_id_set = set(change_set.modified_file_ids)
-    updated_files: list[FileRecord] = []
     content_by_file_id: dict[str, bytes] = {}
     latest_updated_at = document.updated_at
+    working_document = document
+    resolved_tombstones = list(tombstones or [])
+    local_delete_sequence = current_local_delete_sequence
+
+    updated_files: list[FileRecord] = []
 
     for record in document.files:
         if record.file_id not in modified_file_id_set:
@@ -244,8 +257,27 @@ def build_tracked_change_commit_plan(
         content_by_file_id[record.file_id] = payload
         latest_updated_at = max(latest_updated_at, mtime_ms)
 
+    working_document = document.replace_files(updated_files, updated_at=latest_updated_at)
+    missing_file_id_set = set(change_set.missing_file_ids)
+    for record in document.files:
+        if record.file_id not in missing_file_id_set:
+            continue
+        local_delete_sequence += 1
+        deleted_at = max(working_document.updated_at, record.updated_at) + 1
+        working_document, tombstone = mark_deleted(
+            working_document,
+            file_id=record.file_id,
+            deleted_at=deleted_at,
+            local_delete_seq=local_delete_sequence,
+            deleted_revision=record.last_known_revision,
+            deleted_by_device=deleted_by_device,
+        )
+        resolved_tombstones.append(tombstone)
+
     return DesktopTrackedChangeCommitPlan(
         change_set=change_set,
-        document=document.replace_files(updated_files, updated_at=latest_updated_at),
+        document=working_document,
         content_by_file_id=content_by_file_id,
+        tombstones=resolved_tombstones,
+        local_delete_sequence=local_delete_sequence,
     )

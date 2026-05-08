@@ -1675,6 +1675,18 @@ class VaultCoreStorageTests(unittest.TestCase):
             BlobCheckRequest(blob_ids=["blob_shared", "blob_unique"]),
         )
 
+    def test_build_blob_check_request_allows_empty_snapshot_table(self) -> None:
+        snapshot_table = CommitSnapshotTable(
+            vault_id="vault_pkb_001",
+            base_revision=7,
+            created_at=1770000018596,
+            entries=[],
+        )
+
+        request = build_blob_check_request(snapshot_table)
+
+        self.assertEqual(request, BlobCheckRequest(blob_ids=[]))
+
     def test_resolve_blob_check_result_requires_full_partition_of_requested_blob_ids(self) -> None:
         snapshot_table = CommitSnapshotTable(
             vault_id="vault_pkb_001",

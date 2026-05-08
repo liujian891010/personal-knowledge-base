@@ -42,6 +42,7 @@ from .sync_api import (
 from .sync_plan import plan_pull_reconcile
 from .sync_reconcile import ReconcileResult, execute_pull_reconcile
 from .sync_commit import (
+    BlobCheckResult,
     BlobUploadPlan,
     BlobUploadPlanEntry,
     CommitNetworkPlan,
@@ -405,6 +406,21 @@ def execute_commit_preflight(
     *,
     snapshot_table: CommitSnapshotTable,
 ) -> CommitPreflightResult:
+    if not snapshot_table.entries:
+        return CommitPreflightResult(
+            network_plan=build_commit_network_plan(
+                submission,
+                snapshot_table=snapshot_table,
+                blob_check=BlobCheckResult(
+                    requested_blob_ids=[],
+                    existing_blob_ids=[],
+                    missing_blob_ids=[],
+                ),
+            ),
+            upload_init_request=None,
+            upload_init_response=None,
+        )
+
     blob_check_request = build_blob_check_request(snapshot_table)
     blob_check_http = transport.post_blob_check(
         snapshot_table.vault_id,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import closing, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 from uuid import uuid4
@@ -135,6 +135,9 @@ class DesktopSyncService:
         return build_tracked_change_commit_plan(
             self.workspace.vault_root,
             snapshot.document,
+            tombstones=snapshot.tombstones,
+            current_local_delete_sequence=snapshot.state.local_delete_sequence,
+            deleted_by_device=self.config.device_id,
         )
 
     def cleanup_failed_commit(self, *, normalized_at: int) -> DesktopCommitCleanupResult:
@@ -236,12 +239,21 @@ class DesktopSyncService:
         cleanup_normalized_at: Optional[int] = None,
     ) -> DesktopCommitSessionResult:
         snapshot = self.load_snapshot()
-        plan = build_tracked_change_commit_plan(self.workspace.vault_root, snapshot.document)
+        plan = build_tracked_change_commit_plan(
+            self.workspace.vault_root,
+            snapshot.document,
+            tombstones=snapshot.tombstones,
+            current_local_delete_sequence=snapshot.state.local_delete_sequence,
+            deleted_by_device=self.config.device_id,
+        )
         prepared = self._prepare_commit_with_snapshot(
             DesktopWorkspaceSnapshot(
                 document=plan.document,
-                state=snapshot.state,
-                tombstones=snapshot.tombstones,
+                state=replace(
+                    snapshot.state,
+                    local_delete_sequence=plan.local_delete_sequence,
+                ),
+                tombstones=plan.tombstones,
             ),
             created_at=created_at,
             content_by_file_id=plan.content_by_file_id,

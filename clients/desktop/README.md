@@ -117,7 +117,7 @@ Use `worker-state` to read the persisted local worker summary, and `worker-healt
 
 Use `detect-local-changes` to scan the current vault root for tracked file modifications, missing tracked files, and untracked local files before wiring automatic submit flows.
 
-Use `submit-detected-commit` to auto-submit tracked `modified` files with placeholder encrypted blobs. The current safety boundary rejects `missing`, `untracked`, and other unsupported local change kinds.
+Use `submit-detected-commit` to auto-submit tracked `modified` and `missing` changes with placeholder encrypted blobs. The current safety boundary still rejects `untracked` and other unsupported local change kinds.
 
 `submit-commit` payload files use `file_id -> base64 bytes` JSON objects:
 

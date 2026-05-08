@@ -161,6 +161,34 @@ class DesktopChangeDetectionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unsupported items"):
                 build_tracked_change_commit_plan(root, document)
 
+    def test_build_tracked_change_commit_plan_marks_missing_tracked_file_deleted(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault-001",
+            updated_at=1770000050400,
+            files=[
+                FileRecord(
+                    file_id="file-missing",
+                    path="Notes/Missing.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000050000,
+                    content_hash="sha256:stale",
+                )
+            ],
+        )
+
+        plan = build_tracked_change_commit_plan(
+            Path("C:/vault"),
+            document,
+            current_local_delete_sequence=4,
+            deleted_by_device="desktop-shanghai",
+        )
+
+        self.assertEqual(plan.change_set.missing_file_ids, ["file-missing"])
+        self.assertEqual(plan.document.files[0].status, "deleted")
+        self.assertEqual(plan.local_delete_sequence, 5)
+        self.assertEqual(plan.tombstones[0].file_id, "file-missing")
+
 
 if __name__ == "__main__":
     unittest.main()
