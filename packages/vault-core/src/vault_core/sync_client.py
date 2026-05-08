@@ -189,6 +189,147 @@ class BlobDownloadInitExecutionResult:
     response: BlobDownloadInitResponsePayload
 
 
+@dataclass(frozen=True)
+class BlobDownloadSessionResult:
+    init: BlobDownloadInitExecutionResult
+    downloaded_blobs: dict[str, bytes]
+
+
+@dataclass(frozen=True)
+class PullSyncSessionResult:
+    pull: PullReconcileSessionResult
+    ack: Optional[AckExecutionResult] = None
+
+
+@dataclass(frozen=True)
+class VaultSyncSession:
+    transport: SyncCommitTransport
+    uploader: Optional[SyncBlobUploader] = None
+    downloader: Optional[SyncBlobDownloader] = None
+
+    def submit_commit(
+        self,
+        submission: CommitSubmissionBundle,
+        *,
+        snapshot_table: CommitSnapshotTable,
+    ) -> CommitSubmissionExecutionResult:
+        preflight = execute_commit_preflight(
+            self.transport,
+            submission,
+            snapshot_table=snapshot_table,
+        )
+        uploaded_blob_ids: list[str] = []
+        if preflight.upload_init_response is not None:
+            if self.uploader is None:
+                raise ValueError("blob uploader is required for commit submissions with missing blobs")
+            uploaded_blob_ids = execute_blob_uploads(
+                self.uploader,
+                preflight.network_plan.blob_uploads,
+                preflight.upload_init_response,
+            )
+        commit = execute_create_commit(
+            self.transport,
+            preflight.network_plan.request,
+        )
+        return CommitSubmissionExecutionResult(
+            preflight=preflight,
+            uploaded_blob_ids=uploaded_blob_ids,
+            commit=commit,
+        )
+
+    def resolve_commit_intent(
+        self,
+        journal: CommitIntentJournalRecord,
+    ) -> ResolveCommitIntentExecutionResult:
+        return execute_resolve_commit_intent(self.transport, journal)
+
+    def recover_submitted_commit(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        ledger_path: Path,
+        vault_id: str,
+        local_tombstones: Iterable[TombstoneRecord],
+        normalized_at: int,
+    ) -> SubmittedResolveIntentRecoveryExecutionResult:
+        return execute_submitted_recovery_via_resolve_intent(
+            self.transport,
+            connection,
+            ledger_path=ledger_path,
+            vault_id=vault_id,
+            local_tombstones=local_tombstones,
+            normalized_at=normalized_at,
+        )
+
+    def pull_reconcile(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        filemap_path: Path,
+        ledger_path: Path,
+        current_document: FileMapDocument,
+        current_state: VaultStateRecord,
+        local_tombstones: Iterable[TombstoneRecord],
+        rewritten_at: int,
+    ) -> PullReconcileSessionResult:
+        return execute_pull_reconcile_session(
+            self.transport,
+            connection,
+            filemap_path=filemap_path,
+            ledger_path=ledger_path,
+            current_document=current_document,
+            current_state=current_state,
+            local_tombstones=local_tombstones,
+            rewritten_at=rewritten_at,
+        )
+
+    def pull_and_ack(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        filemap_path: Path,
+        ledger_path: Path,
+        current_document: FileMapDocument,
+        current_state: VaultStateRecord,
+        local_tombstones: Iterable[TombstoneRecord],
+        rewritten_at: int,
+    ) -> PullSyncSessionResult:
+        return execute_pull_sync_session(
+            self.transport,
+            connection,
+            filemap_path=filemap_path,
+            ledger_path=ledger_path,
+            current_document=current_document,
+            current_state=current_state,
+            local_tombstones=local_tombstones,
+            rewritten_at=rewritten_at,
+        )
+
+    def ack_pending_revisions(
+        self,
+        state: VaultStateRecord,
+    ) -> Optional[AckExecutionResult]:
+        return execute_ack_pending_revisions(
+            self.transport,
+            state,
+        )
+
+    def download_blobs(
+        self,
+        *,
+        vault_id: str,
+        blob_ids: Iterable[str],
+    ) -> BlobDownloadSessionResult:
+        if self.downloader is None:
+            raise ValueError("blob downloader is required for blob download sessions")
+        return execute_blob_download_session(
+            self.transport,
+            self.downloader,
+            vault_id=vault_id,
+            blob_ids=blob_ids,
+        )
+
+
 def _require_status(response: SyncHttpJsonResponse, expected_status: int, label: str) -> None:
     if response.status_code != expected_status:
         raise ValueError(
@@ -321,6 +462,24 @@ def execute_blob_downloads(
     return downloaded_blobs
 
 
+def execute_blob_download_session(
+    transport: SyncCommitTransport,
+    downloader: SyncBlobDownloader,
+    *,
+    vault_id: str,
+    blob_ids: Iterable[str],
+) -> BlobDownloadSessionResult:
+    init = execute_blob_download_init(
+        transport,
+        vault_id,
+        blob_ids,
+    )
+    return BlobDownloadSessionResult(
+        init=init,
+        downloaded_blobs=execute_blob_downloads(downloader, init.response),
+    )
+
+
 def execute_resolve_commit_intent(
     transport: SyncCommitTransport,
     journal: CommitIntentJournalRecord,
@@ -445,6 +604,19 @@ def execute_ack_revisions(
     )
 
 
+def execute_ack_pending_revisions(
+    transport: SyncCommitTransport,
+    state: VaultStateRecord,
+) -> Optional[AckExecutionResult]:
+    if not state.pending_ack_to_server:
+        return None
+    return execute_ack_revisions(
+        transport,
+        state.vault_id,
+        state.pending_ack_to_server,
+    )
+
+
 def execute_pull_reconcile_session(
     transport: SyncCommitTransport,
     connection: sqlite3.Connection,
@@ -494,6 +666,36 @@ def execute_pull_reconcile_session(
         head=head,
         manifest=manifest,
         reconcile=reconcile,
+    )
+
+
+def execute_pull_sync_session(
+    transport: SyncCommitTransport,
+    connection: sqlite3.Connection,
+    *,
+    filemap_path: Path,
+    ledger_path: Path,
+    current_document: FileMapDocument,
+    current_state: VaultStateRecord,
+    local_tombstones: Iterable[TombstoneRecord],
+    rewritten_at: int,
+) -> PullSyncSessionResult:
+    pull = execute_pull_reconcile_session(
+        transport,
+        connection,
+        filemap_path=filemap_path,
+        ledger_path=ledger_path,
+        current_document=current_document,
+        current_state=current_state,
+        local_tombstones=local_tombstones,
+        rewritten_at=rewritten_at,
+    )
+    return PullSyncSessionResult(
+        pull=pull,
+        ack=execute_ack_pending_revisions(
+            transport,
+            pull.reconcile.state,
+        ),
     )
 
 
