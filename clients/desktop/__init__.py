@@ -1,4 +1,8 @@
 from .cli import build_cli_service, main
+from .crypto import (
+    build_placeholder_encrypted_blob_map,
+    build_placeholder_encrypted_blob_payload,
+)
 from .runner import (
     DesktopSyncCycleResult,
     DesktopSyncRunOnceResult,
@@ -50,6 +54,8 @@ __all__ = [
     "DesktopVaultPaths",
     "DesktopVaultWorkspace",
     "DesktopWorkspaceSnapshot",
+    "build_placeholder_encrypted_blob_map",
+    "build_placeholder_encrypted_blob_payload",
     "main",
     "build_desktop_sync_service",
     "build_desktop_sync_runtime",

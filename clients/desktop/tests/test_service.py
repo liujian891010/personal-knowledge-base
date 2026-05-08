@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.request import Request
 
 from clients.desktop import DesktopSyncHttpConfig, build_desktop_sync_service
+from clients.desktop.crypto import build_placeholder_encrypted_blob_payload
 from vault_core import (
     FileMapDocument,
     FileRecord,
@@ -191,6 +192,22 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 self.assertIsNotNone(journal)
                 self.assertEqual(journal.status, "submitted")
 
+    def test_prepare_commit_generates_placeholder_encrypted_blob_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
+
+            prepared = service.prepare_commit(
+                created_at=1770000030200,
+                commit_intent_id="intent-001",
+                content_by_file_id={"file-live": payload},
+            )
+
+            blob_path = prepared.blob_staging_materialization.files[0].blob_staging_path
+            self.assertEqual(
+                blob_path.read_bytes(),
+                build_placeholder_encrypted_blob_payload(payload),
+            )
+
     def test_submit_commit_success_finalizes_state_and_cleans_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, api_opener, blob_opener, payload, encrypted_payload = self._seed_workspace(Path(tmpdir))
@@ -267,6 +284,30 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 self.assertIsNotNone(state)
                 self.assertEqual(state.last_applied_revision, 7)
                 self.assertFalse(state.commit_in_progress)
+
+    def test_submit_workspace_commit_auto_generates_placeholder_encrypted_blobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, payload, _ = self._seed_workspace(Path(tmpdir))
+
+            result = service.submit_workspace_commit(
+                created_at=1770000030200,
+                file_ids=["file-live"],
+                commit_intent_id="intent-001",
+            )
+
+            self.assertEqual(result.network.commit.status, "committed")
+            self.assertEqual(
+                [call[0:2] for call in api_opener.calls],
+                [
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/check"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/upload-init"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/commits"),
+                ],
+            )
+            self.assertEqual(
+                blob_opener.calls[0][2],
+                build_placeholder_encrypted_blob_payload(payload),
+            )
 
     def test_submit_workspace_commit_reads_workspace_files_before_submit(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

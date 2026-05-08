@@ -30,6 +30,7 @@ from vault_core import (
 )
 from vault_core.sync_http import UrlopenLike
 
+from .crypto import build_placeholder_encrypted_blob_map
 from .sync_runtime import DesktopSyncHttpConfig
 from .workspace import (
     DesktopVaultWorkspace,
@@ -131,10 +132,15 @@ class DesktopSyncService:
         *,
         created_at: int,
         content_by_file_id: Mapping[str, bytes],
-        encrypted_blob_by_file_id: Mapping[str, bytes],
+        encrypted_blob_by_file_id: Optional[Mapping[str, bytes]] = None,
         commit_intent_id: Optional[str] = None,
     ) -> DesktopPreparedCommit:
         resolved_commit_intent_id = commit_intent_id or str(uuid4())
+        resolved_encrypted_blob_by_file_id = (
+            build_placeholder_encrypted_blob_map(content_by_file_id)
+            if encrypted_blob_by_file_id is None
+            else dict(encrypted_blob_by_file_id)
+        )
 
         with closing(self.workspace._open_connection()) as connection:
             snapshot = self.workspace._load_snapshot_from_connection(connection)
@@ -159,7 +165,7 @@ class DesktopSyncService:
                     self.workspace.vault_root,
                     plan=submission.snapshot_plan,
                     snapshot_materialization=snapshot_materialization,
-                    encrypted_blob_by_file_id=encrypted_blob_by_file_id,
+                    encrypted_blob_by_file_id=resolved_encrypted_blob_by_file_id,
                 )
                 snapshot_table = build_commit_snapshot_table(
                     submission.snapshot_plan,
@@ -189,7 +195,7 @@ class DesktopSyncService:
         *,
         created_at: int,
         content_by_file_id: Mapping[str, bytes],
-        encrypted_blob_by_file_id: Mapping[str, bytes],
+        encrypted_blob_by_file_id: Optional[Mapping[str, bytes]] = None,
         commit_intent_id: Optional[str] = None,
         cleanup_normalized_at: Optional[int] = None,
     ) -> DesktopCommitSessionResult:
@@ -242,14 +248,15 @@ class DesktopSyncService:
         *,
         created_at: int,
         file_ids: Iterable[str],
-        encrypted_blob_by_file_id: Mapping[str, bytes],
+        encrypted_blob_by_file_id: Optional[Mapping[str, bytes]] = None,
         commit_intent_id: Optional[str] = None,
         cleanup_normalized_at: Optional[int] = None,
     ) -> DesktopCommitSessionResult:
         requested_file_ids = list(file_ids)
+        content_by_file_id = self.load_workspace_content(requested_file_ids)
         return self.submit_commit(
             created_at=created_at,
-            content_by_file_id=self.load_workspace_content(requested_file_ids),
+            content_by_file_id=content_by_file_id,
             encrypted_blob_by_file_id=encrypted_blob_by_file_id,
             commit_intent_id=commit_intent_id,
             cleanup_normalized_at=cleanup_normalized_at,

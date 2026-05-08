@@ -44,9 +44,13 @@ class FakeService:
             "step": "submit",
             "created_at": created_at,
             "file_ids": list(file_ids),
-            "encrypted_blob_sizes": {
-                key: len(value) for key, value in encrypted_blob_by_file_id.items()
-            },
+            "encrypted_blob_sizes": (
+                None
+                if encrypted_blob_by_file_id is None
+                else {
+                    key: len(value) for key, value in encrypted_blob_by_file_id.items()
+                }
+            ),
             "commit_intent_id": commit_intent_id,
             "cleanup_normalized_at": cleanup_normalized_at,
         }
@@ -128,6 +132,29 @@ class DesktopSyncRunnerTests(unittest.TestCase):
                     1770000051021,
                 ),
                 ("pull", 1770000051030),
+                ("status", None),
+            ],
+        )
+
+    def test_run_cycle_allows_submit_without_explicit_encrypted_payloads(self) -> None:
+        service = FakeService()
+
+        result = DesktopSyncRunner(service).run_cycle(
+            init_now_ms=1770000051100,
+            recovery_normalized_at=1770000051110,
+            submit_created_at=1770000051120,
+            submit_file_ids=["file-a"],
+            pull_rewritten_at=1770000051130,
+        )
+
+        self.assertEqual(result.submitted["file_ids"], ["file-a"])
+        self.assertEqual(
+            service.calls,
+            [
+                ("init", 1770000051100),
+                ("recover", 1770000051110),
+                ("submit", 1770000051120, ["file-a"], None, None, None),
+                ("pull", 1770000051130),
                 ("status", None),
             ],
         )

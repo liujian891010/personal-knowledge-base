@@ -70,6 +70,8 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   --rewritten-at 1770000100200
 ```
 
+If `--encrypted-map` / `--encrypted-dir` is omitted, the desktop client currently auto-generates a deterministic placeholder encrypted blob from the selected plaintext content. This keeps AG05 wiring moving until a real crypto provider lands.
+
 `submit-commit` payload files use `file_id -> base64 bytes` JSON objects:
 
 ```json
@@ -91,7 +93,7 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   --encrypted-map .\encrypted-map.json
 ```
 
-`submit-workspace-commit` reads the selected plain content directly from the current vault files, so only encrypted blob payloads still need to be provided:
+`submit-workspace-commit` reads the selected plain content directly from the current vault files:
 
 ```powershell
 $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
@@ -101,9 +103,10 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   --device-id desktop-shanghai `
   submit-workspace-commit `
   --created-at 1770000100300 `
-  --file-id file-live `
-  --encrypted-dir .\encrypted-blobs
+  --file-id file-live
 ```
+
+You can still override the blob payloads with `--encrypted-map` or `--encrypted-dir` when needed.
 
 `download-blobs` returns `downloaded_blobs_base64` on stdout:
 

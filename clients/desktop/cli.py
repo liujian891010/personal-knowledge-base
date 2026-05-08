@@ -162,7 +162,7 @@ def create_parser() -> argparse.ArgumentParser:
     submit_workspace_parser.add_argument("--file-id", action="append", dest="file_ids", required=True)
     submit_workspace_parser.add_argument("--commit-intent-id")
     submit_workspace_parser.add_argument("--cleanup-normalized-at", type=int)
-    encrypted_group = submit_workspace_parser.add_mutually_exclusive_group(required=True)
+    encrypted_group = submit_workspace_parser.add_mutually_exclusive_group(required=False)
     encrypted_group.add_argument("--encrypted-map")
     encrypted_group.add_argument("--encrypted-dir")
     return parser
@@ -232,11 +232,12 @@ def run_cli(
                 raise ValueError("sync-cycle submit step requires --submit-created-at")
             if not args.file_ids:
                 raise ValueError("sync-cycle submit step requires at least one --file-id")
-            encrypted_blob_by_file_id = _load_encrypted_blob_payloads(
-                args.file_ids,
-                encrypted_map=args.encrypted_map,
-                encrypted_dir=args.encrypted_dir,
-            )
+            if args.encrypted_map or args.encrypted_dir:
+                encrypted_blob_by_file_id = _load_encrypted_blob_payloads(
+                    args.file_ids,
+                    encrypted_map=args.encrypted_map,
+                    encrypted_dir=args.encrypted_dir,
+                )
         result = DesktopSyncRunner(service).run_cycle(
             init_now_ms=args.now_ms,
             recovery_normalized_at=args.normalized_at,
@@ -271,10 +272,14 @@ def run_cli(
             file_ids=args.file_ids,
             commit_intent_id=args.commit_intent_id,
             cleanup_normalized_at=args.cleanup_normalized_at,
-            encrypted_blob_by_file_id=_load_encrypted_blob_payloads(
-                args.file_ids,
-                encrypted_map=args.encrypted_map,
-                encrypted_dir=args.encrypted_dir,
+            encrypted_blob_by_file_id=(
+                _load_encrypted_blob_payloads(
+                    args.file_ids,
+                    encrypted_map=args.encrypted_map,
+                    encrypted_dir=args.encrypted_dir,
+                )
+                if args.encrypted_map or args.encrypted_dir
+                else None
             ),
         )
     else:

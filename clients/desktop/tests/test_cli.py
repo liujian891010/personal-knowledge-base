@@ -115,9 +115,13 @@ class FakeService:
             "created_at": created_at,
             "file_ids": list(file_ids),
             "commit_intent_id": commit_intent_id,
-            "encrypted_sizes": {
-                key: len(value) for key, value in encrypted_blob_by_file_id.items()
-            },
+            "encrypted_sizes": (
+                None
+                if encrypted_blob_by_file_id is None
+                else {
+                    key: len(value) for key, value in encrypted_blob_by_file_id.items()
+                }
+            ),
         }
 
 
@@ -428,6 +432,42 @@ class DesktopCliTests(unittest.TestCase):
             ],
         )
 
+    def test_sync_cycle_command_can_submit_without_explicit_encrypted_payloads(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-cycle",
+            "--now-ms",
+            "1770000040530",
+            "--normalized-at",
+            "1770000040540",
+            "--submit-created-at",
+            "1770000040550",
+            "--file-id",
+            "file-a",
+            "--rewritten-at",
+            "1770000040560",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["submitted"]["encrypted_sizes"], None)
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040530),
+                ("recover", 1770000040540),
+                ("submit-workspace-commit", 1770000040550, ["file-a"], None, None, None),
+                ("pull", 1770000040560),
+                ("status", None),
+            ],
+        )
+
     def test_download_blobs_command_routes_blob_ids_and_base64_encodes_payload(self) -> None:
         exit_code, payload = self._run(
             "--vault-root",
@@ -713,6 +753,48 @@ class DesktopCliTests(unittest.TestCase):
                     None,
                     None,
                     {"file-a": b"enc-a", "file-b": b"enc-bb"},
+                )
+            ],
+        )
+
+    def test_submit_workspace_commit_command_allows_auto_generated_encrypted_payloads(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "submit-workspace-commit",
+            "--created-at",
+            "1770000040700",
+            "--file-id",
+            "file-a",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload,
+            {
+                "kind": "submit-workspace-commit",
+                "created_at": 1770000040700,
+                "file_ids": ["file-a"],
+                "commit_intent_id": None,
+                "encrypted_sizes": None,
+            },
+        )
+        self.assertEqual(
+            self.service.calls,
+            [
+                (
+                    "submit-workspace-commit",
+                    1770000040700,
+                    ["file-a"],
+                    None,
+                    None,
+                    None,
                 )
             ],
         )

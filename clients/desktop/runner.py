@@ -77,8 +77,6 @@ class DesktopSyncRunner:
         else:
             if not resolved_submit_file_ids:
                 raise ValueError("submit_created_at requires at least one submit file_id")
-            if encrypted_blob_by_file_id is None:
-                raise ValueError("submit_created_at requires encrypted blob payloads")
             submitted = self.service.submit_workspace_commit(
                 created_at=submit_created_at,
                 file_ids=resolved_submit_file_ids,
