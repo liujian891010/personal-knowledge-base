@@ -9,6 +9,7 @@ from contextlib import closing
 from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.request import Request
+from zipfile import ZipFile
 
 from clients.desktop import (
     DesktopPullApplyDeleteFile,
@@ -31,6 +32,7 @@ from clients.desktop.crypto import (
 from clients.desktop.worker import write_desktop_sync_worker_state
 from vault_core import (
     AppliedManifestResult,
+    append_tombstone,
     BlobDownloadCapability,
     BlobDownloadInitExecutionResult,
     BlobDownloadInitRequestPayload,
@@ -45,6 +47,7 @@ from vault_core import (
     PullSyncSessionResult,
     ReconcileResult,
     SyncApplyJournalRecord,
+    TombstoneRecord,
     VaultHeadResponsePayload,
     VaultStateRecord,
     load_commit_intent_journal,
@@ -315,6 +318,113 @@ class DesktopSyncServiceTests(unittest.TestCase):
             content_by_file_id = service.load_workspace_content(["file-live"])
 
             self.assertEqual(content_by_file_id, {"file-live": payload})
+
+    def test_export_vault_package_excludes_runtime_state_and_optional_raw(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "vault"
+            service, _, _, _, _ = self._seed_workspace(root)
+            (root / ".ai" / "wiki" / "Topic.md").write_text("# Topic\n", encoding="utf-8")
+            (root / ".ai" / "raw" / "capture.txt").write_text("raw capture", encoding="utf-8")
+            (root / ".ai" / "log.md").write_text("local log", encoding="utf-8")
+            (root / ".noteapp" / "conflict-orphans" / "Orphan.md").write_text(
+                "orphan conflict",
+                encoding="utf-8",
+            )
+            (root / ".noteapp" / "drafts" / "scratch.md").write_text("draft", encoding="utf-8")
+            (root / ".noteapp" / "staging" / "file-live.staging").write_text("staging", encoding="utf-8")
+            (root / ".noteapp" / "staging-orphans" / "leftover.staging").write_text(
+                "staging orphan",
+                encoding="utf-8",
+            )
+            service.workspace.paths.worker_state_path.write_text("{}", encoding="utf-8")
+            service.workspace.paths.sync_apply_plan_path.write_text("{}", encoding="utf-8")
+
+            package_path = Path(tmpdir) / "vault-export.zip"
+            result = service.export_vault_package(package_path, include_ai_raw=False)
+
+            self.assertEqual(result.package_path, package_path.resolve())
+            self.assertFalse(result.included_ai_raw)
+            self.assertTrue(result.included_conflict_orphans)
+            with ZipFile(package_path, "r") as archive:
+                exported_paths = sorted(
+                    info.filename for info in archive.infolist() if not info.is_dir()
+                )
+            self.assertIn(".vaultinfo", exported_paths)
+            self.assertIn(".noteapp/filemap.json", exported_paths)
+            self.assertIn(".noteapp/tombstone-ledger.jsonl", exported_paths)
+            self.assertIn("Notes/Live.md", exported_paths)
+            self.assertIn(".ai/wiki/Topic.md", exported_paths)
+            self.assertIn(".noteapp/conflict-orphans/Orphan.md", exported_paths)
+            self.assertNotIn(".ai/raw/capture.txt", exported_paths)
+            self.assertNotIn(".ai/log.md", exported_paths)
+            self.assertNotIn(".noteapp/state.sqlite3", exported_paths)
+            self.assertNotIn(".noteapp/sync-worker-state.json", exported_paths)
+            self.assertNotIn(".noteapp/sync-apply-plan.json", exported_paths)
+            self.assertNotIn(".noteapp/drafts/scratch.md", exported_paths)
+            self.assertNotIn(".noteapp/staging/file-live.staging", exported_paths)
+            self.assertNotIn(".noteapp/staging-orphans/leftover.staging", exported_paths)
+
+    def test_import_vault_package_restores_workspace_and_marks_state_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            source_root = tmp_path / "source"
+            source_service, _, _, _, _ = self._seed_workspace(source_root)
+            (source_root / ".ai" / "raw" / "capture.txt").write_text("raw capture", encoding="utf-8")
+            (source_root / ".noteapp" / "conflict-orphans" / "Orphan.md").write_text(
+                "orphan conflict",
+                encoding="utf-8",
+            )
+            append_tombstone(
+                source_service.workspace.paths.ledger_path,
+                TombstoneRecord(
+                    file_id="file-deleted",
+                    deleted_revision=7,
+                    deleted_at=1770000040400,
+                    local_delete_seq=4,
+                    last_known_path="Notes/Deleted.md",
+                    deleted_by_device="desktop-shanghai",
+                ),
+            )
+            package_path = tmp_path / "vault-export.zip"
+            source_service.export_vault_package(package_path, include_ai_raw=True)
+
+            target_root = tmp_path / "target"
+            target_service = build_desktop_sync_service(
+                DesktopSyncHttpConfig(
+                    base_url="https://sync.example.com",
+                    vault_id="vault-001",
+                    device_id="desktop-shanghai",
+                ),
+                target_root,
+            )
+
+            result = target_service.import_vault_package(package_path)
+
+            self.assertTrue(result.restored_ai_raw)
+            self.assertTrue(result.restored_conflict_orphans)
+            self.assertEqual(result.state.last_manifest_summary_status, "stale")
+            self.assertIsNone(result.state.last_manifest_summary)
+            self.assertEqual(result.state.last_applied_revision, 0)
+            self.assertEqual(result.state.remote_head_revision, 0)
+            self.assertEqual(result.state.acked_revision, 0)
+            self.assertEqual(result.state.local_delete_sequence, 4)
+            self.assertTrue(result.state.has_unresolved_conflicts)
+            self.assertTrue((target_root / "Notes" / "Live.md").is_file())
+            self.assertEqual(
+                (target_root / ".ai" / "raw" / "capture.txt").read_text(encoding="utf-8"),
+                "raw capture",
+            )
+            self.assertTrue((target_root / ".noteapp" / "conflict-orphans" / "Orphan.md").is_file())
+
+            snapshot = target_service.load_snapshot()
+            self.assertEqual(snapshot.document.vault_id, "vault-001")
+            self.assertEqual(snapshot.state.last_manifest_summary_status, "stale")
+            self.assertTrue(snapshot.state.has_unresolved_conflicts)
+            with self.assertRaisesRegex(ValueError, "vault_state is not eligible to start a new commit"):
+                target_service.submit_commit(
+                    created_at=1770000040500,
+                    content_by_file_id={"file-live": (target_root / "Notes" / "Live.md").read_bytes()},
+                )
 
     def test_load_workspace_content_rejects_workspace_snapshot_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
