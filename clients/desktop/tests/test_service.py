@@ -1532,6 +1532,57 @@ class DesktopSyncServiceTests(unittest.TestCase):
             with closing(open_database(service.workspace.paths.db_path)) as connection:
                 self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
 
+    def test_resume_pull_apply_recovery_degrades_when_replay_payload_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[
+                    DesktopPullApplyWriteFile(
+                        file_id="file-a",
+                        target_path="Notes/A.md",
+                        staging_path=".noteapp/staging/file-a.staging",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# rewritten\n").hexdigest(),
+                    )
+                ],
+                moves=[],
+                deletes=[],
+                blocking_paths=[],
+                ops_hash="sha256:ops8",
+            )
+            service._write_pull_apply_plan_file(plan)
+
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(
+                    connection,
+                    SyncApplyJournalRecord(
+                        vault_id="vault-001",
+                        journal_id="journal-1",
+                        target_revision=8,
+                        target_manifest_hash="sha256:head8",
+                        phase="staging",
+                        ops_hash="sha256:ops8",
+                        created_at=1770000040100,
+                        updated_at=1770000040200,
+                    ),
+                )
+
+            recovered = service.resume_pull_apply_recovery(normalized_at=1770000040300)
+
+            self.assertEqual(recovered.mode, "degraded")
+            self.assertEqual(recovered.journal_phase, "staging")
+            self.assertEqual(recovered.state.last_manifest_summary_status, "stale")
+            self.assertEqual(recovered.removed_staging_paths, [])
+            self.assertEqual(recovered.isolated_staging_paths, [])
+            self.assertEqual(recovered.removed_plan_path, service.workspace.paths.sync_apply_plan_path)
+            self.assertFalse(service.workspace.paths.sync_apply_plan_path.exists())
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
+
     def test_resume_pull_apply_recovery_degrades_unmaterialized_workspace_without_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

@@ -440,17 +440,20 @@ class DesktopSyncService:
                 except ValueError:
                     return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
                 staged = DesktopPullApplyStagingResult(journal=journal, written_staging_paths={})
-                execution = self.apply_staged_pull_plan(
-                    plan,
-                    staged,
-                    materialized_at=normalized_at,
-                )
-                finalized = self.finalize_applied_pull_plan(
-                    plan,
-                    execution,
-                    staged,
-                    finalized_at=normalized_at,
-                )
+                try:
+                    execution = self.apply_staged_pull_plan(
+                        plan,
+                        staged,
+                        materialized_at=normalized_at,
+                    )
+                    finalized = self.finalize_applied_pull_plan(
+                        plan,
+                        execution,
+                        staged,
+                        finalized_at=normalized_at,
+                    )
+                except (FileNotFoundError, KeyError, ValueError):
+                    return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
                 return DesktopPullApplyRecoveryResult(
                     mode="replayed",
                     journal_phase=journal.phase,
