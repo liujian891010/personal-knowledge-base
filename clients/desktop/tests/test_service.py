@@ -651,6 +651,70 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(center.cards[0].level, "success")
             self.assertEqual(center.cards[0].actions[0].argv, ["--rewritten-at", "1770000040999"])
 
+    def test_execute_sync_action_returns_disabled_result_for_unavailable_worker_health(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            result = service.execute_sync_action("worker-health", now_ms=1770000040999)
+
+            self.assertEqual(result.status, "disabled")
+            self.assertEqual(result.action.action_id, "worker-health")
+            self.assertIsNone(result.payload)
+            self.assertEqual(result.message, "No worker state recorded yet")
+
+    def test_execute_sync_action_can_run_resolve_conflicts_all(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, payload, _ = self._seed_workspace(root)
+            conflict_path = root / "Notes" / "Live (conflict 2026-04-29 Desktop-Win).md"
+            conflict_path.write_bytes(payload + b" conflict")
+            conflict_hash = "sha256:" + hashlib.sha256(conflict_path.read_bytes()).hexdigest()
+            orphan_path = root / ".noteapp" / "conflict-orphans" / "Orphan.md"
+            orphan_path.parent.mkdir(parents=True, exist_ok=True)
+            orphan_path.write_text("orphan conflict", encoding="utf-8")
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                FileMapDocument(
+                    vault_id="vault-001",
+                    updated_at=1770000040100,
+                    files=[
+                        FileRecord(
+                            file_id="file-live",
+                            path="Notes/Live.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000030090,
+                            content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                            meta={
+                                "blob_id": "blob-live",
+                                "size": len(payload),
+                                "mtime": 1770000030080,
+                                "mime_type": "text/markdown",
+                            },
+                        ),
+                        FileRecord(
+                            file_id="file-conflict",
+                            path="Notes/Live (conflict 2026-04-29 Desktop-Win).md",
+                            type="note",
+                            status="conflict_copy",
+                            updated_at=1770000040100,
+                            content_hash=conflict_hash,
+                            conflict_source_file_id="file-live",
+                        ),
+                    ],
+                ),
+            )
+
+            result = service.execute_sync_action("resolve-conflicts-all", now_ms=1770000040999)
+
+            self.assertEqual(result.status, "executed")
+            self.assertEqual(result.action.command, "resolve-conflicts")
+            self.assertFalse(conflict_path.exists())
+            self.assertFalse(orphan_path.exists())
+            self.assertIsNotNone(result.payload)
+            self.assertFalse(result.payload.state.has_unresolved_conflicts)
+
     def test_load_workspace_content_rejects_workspace_snapshot_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))

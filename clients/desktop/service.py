@@ -539,6 +539,15 @@ class DesktopSyncCenterModel:
 
 
 @dataclass(frozen=True)
+class DesktopSyncActionExecutionResult:
+    action: DesktopSyncPanelAction
+    source: str
+    status: str
+    payload: object | None
+    message: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class DesktopPullApplySessionResult:
     pull: PullSyncSessionResult
     plan: DesktopPullApplyPlan
@@ -1878,6 +1887,85 @@ class DesktopSyncService:
             cards=cards,
             panel=panel,
             summary=summary,
+        )
+
+    def _find_sync_action(
+        self,
+        action_id: str,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> tuple[DesktopSyncPanelAction, str]:
+        center = self.build_sync_center_model(now_ms=now_ms)
+        for card in center.cards:
+            for action in card.actions:
+                if action.action_id == action_id:
+                    return action, f"card:{card.card_id}"
+        for action in [center.panel.primary_action, *center.panel.secondary_actions]:
+            if action.action_id == action_id:
+                return action, "panel"
+        raise KeyError(f"sync action not found: {action_id}")
+
+    def execute_sync_action(
+        self,
+        action_id: str,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> DesktopSyncActionExecutionResult:
+        resolved_now_ms = (
+            int(datetime.now(timezone.utc).timestamp() * 1000)
+            if now_ms is None
+            else now_ms
+        )
+        action, source = self._find_sync_action(action_id, now_ms=resolved_now_ms)
+        if not action.enabled:
+            return DesktopSyncActionExecutionResult(
+                action=action,
+                source=source,
+                status="disabled",
+                payload=None,
+                message=action.reason or "action is currently disabled",
+            )
+
+        payload: object | None
+        if action.command == "vault-summary":
+            payload = self.summarize_vault()
+        elif action.command == "list-conflicts":
+            payload = self.list_conflicts()
+        elif action.command == "worker-health":
+            payload = self.load_worker_health()
+        elif action.command == "detect-local-changes":
+            payload = self.detect_local_changes()
+        elif action.command == "resolve-conflicts":
+            payload = self.resolve_conflicts(
+                resolved_at=resolved_now_ms,
+                resolve_all="--all" in action.argv,
+            )
+        elif action.command == "recover-pull-apply":
+            payload = self.resume_pull_apply_recovery(normalized_at=resolved_now_ms)
+        elif action.command == "recover":
+            payload = self.resume_commit_recovery(normalized_at=resolved_now_ms)
+        elif action.command == "pull":
+            payload = self.pull_and_ack(rewritten_at=resolved_now_ms)
+        elif action.command == "submit-detected-commit":
+            payload = self.submit_detected_changes_if_needed(
+                created_at=resolved_now_ms,
+                cleanup_normalized_at=resolved_now_ms,
+            )
+        else:
+            return DesktopSyncActionExecutionResult(
+                action=action,
+                source=source,
+                status="unsupported",
+                payload=None,
+                message=f"unsupported sync action command: {action.command}",
+            )
+
+        return DesktopSyncActionExecutionResult(
+            action=action,
+            source=source,
+            status="executed",
+            payload=payload,
+            message=None,
         )
 
     def list_conflicts(self) -> DesktopConflictStatus:
