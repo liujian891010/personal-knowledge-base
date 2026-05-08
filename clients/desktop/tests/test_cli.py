@@ -192,8 +192,8 @@ class FakeService:
             },
         }
 
-    def build_sync_panel_model(self):
-        self.calls.append(("sync-panel", None))
+    def build_sync_panel_model(self, *, now_ms=None):
+        self.calls.append(("sync-panel", now_ms))
         return {
             "level": "warning",
             "headline": "2 unresolved conflict artifacts",
@@ -205,7 +205,10 @@ class FakeService:
                 "label": "Review Conflicts",
                 "enabled": True,
                 "emphasis": "primary",
+                "command": "list-conflicts",
+                "argv": [],
                 "reason": None,
+                "requires_confirmation": False,
             },
             "secondary_actions": [
                 {
@@ -213,7 +216,10 @@ class FakeService:
                     "label": "Open Summary",
                     "enabled": True,
                     "emphasis": "normal",
+                    "command": "vault-summary",
+                    "argv": [],
                     "reason": None,
+                    "requires_confirmation": False,
                 }
             ],
             "summary": self.summarize_vault(),
@@ -690,12 +696,18 @@ class DesktopCliTests(unittest.TestCase):
             "--device-id",
             "desktop-shanghai",
             "sync-panel",
+            "--now-ms",
+            "1770000040123",
         )
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["level"], "warning")
         self.assertEqual(payload["primary_action"]["action_id"], "list-conflicts")
-        self.assertEqual(self.service.calls, [("sync-panel", None), ("vault-summary", None)])
+        self.assertEqual(payload["primary_action"]["command"], "list-conflicts")
+        self.assertEqual(
+            self.service.calls,
+            [("sync-panel", 1770000040123), ("vault-summary", None)],
+        )
 
     def test_export_vault_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(

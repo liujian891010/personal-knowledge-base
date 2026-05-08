@@ -168,7 +168,7 @@ Use `inspect-vault-package --input-package <zip>` to preflight a migration packa
 
 Use `vault-summary` to fetch a single aggregated desktop status payload for an app shell or sync bar. It combines the current `vault_state`, local change scan, unresolved conflict inventory, optional worker health, and normalized commit-block reasons such as `requires_full_pull`, active journals, or unresolved conflicts.
 
-Use `sync-panel` when a shell or future Tauri UI wants a direct presentation model instead of raw sync state. The payload classifies the current vault into `danger` / `warning` / `info` / `success`, includes conflict and change badges, and proposes a primary action such as recovery, pull, conflict review, or submit-detected-commit.
+Use `sync-panel` when a shell or future Tauri UI wants a direct presentation model instead of raw sync state. The payload classifies the current vault into `danger` / `warning` / `info` / `success`, includes conflict and change badges, and now carries executable action contracts: each action includes a `command` plus CLI `argv`, so a shell can forward recover / pull / conflict / submit actions without rebuilding command parameters itself. Pass `--now-ms` when a caller needs stable generated timestamps inside those action payloads.
 
 Use `detect-local-changes` to scan the current vault root for tracked file modifications, missing tracked files, and untracked local files before wiring automatic submit flows. A local rename still appears as a `missing + untracked` pair at scan time. `.ai/raw/` and `.ai/log.md` stay outside the regular sync set and are ignored by this scan.
 

@@ -502,7 +502,10 @@ class DesktopSyncPanelAction:
     label: str
     enabled: bool
     emphasis: str
+    command: str
+    argv: list[str]
     reason: Optional[str] = None
+    requires_confirmation: bool = False
 
 
 @dataclass(frozen=True)
@@ -1470,6 +1473,29 @@ class DesktopSyncService:
     def load_worker_health(self) -> DesktopSyncWorkerHealth:
         return self.workspace.load_worker_health()
 
+    def _build_panel_action(
+        self,
+        *,
+        action_id: str,
+        label: str,
+        command: str,
+        argv: Optional[list[str]] = None,
+        enabled: bool = True,
+        emphasis: str = "normal",
+        reason: Optional[str] = None,
+        requires_confirmation: bool = False,
+    ) -> DesktopSyncPanelAction:
+        return DesktopSyncPanelAction(
+            action_id=action_id,
+            label=label,
+            enabled=enabled,
+            emphasis=emphasis,
+            command=command,
+            argv=[] if argv is None else list(argv),
+            reason=reason,
+            requires_confirmation=requires_confirmation,
+        )
+
     def summarize_vault(self) -> DesktopVaultSummary:
         conflicts = self.list_conflicts()
         changes = self.detect_local_changes()
@@ -1510,32 +1536,49 @@ class DesktopSyncService:
             ),
         )
 
-    def build_sync_panel_model(self) -> DesktopSyncPanelModel:
+    def build_sync_panel_model(self, *, now_ms: Optional[int] = None) -> DesktopSyncPanelModel:
+        resolved_now_ms = (
+            int(datetime.now(timezone.utc).timestamp() * 1000)
+            if now_ms is None
+            else now_ms
+        )
         summary = self.summarize_vault()
         conflict_badge_count = len(summary.conflicts.conflict_copies) + len(summary.conflicts.conflict_orphans)
         change_badge_count = summary.changes.change_count
         secondary_actions = [
-            DesktopSyncPanelAction(
+            self._build_panel_action(
                 action_id="show-vault-summary",
                 label="Open Summary",
-                enabled=True,
-                emphasis="normal",
+                command="vault-summary",
             ),
-            DesktopSyncPanelAction(
+            self._build_panel_action(
                 action_id="list-conflicts",
                 label="Show Conflicts",
+                command="list-conflicts",
                 enabled=conflict_badge_count > 0,
-                emphasis="normal",
                 reason=None if conflict_badge_count > 0 else "No unresolved conflicts",
             ),
-            DesktopSyncPanelAction(
+            self._build_panel_action(
                 action_id="worker-health",
                 label="Worker Health",
+                command="worker-health",
                 enabled=summary.worker_health is not None,
-                emphasis="normal",
                 reason=None if summary.worker_health is not None else "No worker state recorded yet",
             ),
         ]
+        if conflict_badge_count > 0:
+            secondary_actions.append(
+                self._build_panel_action(
+                    action_id="resolve-conflicts-all",
+                    label="Resolve All Local Artifacts",
+                    command="resolve-conflicts",
+                    argv=["--resolved-at", str(resolved_now_ms), "--all"],
+                    enabled=True,
+                    emphasis="warning",
+                    reason="Deletes all listed local conflict-copy artifacts after user confirmation.",
+                    requires_confirmation=True,
+                )
+            )
 
         if summary.commit_gate.has_active_sync_apply_journal:
             return DesktopSyncPanelModel(
@@ -1544,10 +1587,11 @@ class DesktopSyncService:
                 detail="A pull/apply journal is still active. Resume recovery before new sync or commit work.",
                 conflict_badge_count=conflict_badge_count,
                 change_badge_count=change_badge_count,
-                primary_action=DesktopSyncPanelAction(
+                primary_action=self._build_panel_action(
                     action_id="recover-pull-apply",
                     label="Resume Pull Recovery",
-                    enabled=True,
+                    command="recover-pull-apply",
+                    argv=["--normalized-at", str(resolved_now_ms)],
                     emphasis="primary",
                 ),
                 secondary_actions=secondary_actions,
@@ -1560,10 +1604,11 @@ class DesktopSyncService:
                 detail="A previous commit is still in progress or awaiting recovery confirmation.",
                 conflict_badge_count=conflict_badge_count,
                 change_badge_count=change_badge_count,
-                primary_action=DesktopSyncPanelAction(
+                primary_action=self._build_panel_action(
                     action_id="recover",
                     label="Resume Commit Recovery",
-                    enabled=True,
+                    command="recover",
+                    argv=["--normalized-at", str(resolved_now_ms)],
                     emphasis="primary",
                 ),
                 secondary_actions=secondary_actions,
@@ -1576,10 +1621,10 @@ class DesktopSyncService:
                 detail="Resolve local conflict copies before the next commit can be submitted.",
                 conflict_badge_count=conflict_badge_count,
                 change_badge_count=change_badge_count,
-                primary_action=DesktopSyncPanelAction(
+                primary_action=self._build_panel_action(
                     action_id="list-conflicts",
                     label="Review Conflicts",
-                    enabled=True,
+                    command="list-conflicts",
                     emphasis="primary",
                 ),
                 secondary_actions=secondary_actions,
@@ -1592,10 +1637,11 @@ class DesktopSyncService:
                 detail="The local manifest baseline is stale. Run pull/reconcile before creating a new commit.",
                 conflict_badge_count=conflict_badge_count,
                 change_badge_count=change_badge_count,
-                primary_action=DesktopSyncPanelAction(
+                primary_action=self._build_panel_action(
                     action_id="pull",
                     label="Run Pull",
-                    enabled=True,
+                    command="pull",
+                    argv=["--rewritten-at", str(resolved_now_ms)],
                     emphasis="primary",
                 ),
                 secondary_actions=secondary_actions,
@@ -1608,10 +1654,10 @@ class DesktopSyncService:
                 detail="The latest worker run did not finish cleanly. Review worker health before relying on background sync.",
                 conflict_badge_count=conflict_badge_count,
                 change_badge_count=change_badge_count,
-                primary_action=DesktopSyncPanelAction(
+                primary_action=self._build_panel_action(
                     action_id="worker-health",
                     label="Inspect Worker Health",
-                    enabled=True,
+                    command="worker-health",
                     emphasis="primary",
                 ),
                 secondary_actions=secondary_actions,
@@ -1624,9 +1670,11 @@ class DesktopSyncService:
                 detail="Local edits are ready for the next submit or sync cycle.",
                 conflict_badge_count=conflict_badge_count,
                 change_badge_count=change_badge_count,
-                primary_action=DesktopSyncPanelAction(
+                primary_action=self._build_panel_action(
                     action_id="submit-detected-commit",
                     label="Submit Local Changes",
+                    command="submit-detected-commit",
+                    argv=["--created-at", str(resolved_now_ms)],
                     enabled=summary.commit_gate.can_submit_commit,
                     emphasis="primary",
                     reason=None if summary.commit_gate.can_submit_commit else ", ".join(summary.commit_gate.blocking_reasons),
@@ -1640,10 +1688,11 @@ class DesktopSyncService:
             detail="No unresolved conflicts, no pending local changes, and no blocked sync state detected.",
             conflict_badge_count=0,
             change_badge_count=0,
-            primary_action=DesktopSyncPanelAction(
+            primary_action=self._build_panel_action(
                 action_id="pull",
                 label="Check For Remote Changes",
-                enabled=True,
+                command="pull",
+                argv=["--rewritten-at", str(resolved_now_ms)],
                 emphasis="primary",
             ),
             secondary_actions=secondary_actions,
