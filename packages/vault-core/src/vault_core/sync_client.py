@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Mapping, Optional, Protocol
 
 from .sync_api import (
+    BlobUploadCapability,
     BlobUploadInitRequestPayload,
     BlobUploadInitResponsePayload,
     CommitConflictResponsePayload,
@@ -19,6 +20,7 @@ from .sync_api import (
 )
 from .sync_commit import (
     BlobUploadPlan,
+    BlobUploadPlanEntry,
     CommitNetworkPlan,
     CommitSnapshotTable,
     CommitSubmissionBundle,
@@ -58,6 +60,15 @@ class SyncCommitTransport(Protocol):
         ...
 
 
+class SyncBlobUploader(Protocol):
+    def upload_blob(
+        self,
+        upload: BlobUploadPlanEntry,
+        capability: BlobUploadCapability,
+    ) -> None:
+        ...
+
+
 @dataclass(frozen=True)
 class CommitPreflightResult:
     network_plan: CommitNetworkPlan
@@ -71,6 +82,13 @@ class CreateCommitExecutionResult:
     request: CreateCommitRequestPayload
     response: Optional[CreateCommitResponsePayload] = None
     conflict: Optional[CommitConflictResponsePayload] = None
+
+
+@dataclass(frozen=True)
+class CommitSubmissionExecutionResult:
+    preflight: CommitPreflightResult
+    uploaded_blob_ids: list[str]
+    commit: CreateCommitExecutionResult
 
 
 def _require_status(response: SyncHttpJsonResponse, expected_status: int, label: str) -> None:
@@ -88,6 +106,17 @@ def _validate_upload_capabilities(
     returned_blob_ids = {entry.blob_id for entry in response.uploads}
     if returned_blob_ids != expected_blob_ids:
         raise ValueError("upload-init response blob_ids do not match upload plan")
+
+
+def _index_upload_capabilities(
+    response: BlobUploadInitResponsePayload,
+) -> dict[str, BlobUploadCapability]:
+    capability_by_blob_id: dict[str, BlobUploadCapability] = {}
+    for capability in response.uploads:
+        if capability.blob_id in capability_by_blob_id:
+            raise ValueError("upload-init response contains duplicate blob_ids")
+        capability_by_blob_id[capability.blob_id] = capability
+    return capability_by_blob_id
 
 
 def execute_commit_preflight(
@@ -136,6 +165,25 @@ def execute_commit_preflight(
     )
 
 
+def execute_blob_uploads(
+    uploader: SyncBlobUploader,
+    upload_plan: BlobUploadPlan,
+    upload_init_response: BlobUploadInitResponsePayload,
+) -> list[str]:
+    if not upload_plan.entries:
+        if upload_init_response.uploads:
+            raise ValueError("upload-init response must be empty when no uploads are planned")
+        return []
+
+    _validate_upload_capabilities(upload_plan, upload_init_response)
+    capability_by_blob_id = _index_upload_capabilities(upload_init_response)
+    uploaded_blob_ids: list[str] = []
+    for upload in upload_plan.entries:
+        uploader.upload_blob(upload, capability_by_blob_id[upload.blob_id])
+        uploaded_blob_ids.append(upload.blob_id)
+    return uploaded_blob_ids
+
+
 def execute_create_commit(
     transport: SyncCommitTransport,
     request: CreateCommitRequestPayload,
@@ -158,3 +206,32 @@ def execute_create_commit(
         )
     raise ValueError(f"commits returned unexpected status: {http_response.status_code}")
 
+
+def execute_commit_submission(
+    transport: SyncCommitTransport,
+    uploader: SyncBlobUploader,
+    submission: CommitSubmissionBundle,
+    *,
+    snapshot_table: CommitSnapshotTable,
+) -> CommitSubmissionExecutionResult:
+    preflight = execute_commit_preflight(
+        transport,
+        submission,
+        snapshot_table=snapshot_table,
+    )
+    uploaded_blob_ids: list[str] = []
+    if preflight.upload_init_response is not None:
+        uploaded_blob_ids = execute_blob_uploads(
+            uploader,
+            preflight.network_plan.blob_uploads,
+            preflight.upload_init_response,
+        )
+    commit = execute_create_commit(
+        transport,
+        preflight.network_plan.request,
+    )
+    return CommitSubmissionExecutionResult(
+        preflight=preflight,
+        uploaded_blob_ids=uploaded_blob_ids,
+        commit=commit,
+    )
