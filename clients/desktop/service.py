@@ -22,17 +22,21 @@ from vault_core import (
     SyncApplyJournalRecord,
     TombstoneRecord,
     VaultStateRecord,
+    apply_manifest_summary_stale,
     build_commit_snapshot_table,
     clear_sync_apply_journal,
     cleanup_commit_staging_artifacts,
     cleanup_failed_commit_submission,
     finalize_commit_submission_cleanup,
+    isolate_staging_orphans,
     load_sync_apply_journal,
     load_tombstone_ledger,
+    load_vault_state,
     materialize_blob_staging_plan,
     materialize_content_snapshot_plan,
     prepare_commit_submission,
     recover_sync_apply_finalizing_state,
+    upsert_vault_state,
     upsert_sync_apply_journal,
 )
 from vault_core.constants import STAGING_DIRNAME
@@ -276,6 +280,7 @@ class DesktopPullApplyRecoveryResult:
     journal_phase: Optional[str]
     state: Optional[VaultStateRecord]
     removed_staging_paths: list[Path]
+    isolated_staging_paths: Optional[list[Path]] = None
     removed_plan_path: Optional[Path] = None
 
 
@@ -399,6 +404,7 @@ class DesktopSyncService:
                     journal_phase=None,
                     state=None,
                     removed_staging_paths=[],
+                    isolated_staging_paths=[],
                     removed_plan_path=None,
                 )
             materialized_snapshot = None
@@ -425,6 +431,7 @@ class DesktopSyncService:
                 journal_phase=journal.phase,
                 state=None if finalized is None else finalized.state,
                 removed_staging_paths=[] if finalized is None else finalized.removed_staging_paths,
+                isolated_staging_paths=[],
                 removed_plan_path=None if finalized is None else finalized.removed_plan_path,
             )
         if journal.phase in {"filemap_rewrite", "finalizing"}:
@@ -443,13 +450,12 @@ class DesktopSyncService:
                 journal_phase=finalizing_journal.phase,
                 state=state,
                 removed_staging_paths=removed,
+                isolated_staging_paths=[],
                 removed_plan_path=self._cleanup_pull_apply_plan_file(),
             )
         if journal.phase == "materializing":
             if materialized_snapshot is None or not self._workspace_matches_document(materialized_snapshot.document):
-                raise ValueError(
-                    "pull apply recovery requires a fully materialized workspace before finalization"
-                )
+                return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
             with closing(self.workspace._open_connection()) as connection:
                 upsert_sync_apply_journal(
                     connection,
@@ -462,8 +468,11 @@ class DesktopSyncService:
                 journal_phase="materializing",
                 state=state,
                 removed_staging_paths=removed,
+                isolated_staging_paths=[],
                 removed_plan_path=self._cleanup_pull_apply_plan_file(),
             )
+        if journal.phase == "staging":
+            return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
         raise ValueError(f"pull apply recovery is not supported for journal phase: {journal.phase}")
 
     def download_blobs(self, blob_ids: Iterable[str]) -> BlobDownloadSessionResult:
@@ -1185,6 +1194,29 @@ class DesktopSyncService:
             raise ValueError("recovery pull apply plan revision does not match sync_apply_journal")
         if plan.ops_hash != journal.ops_hash:
             raise ValueError("recovery pull apply plan ops_hash does not match sync_apply_journal")
+
+    def _degrade_pull_apply_recovery(
+        self,
+        journal: SyncApplyJournalRecord,
+        *,
+        normalized_at: int,
+    ) -> DesktopPullApplyRecoveryResult:
+        with closing(self.workspace._open_connection()) as connection:
+            state = load_vault_state(connection, self.vault_id)
+            if state is None:
+                raise KeyError(f"vault_state not found: {self.vault_id}")
+            degraded_state = apply_manifest_summary_stale(state)
+            upsert_vault_state(connection, degraded_state)
+            clear_sync_apply_journal(connection, self.vault_id)
+        isolated_paths = isolate_staging_orphans(self.workspace.vault_root)
+        return DesktopPullApplyRecoveryResult(
+            mode="degraded",
+            journal_phase=journal.phase,
+            state=degraded_state,
+            removed_staging_paths=[],
+            isolated_staging_paths=isolated_paths,
+            removed_plan_path=self._cleanup_pull_apply_plan_file(),
+        )
 
     def _workspace_matches_document(self, document) -> bool:
         for record in document.files:
