@@ -160,6 +160,7 @@ def create_parser() -> argparse.ArgumentParser:
 
     pull_parser = subparsers.add_parser("pull")
     pull_parser.add_argument("--rewritten-at", type=int, required=True)
+    pull_parser.add_argument("--plan-apply", action="store_true")
     pull_parser.add_argument("--download-required-blobs", action="store_true")
     pull_parser.add_argument("--decrypt-required-blobs", action="store_true")
     pull_parser.add_argument("--output-dir")
@@ -290,6 +291,14 @@ def run_cli(
     elif args.command == "worker-health":
         result = service.load_worker_health()
     elif args.command == "pull":
+        if args.plan_apply and (
+            args.download_required_blobs
+            or args.decrypt_required_blobs
+            or args.output_dir
+            or args.plaintext_output_dir
+            or args.stage_required_blobs
+        ):
+            raise ValueError("pull --plan-apply cannot be combined with blob download or materialization flags")
         if args.decrypt_required_blobs and not args.download_required_blobs:
             raise ValueError("pull --decrypt-required-blobs requires --download-required-blobs")
         if args.output_dir and args.decrypt_required_blobs:
@@ -302,7 +311,11 @@ def run_cli(
             raise ValueError("pull --stage-required-blobs requires --decrypt-required-blobs")
         if args.plaintext_output_dir and args.stage_required_blobs:
             raise ValueError("pull --plaintext-output-dir cannot be combined with --stage-required-blobs")
-        result = service.pull_and_ack(rewritten_at=args.rewritten_at)
+        result = (
+            service.pull_and_plan_apply(rewritten_at=args.rewritten_at)
+            if args.plan_apply
+            else service.pull_and_ack(rewritten_at=args.rewritten_at)
+        )
         if args.download_required_blobs:
             if args.decrypt_required_blobs:
                 decrypted_result = service.download_and_decrypt_pull_required_blobs(result)

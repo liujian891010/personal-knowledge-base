@@ -16,6 +16,7 @@ from clients.desktop import (
     DesktopPullRequiredBlobPlan,
     DesktopPullRequiredBlobResult,
     DesktopSyncHttpConfig,
+    DesktopWorkspaceSnapshot,
     build_desktop_sync_service,
 )
 from clients.desktop.crypto import (
@@ -813,6 +814,152 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(staged, DesktopPullApplyStagingResult(journal=None, written_staging_paths={}))
             with closing(open_database(service.workspace.paths.db_path)) as connection:
                 self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
+
+    def test_build_pull_apply_plan_emits_write_move_and_delete_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
+            before_snapshot = DesktopWorkspaceSnapshot(
+                document=FileMapDocument(
+                    vault_id="vault-001",
+                    updated_at=1770000040000,
+                    files=[
+                        FileRecord(
+                            file_id="file-a",
+                            path="Notes/A-old.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000039000,
+                            content_hash="sha256:same",
+                        ),
+                        FileRecord(
+                            file_id="file-b",
+                            path="Notes/B.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000039001,
+                            content_hash="sha256:old",
+                        ),
+                        FileRecord(
+                            file_id="file-c",
+                            path="Notes/C.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000039002,
+                            content_hash="sha256:gone",
+                        ),
+                    ],
+                ),
+                state=service.load_snapshot().state,
+                tombstones=[],
+            )
+            pull = self._build_pull_result(
+                required_blob_ids=["blob-b"],
+                manifest_files=[
+                    ManifestFileEntry(
+                        file_id="file-a",
+                        path="Notes/A.md",
+                        type="note",
+                        blob_id="blob-a",
+                        content_hash="sha256:same",
+                        size=len(payload),
+                        mtime=1770000040100,
+                    ),
+                    ManifestFileEntry(
+                        file_id="file-b",
+                        path="Notes/B.md",
+                        type="note",
+                        blob_id="blob-b",
+                        content_hash="sha256:new",
+                        size=len(payload),
+                        mtime=1770000040200,
+                    ),
+                ],
+            )
+
+            plan = service._build_pull_apply_plan(before_snapshot, pull)
+
+            self.assertEqual(plan.vault_id, "vault-001")
+            self.assertEqual(plan.revision, 8)
+            self.assertEqual(
+                [(item.file_id, item.source_path, item.target_path) for item in plan.moves],
+                [("file-a", "Notes/A-old.md", "Notes/A.md")],
+            )
+            self.assertEqual(
+                [(item.file_id, item.target_path, item.staging_path) for item in plan.writes],
+                [("file-b", "Notes/B.md", ".noteapp/staging/file-b.staging")],
+            )
+            self.assertEqual(
+                [(item.file_id, item.path, item.reason) for item in plan.deletes],
+                [("file-c", "Notes/C.md", "deleted")],
+            )
+            self.assertEqual(plan.blocking_paths, [])
+            self.assertTrue(plan.ops_hash.startswith("sha256:"))
+
+    def test_build_pull_apply_plan_flags_blocking_paths_for_path_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            before_snapshot = DesktopWorkspaceSnapshot(
+                document=FileMapDocument(
+                    vault_id="vault-001",
+                    updated_at=1770000040000,
+                    files=[
+                        FileRecord(
+                            file_id="file-a",
+                            path="Notes/A.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000039000,
+                            content_hash="sha256:a",
+                        ),
+                        FileRecord(
+                            file_id="file-b",
+                            path="Notes/B.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000039001,
+                            content_hash="sha256:b",
+                        ),
+                    ],
+                ),
+                state=service.load_snapshot().state,
+                tombstones=[],
+            )
+            pull = self._build_pull_result(
+                required_blob_ids=[],
+                manifest_files=[
+                    ManifestFileEntry(
+                        file_id="file-a",
+                        path="Notes/B.md",
+                        type="note",
+                        blob_id="blob-a",
+                        content_hash="sha256:a",
+                        size=1,
+                        mtime=1770000040100,
+                    ),
+                    ManifestFileEntry(
+                        file_id="file-b",
+                        path="Notes/A.md",
+                        type="note",
+                        blob_id="blob-b",
+                        content_hash="sha256:b",
+                        size=1,
+                        mtime=1770000040200,
+                    ),
+                ],
+            )
+
+            plan = service._build_pull_apply_plan(before_snapshot, pull)
+
+            self.assertEqual(
+                sorted((item.file_id, item.source_path, item.target_path) for item in plan.moves),
+                [
+                    ("file-a", "Notes/A.md", "Notes/B.md"),
+                    ("file-b", "Notes/B.md", "Notes/A.md"),
+                ],
+            )
+            self.assertEqual(plan.writes, [])
+            self.assertEqual(plan.deletes, [])
+            self.assertEqual(plan.blocking_paths, ["Notes/A.md", "Notes/B.md"])
 
     def test_prepare_commit_rejects_active_sync_apply_journal(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

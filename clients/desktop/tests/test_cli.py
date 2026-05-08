@@ -36,6 +36,7 @@ class FakeService:
         self.fail_submit_workspace_at_calls: set[int] = set()
         self.skip_submit_detected_if_needed = False
         self.pull_and_ack_payload = None
+        self.pull_and_plan_apply_payload = None
         self.download_and_decrypt_pull_payload = None
         self.materialize_pull_required_plaintext_payload = None
         self.stage_pull_required_plaintext_payload = None
@@ -144,6 +145,12 @@ class FakeService:
         if self.pull_and_ack_payload is not None:
             return self.pull_and_ack_payload
         return {"kind": "pull", "rewritten_at": rewritten_at}
+
+    def pull_and_plan_apply(self, *, rewritten_at: int):
+        self.calls.append(("pull-and-plan-apply", rewritten_at))
+        if self.pull_and_plan_apply_payload is not None:
+            return self.pull_and_plan_apply_payload
+        return {"kind": "pull-and-plan-apply", "rewritten_at": rewritten_at}
 
     def resume_commit_recovery(self, *, normalized_at: int):
         self.calls.append(("recover", normalized_at))
@@ -692,6 +699,90 @@ class DesktopCliTests(unittest.TestCase):
                 "1770000040100",
                 "--stage-required-blobs",
             )
+
+    def test_pull_command_rejects_plan_apply_with_blob_flags(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "pull --plan-apply cannot be combined with blob download or materialization flags",
+        ):
+            self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "pull",
+                "--rewritten-at",
+                "1770000040100",
+                "--plan-apply",
+                "--download-required-blobs",
+            )
+
+    def test_pull_command_can_return_apply_plan(self) -> None:
+        self.service.pull_and_plan_apply_payload = {
+            "pull": {
+                "pull": {
+                    "reconcile": {
+                        "applied": {
+                            "required_blob_ids": ["blob-a"],
+                        }
+                    }
+                }
+            },
+            "plan": {
+                "vault_id": "vault-001",
+                "revision": 8,
+                "writes": [
+                    {
+                        "file_id": "file-a",
+                        "target_path": "Notes/A.md",
+                        "staging_path": ".noteapp/staging/file-a.staging",
+                        "type": "note",
+                        "content_hash": "sha256:abc",
+                    }
+                ],
+                "moves": [
+                    {
+                        "file_id": "file-b",
+                        "source_path": "Notes/B-old.md",
+                        "target_path": "Notes/B.md",
+                        "type": "note",
+                        "content_hash": "sha256:def",
+                    }
+                ],
+                "deletes": [
+                    {
+                        "file_id": "file-c",
+                        "path": "Notes/C.md",
+                        "reason": "deleted",
+                    }
+                ],
+                "blocking_paths": ["Notes/B.md"],
+                "ops_hash": "sha256:ops8",
+            },
+        }
+
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "pull",
+            "--rewritten-at",
+            "1770000040100",
+            "--plan-apply",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload, self.service.pull_and_plan_apply_payload)
+        self.assertEqual(self.service.calls, [("pull-and-plan-apply", 1770000040100)])
 
     def test_pull_command_can_materialize_decrypted_required_blobs(self) -> None:
         self.service.pull_and_ack_payload = {
