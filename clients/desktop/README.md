@@ -76,6 +76,19 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
 
 If `--encrypted-map` / `--encrypted-dir` is omitted, the desktop client currently auto-generates a deterministic placeholder encrypted blob from the selected plaintext content. This keeps AG05 wiring moving until a real crypto provider lands.
 
+When you want the cycle to detect and submit local changes automatically instead of enumerating `--file-id`, use `--submit-detected`:
+
+```powershell
+$env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
+  --vault-root C:\vaults\pkb `
+  --base-url https://sync.example.com `
+  --vault-id vault-001 `
+  --device-id desktop-shanghai `
+  sync-cycle `
+  --submit-created-at 1770000100150 `
+  --submit-detected
+```
+
 `sync-cycle-loop` repeats the full cycle with bounded iterations and stepped timestamps:
 
 ```powershell
@@ -97,6 +110,8 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
 
 `sync-cycle-loop` also supports `--continue-on-error`, returning per-iteration failure records in JSON while continuing later iterations.
 
+`sync-cycle-loop` accepts the same `--submit-detected` mode for automatic local change submit on each iteration.
+
 `sync-worker` is a thinner bounded worker wrapper around `sync-cycle-loop`: it auto-plans timestamps, defaults to `continue_on_error=true`, and derives `step_ms` from `interval_seconds` when you do not provide one.
 
 ```powershell
@@ -110,6 +125,8 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   --file-id file-live `
   --interval-seconds 30
 ```
+
+`sync-worker` also accepts `--submit-detected`, which routes the worker through local change detection plus auto-submit instead of explicit `--file-id` selection.
 
 After each worker run, the desktop client also writes the latest worker summary to `.noteapp/sync-worker-state.json` inside the vault.
 

@@ -60,6 +60,7 @@ class DesktopSyncRunner:
         init_now_ms: Optional[int] = None,
         submit_created_at: Optional[int] = None,
         submit_file_ids: Optional[Iterable[str]] = None,
+        submit_detected: bool = False,
         encrypted_blob_by_file_id: Optional[Mapping[str, bytes]] = None,
         commit_intent_id: Optional[str] = None,
         cleanup_normalized_at: Optional[int] = None,
@@ -71,19 +72,38 @@ class DesktopSyncRunner:
 
         resolved_submit_file_ids = None if submit_file_ids is None else list(submit_file_ids)
         if submit_created_at is None:
-            if resolved_submit_file_ids or encrypted_blob_by_file_id is not None:
-                raise ValueError("submit file_ids and encrypted payloads require submit_created_at")
+            if (
+                resolved_submit_file_ids
+                or encrypted_blob_by_file_id is not None
+                or submit_detected
+            ):
+                raise ValueError(
+                    "submit file_ids, submit_detected, and encrypted payloads require submit_created_at"
+                )
             submitted = None
         else:
-            if not resolved_submit_file_ids:
-                raise ValueError("submit_created_at requires at least one submit file_id")
-            submitted = self.service.submit_workspace_commit(
-                created_at=submit_created_at,
-                file_ids=resolved_submit_file_ids,
-                encrypted_blob_by_file_id=encrypted_blob_by_file_id,
-                commit_intent_id=commit_intent_id,
-                cleanup_normalized_at=cleanup_normalized_at,
-            )
+            if submit_detected:
+                if resolved_submit_file_ids:
+                    raise ValueError("submit_detected cannot be combined with submit_file_ids")
+                if encrypted_blob_by_file_id is not None:
+                    raise ValueError(
+                        "submit_detected cannot be combined with encrypted_blob_by_file_id"
+                    )
+                submitted = self.service.submit_detected_changes(
+                    created_at=submit_created_at,
+                    commit_intent_id=commit_intent_id,
+                    cleanup_normalized_at=cleanup_normalized_at,
+                )
+            else:
+                if not resolved_submit_file_ids:
+                    raise ValueError("submit_created_at requires at least one submit file_id")
+                submitted = self.service.submit_workspace_commit(
+                    created_at=submit_created_at,
+                    file_ids=resolved_submit_file_ids,
+                    encrypted_blob_by_file_id=encrypted_blob_by_file_id,
+                    commit_intent_id=commit_intent_id,
+                    cleanup_normalized_at=cleanup_normalized_at,
+                )
 
         pull = self.service.pull_and_ack(rewritten_at=pull_rewritten_at)
         final_snapshot = self.service.load_snapshot()
