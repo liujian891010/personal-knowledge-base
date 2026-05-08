@@ -1,0 +1,313 @@
+{
+  "generated_at_ms": 1770002040555,
+  "vault_id": "vault-001",
+  "device_id": "desktop-shanghai",
+  "vault_root": "C:/vaults/pkb",
+  "sync_center": {
+    "cards": [
+      {
+        "card_id": "baseline",
+        "kind": "baseline",
+        "level": "warning",
+        "title": "Local sync baseline must be rebuilt",
+        "body": "The current manifest summary is stale. Run a full pull/reconcile before creating a new commit.",
+        "badge_count": 1,
+        "actions": [
+          {
+            "action_id": "pull",
+            "label": "Run Pull",
+            "enabled": true,
+            "emphasis": "primary",
+            "command": "pull",
+            "argv": ["--rewritten-at", "1770002040555"],
+            "reason": null,
+            "requires_confirmation": false
+          }
+        ]
+      },
+      {
+        "card_id": "local-changes",
+        "kind": "changes",
+        "level": "info",
+        "title": "2 local changes are waiting",
+        "body": "Tracked modifications and untracked files are ready for the next submit or sync cycle.",
+        "badge_count": 2,
+        "actions": [
+          {
+            "action_id": "detect-local-changes",
+            "label": "Inspect Local Changes",
+            "enabled": true,
+            "emphasis": "normal",
+            "command": "detect-local-changes",
+            "argv": [],
+            "reason": null,
+            "requires_confirmation": false
+          },
+          {
+            "action_id": "submit-detected-commit",
+            "label": "Submit Local Changes",
+            "enabled": false,
+            "emphasis": "primary",
+            "command": "submit-detected-commit",
+            "argv": ["--created-at", "1770002040555"],
+            "reason": "requires_full_pull",
+            "requires_confirmation": false
+          }
+        ]
+      },
+      {
+        "card_id": "activity",
+        "kind": "activity",
+        "level": "danger",
+        "title": "3 recent sync actions recorded",
+        "body": "Latest action `pull` finished with status `failed` from `card:baseline`: RuntimeError: network down",
+        "badge_count": 3,
+        "actions": [
+          {
+            "action_id": "sync-activity",
+            "label": "Open Activity Feed",
+            "enabled": true,
+            "emphasis": "primary",
+            "command": "sync-activity",
+            "argv": ["--limit", "20"],
+            "reason": null,
+            "requires_confirmation": false
+          }
+        ]
+      }
+    ],
+    "panel": {
+      "level": "warning",
+      "headline": "Rebuild baseline before submitting local changes",
+      "detail": "The local vault has pending edits, but the manifest baseline is stale and requires a pull first.",
+      "conflict_badge_count": 0,
+      "change_badge_count": 2,
+      "primary_action": {
+        "action_id": "pull",
+        "label": "Run Pull",
+        "enabled": true,
+        "emphasis": "primary",
+        "command": "pull",
+        "argv": ["--rewritten-at", "1770002040555"],
+        "reason": null,
+        "requires_confirmation": false
+      },
+      "secondary_actions": [
+        {
+          "action_id": "show-vault-summary",
+          "label": "Open Summary",
+          "enabled": true,
+          "emphasis": "normal",
+          "command": "vault-summary",
+          "argv": [],
+          "reason": null,
+          "requires_confirmation": false
+        },
+        {
+          "action_id": "submit-detected-commit",
+          "label": "Submit Local Changes",
+          "enabled": false,
+          "emphasis": "primary",
+          "command": "submit-detected-commit",
+          "argv": ["--created-at", "1770002040555"],
+          "reason": "requires_full_pull",
+          "requires_confirmation": false
+        }
+      ],
+      "summary": {
+        "state": {
+          "vault_id": "vault-001",
+          "last_applied_revision": 9,
+          "remote_head_revision": 10,
+          "acked_revision": 9,
+          "pending_ack_to_server": [],
+          "commit_in_progress": false,
+          "last_manifest_summary": null,
+          "last_manifest_summary_status": "stale",
+          "local_delete_sequence": 4,
+          "has_unresolved_conflicts": false,
+          "schema_version": "v1",
+          "meta": {
+            "device_id": "desktop-shanghai"
+          }
+        },
+        "changes": {
+          "vault_id": "vault-001",
+          "tracked_record_count": 8,
+          "change_count": 2,
+          "modified_file_ids": ["file-live"],
+          "missing_file_ids": [],
+          "changes": []
+        },
+        "conflicts": {
+          "state": {
+            "vault_id": "vault-001",
+            "last_applied_revision": 9,
+            "remote_head_revision": 10,
+            "acked_revision": 9,
+            "pending_ack_to_server": [],
+            "commit_in_progress": false,
+            "last_manifest_summary": null,
+            "last_manifest_summary_status": "stale",
+            "local_delete_sequence": 4,
+            "has_unresolved_conflicts": false,
+            "schema_version": "v1",
+            "meta": null
+          },
+          "actual_has_unresolved_conflicts": false,
+          "conflict_copies": [],
+          "conflict_orphans": []
+        },
+        "worker_health": {
+          "status": "healthy",
+          "started_at_ms": 1770002038000,
+          "finished_at_ms": 1770002039000,
+          "success_count": 16,
+          "failure_count": 0,
+          "stopped_early": false,
+          "state_path": "C:/vaults/pkb/.noteapp/sync-worker-state.json",
+          "latest_failure": null
+        },
+        "commit_gate": {
+          "can_submit_commit": false,
+          "blocking_reasons": ["requires_full_pull"],
+          "requires_full_pull": true,
+          "has_active_commit_journal": false,
+          "has_active_sync_apply_journal": false
+        }
+      }
+    },
+    "summary": {
+      "state": {
+        "vault_id": "vault-001",
+        "last_applied_revision": 9,
+        "remote_head_revision": 10,
+        "acked_revision": 9,
+        "pending_ack_to_server": [],
+        "commit_in_progress": false,
+        "last_manifest_summary": null,
+        "last_manifest_summary_status": "stale",
+        "local_delete_sequence": 4,
+        "has_unresolved_conflicts": false,
+        "schema_version": "v1",
+        "meta": {
+          "device_id": "desktop-shanghai"
+        }
+      },
+      "changes": {
+        "vault_id": "vault-001",
+        "tracked_record_count": 8,
+        "change_count": 2,
+        "modified_file_ids": ["file-live"],
+        "missing_file_ids": [],
+        "changes": []
+      },
+      "conflicts": {
+        "state": {
+          "vault_id": "vault-001",
+          "last_applied_revision": 9,
+          "remote_head_revision": 10,
+          "acked_revision": 9,
+          "pending_ack_to_server": [],
+          "commit_in_progress": false,
+          "last_manifest_summary": null,
+          "last_manifest_summary_status": "stale",
+          "local_delete_sequence": 4,
+          "has_unresolved_conflicts": false,
+          "schema_version": "v1",
+          "meta": null
+        },
+        "actual_has_unresolved_conflicts": false,
+        "conflict_copies": [],
+        "conflict_orphans": []
+      },
+      "worker_health": {
+        "status": "healthy",
+        "started_at_ms": 1770002038000,
+        "finished_at_ms": 1770002039000,
+        "success_count": 16,
+        "failure_count": 0,
+        "stopped_early": false,
+        "state_path": "C:/vaults/pkb/.noteapp/sync-worker-state.json",
+        "latest_failure": null
+      },
+      "commit_gate": {
+        "can_submit_commit": false,
+        "blocking_reasons": ["requires_full_pull"],
+        "requires_full_pull": true,
+        "has_active_commit_journal": false,
+        "has_active_sync_apply_journal": false
+      }
+    },
+    "recent_activity": {
+      "records": [
+        {
+          "activity_id": "activity-001",
+          "occurred_at_ms": 1770002039100,
+          "level": "success",
+          "action_id": "show-vault-summary",
+          "command": "vault-summary",
+          "status": "executed",
+          "source": "panel",
+          "message": null
+        },
+        {
+          "activity_id": "activity-002",
+          "occurred_at_ms": 1770002039900,
+          "level": "warning",
+          "action_id": "submit-detected-commit",
+          "command": "submit-detected-commit",
+          "status": "disabled",
+          "source": "card:local-changes",
+          "message": "requires_full_pull"
+        },
+        {
+          "activity_id": "activity-003",
+          "occurred_at_ms": 1770002040500,
+          "level": "danger",
+          "action_id": "pull",
+          "command": "pull",
+          "status": "failed",
+          "source": "card:baseline",
+          "message": "RuntimeError: network down"
+        }
+      ],
+      "total_count": 3
+    }
+  },
+  "activity_feed": {
+    "records": [
+      {
+        "activity_id": "activity-001",
+        "occurred_at_ms": 1770002039100,
+        "level": "success",
+        "action_id": "show-vault-summary",
+        "command": "vault-summary",
+        "status": "executed",
+        "source": "panel",
+        "message": null
+      },
+      {
+        "activity_id": "activity-002",
+        "occurred_at_ms": 1770002039900,
+        "level": "warning",
+        "action_id": "submit-detected-commit",
+        "command": "submit-detected-commit",
+        "status": "disabled",
+        "source": "card:local-changes",
+        "message": "requires_full_pull"
+      },
+      {
+        "activity_id": "activity-003",
+        "occurred_at_ms": 1770002040500,
+        "level": "danger",
+        "action_id": "pull",
+        "command": "pull",
+        "status": "failed",
+        "source": "card:baseline",
+        "message": "RuntimeError: network down"
+      }
+    ],
+    "total_count": 3
+  }
+}

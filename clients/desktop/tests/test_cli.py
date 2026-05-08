@@ -294,6 +294,17 @@ class FakeService:
         self.calls.append(("sync-activity", limit))
         return self.sync_activity_payload
 
+    def build_sync_shell_snapshot(self, *, now_ms=None, activity_limit=20):
+        self.calls.append(("sync-shell-snapshot", now_ms, activity_limit))
+        return {
+            "generated_at_ms": now_ms,
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "sync_center": self.build_sync_center_model(now_ms=now_ms),
+            "activity_feed": self.sync_activity_payload,
+        }
+
     def execute_sync_action(self, action_id: str, *, now_ms=None):
         self.calls.append(("execute-sync-action", action_id, now_ms))
         return {
@@ -826,6 +837,43 @@ class DesktopCliTests(unittest.TestCase):
                 ("vault-summary", None),
             ],
         )
+
+    def test_sync_shell_snapshot_command_routes_to_service_and_can_write_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "sync-shell-snapshot.json"
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "sync-shell-snapshot",
+                "--now-ms",
+                "1770000040555",
+                "--activity-limit",
+                "7",
+                "--output-json",
+                str(output_path),
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["generated_at_ms"], 1770000040555)
+            self.assertEqual(payload["sync_center"]["cards"][0]["card_id"], "conflicts")
+            self.assertEqual(payload["activity_feed"]["total_count"], 1)
+            self.assertEqual(json.loads(output_path.read_text(encoding="utf-8")), payload)
+            self.assertEqual(
+                self.service.calls,
+                [
+                    ("sync-shell-snapshot", 1770000040555, 7),
+                    ("sync-center", 1770000040555),
+                    ("sync-panel", 1770000040555),
+                    ("vault-summary", None),
+                    ("vault-summary", None),
+                ],
+            )
 
     def test_sync_activity_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(

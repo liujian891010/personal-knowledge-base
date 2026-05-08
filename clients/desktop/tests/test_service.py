@@ -748,6 +748,28 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(center.cards[-1].actions[0].action_id, "sync-activity")
             self.assertEqual(center.cards[-1].actions[0].command, "sync-activity")
 
+    def test_build_sync_shell_snapshot_includes_metadata_and_requested_activity_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            service.execute_sync_action("show-vault-summary", now_ms=1770000040901)
+            service.execute_sync_action("sync-activity", now_ms=1770000040902)
+
+            snapshot = service.build_sync_shell_snapshot(
+                now_ms=1770000040999,
+                activity_limit=1,
+            )
+
+            self.assertEqual(snapshot.generated_at_ms, 1770000040999)
+            self.assertEqual(snapshot.vault_id, "vault-001")
+            self.assertEqual(snapshot.device_id, "desktop-shanghai")
+            self.assertEqual(snapshot.vault_root, root)
+            self.assertEqual(snapshot.sync_center.panel.level, "success")
+            self.assertEqual(snapshot.sync_center.recent_activity.total_count, 2)
+            self.assertEqual(snapshot.activity_feed.total_count, 2)
+            self.assertEqual(len(snapshot.activity_feed.records), 1)
+            self.assertEqual(snapshot.activity_feed.records[0].action_id, "sync-activity")
+
     def test_execute_sync_action_records_unsupported_activity(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
