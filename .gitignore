@@ -1,6 +1,7 @@
 # Node
 node_modules/
 dist/
+apps/frontend/noteapp-web/fixtures/live-sync-shell.json
 
 # Python
 __pycache__/
