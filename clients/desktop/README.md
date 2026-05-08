@@ -134,7 +134,7 @@ Use `worker-state` to read the persisted local worker summary, and `worker-healt
 
 Use `detect-local-changes` to scan the current vault root for tracked file modifications, missing tracked files, and untracked local files before wiring automatic submit flows. A local rename still appears as a `missing + untracked` pair at scan time. `.ai/raw/` and `.ai/log.md` stay outside the regular sync set and are ignored by this scan.
 
-Use `submit-detected-commit` to auto-submit detected `modified`, `missing`, and `untracked` changes with placeholder `file_id`, `blob_id`, and encrypted blob wiring. When the workspace is already clean, the command now returns a skipped no-op result instead of failing. The current boundary also folds an unambiguous same-content `missing + untracked` pair into a tracked rename that preserves the original `file_id`. Unsupported cases such as modified `conflict_copy` records are still rejected.
+Use `submit-detected-commit` to auto-submit detected `modified`, `missing`, and `untracked` changes. New local files now receive generated UUID `file_id` values, while `blob_id` plus encrypted blob materialization are routed through a replaceable desktop crypto provider that still defaults to the current deterministic placeholder implementation. When the workspace is already clean, the command returns a skipped no-op result instead of failing. The current boundary also folds an unambiguous same-content `missing + untracked` pair into a tracked rename that preserves the original `file_id`. Unsupported cases such as modified `conflict_copy` records are still rejected.
 
 `submit-commit` payload files use `file_id -> base64 bytes` JSON objects:
 

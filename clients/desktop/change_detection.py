@@ -5,6 +5,7 @@ import mimetypes
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable, Optional
+from uuid import uuid4
 
 from vault_core import FileMapDocument, FileRecord, TombstoneRecord
 from vault_core.constants import NOTEAPP_DIRNAME, VAULTINFO_FILENAME
@@ -51,11 +52,8 @@ def _is_sync_excluded_workspace_path(relative_path: str) -> bool:
     return False
 
 
-def build_placeholder_file_id(relative_path: str) -> str:
-    digest = hashlib.sha256(
-        b"pkb-placeholder-file-id-v1\x00" + relative_path.encode("utf-8")
-    ).hexdigest()
-    return f"file-{digest}"
+def build_generated_file_id(_: str) -> str:
+    return str(uuid4())
 
 
 def _iter_workspace_files(vault_root: Path) -> Iterable[Path]:
@@ -250,6 +248,7 @@ def build_tracked_change_commit_plan(
     current_local_delete_sequence: int = 0,
     deleted_by_device: Optional[str] = None,
     file_id_builder: Optional[Callable[[str], str]] = None,
+    blob_id_builder: Optional[Callable[[str], str]] = None,
 ) -> DesktopTrackedChangeCommitPlan:
     resolved_change_set = (
         detect_local_workspace_changes(vault_root, document)
@@ -282,7 +281,8 @@ def build_tracked_change_commit_plan(
     working_document = document
     resolved_tombstones = list(tombstones or [])
     local_delete_sequence = current_local_delete_sequence
-    resolve_file_id = build_placeholder_file_id if file_id_builder is None else file_id_builder
+    resolve_file_id = build_generated_file_id if file_id_builder is None else file_id_builder
+    resolve_blob_id = build_placeholder_blob_id if blob_id_builder is None else blob_id_builder
     record_by_file_id = {record.file_id: record for record in document.files}
     rename_targets_by_file_id = _match_local_rename_candidates(resolved_change_set, document)
     consumed_untracked_paths = {
@@ -306,7 +306,7 @@ def build_tracked_change_commit_plan(
         meta = dict(record.meta or {})
         meta.update(
             {
-                "blob_id": build_placeholder_blob_id(content_hash),
+                "blob_id": resolve_blob_id(content_hash),
                 "size": size_bytes,
                 "mtime": mtime_ms,
                 "mime_type": _resolve_mime_type(record, relative_path),
@@ -364,7 +364,7 @@ def build_tracked_change_commit_plan(
             resolved_blob_id = (
                 blob_id
                 if isinstance(blob_id, str) and blob_id
-                else build_placeholder_blob_id(content_hash)
+                else resolve_blob_id(content_hash)
             )
             meta.update(
                 {
@@ -445,7 +445,7 @@ def build_tracked_change_commit_plan(
                     content_hash=content_hash,
                     last_known_revision=None,
                     meta={
-                        "blob_id": build_placeholder_blob_id(content_hash),
+                        "blob_id": resolve_blob_id(content_hash),
                         "size": len(payload),
                         "mtime": mtime_ms,
                         "mime_type": mimetypes.guess_type(relative_path)[0],

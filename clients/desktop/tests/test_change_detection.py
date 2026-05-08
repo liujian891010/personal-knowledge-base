@@ -4,6 +4,7 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from uuid import UUID
 
 from clients.desktop.change_detection import (
     build_tracked_change_commit_plan,
@@ -226,7 +227,25 @@ class DesktopChangeDetectionTests(unittest.TestCase):
             self.assertEqual(plan.change_set.change_count, 1)
             self.assertEqual(len(plan.document.files), 1)
             self.assertEqual(plan.document.files[0].path, "Notes/New.md")
+            UUID(plan.document.files[0].file_id)
             self.assertEqual(plan.content_by_file_id[plan.document.files[0].file_id], payload)
+
+    def test_build_tracked_change_commit_plan_supports_injected_file_and_blob_id_builders(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Notes").mkdir(parents=True, exist_ok=True)
+            payload = b"# new\n"
+            (root / "Notes" / "New.md").write_bytes(payload)
+
+            plan = build_tracked_change_commit_plan(
+                root,
+                FileMapDocument(vault_id="vault-001", updated_at=1770000050500),
+                file_id_builder=lambda _: "11111111-1111-1111-1111-111111111111",
+                blob_id_builder=lambda _: "blob-custom-001",
+            )
+
+            self.assertEqual(plan.document.files[0].file_id, "11111111-1111-1111-1111-111111111111")
+            self.assertEqual(plan.document.files[0].meta["blob_id"], "blob-custom-001")
 
     def test_build_tracked_change_commit_plan_folds_missing_and_untracked_into_rename(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
