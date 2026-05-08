@@ -184,13 +184,14 @@ class FakeService:
             ],
         }
 
-    def resolve_conflicts(self, *, resolved_at: int, conflict_file_ids=None, orphan_relative_paths=None):
+    def resolve_conflicts(self, *, resolved_at: int, conflict_file_ids=None, orphan_relative_paths=None, resolve_all=False):
         self.calls.append(
             (
                 "resolve-conflicts",
                 resolved_at,
                 [] if conflict_file_ids is None else list(conflict_file_ids),
                 [] if orphan_relative_paths is None else list(orphan_relative_paths),
+                resolve_all,
             )
         )
         return {
@@ -570,6 +571,38 @@ class DesktopCliTests(unittest.TestCase):
                     1770000040090,
                     ["file-conflict"],
                     [".noteapp/conflict-orphans/Orphan.md"],
+                    False,
+                )
+            ],
+        )
+
+    def test_resolve_conflicts_command_supports_resolve_all(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "resolve-conflicts",
+            "--resolved-at",
+            "1770000040100",
+            "--all",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(payload["state"]["has_unresolved_conflicts"])
+        self.assertEqual(
+            self.service.calls,
+            [
+                (
+                    "resolve-conflicts",
+                    1770000040100,
+                    [],
+                    [],
+                    True,
                 )
             ],
         )

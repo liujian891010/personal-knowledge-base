@@ -160,6 +160,7 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("list-conflicts")
     resolve_conflicts_parser = subparsers.add_parser("resolve-conflicts")
     resolve_conflicts_parser.add_argument("--resolved-at", type=int, required=True)
+    resolve_conflicts_parser.add_argument("--all", action="store_true", dest="resolve_all")
     resolve_conflicts_parser.add_argument("--file-id", action="append", dest="file_ids")
     resolve_conflicts_parser.add_argument("--orphan-path", action="append", dest="orphan_paths")
 
@@ -307,6 +308,7 @@ def run_cli(
             resolved_at=args.resolved_at,
             conflict_file_ids=args.file_ids,
             orphan_relative_paths=args.orphan_paths,
+            resolve_all=args.resolve_all,
         )
     elif args.command == "pull":
         if sum(

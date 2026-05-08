@@ -156,7 +156,7 @@ After each worker run, the desktop client also writes the latest worker summary 
 
 Use `worker-state` to read the persisted local worker summary, and `worker-health` to read a condensed local health view derived from that state file.
 
-Use `resolve-conflicts` to clear locally preserved pull/apply conflict artifacts after the user has handled them. The command removes selected `status=conflict_copy` records from `filemap.json`, deletes the corresponding local conflict-copy files when still present, can also delete selected files under `.noteapp/conflict-orphans/`, and then recomputes `has_unresolved_conflicts` from the remaining conflict records plus orphan files so commit submission can reopen only when the local conflict set is truly empty.
+Use `resolve-conflicts` to clear locally preserved pull/apply conflict artifacts after the user has handled them. The command removes selected `status=conflict_copy` records from `filemap.json`, deletes the corresponding local conflict-copy files when still present, can also delete selected files under `.noteapp/conflict-orphans/`, supports `--all` for clearing every currently listed local conflict artifact in one step, and then recomputes `has_unresolved_conflicts` from the remaining conflict records plus orphan files so commit submission can reopen only when the local conflict set is truly empty.
 
 Use `list-conflicts` to enumerate the currently unresolved `conflict_copy` records and local `.noteapp/conflict-orphans/` files before deciding what to resolve. The command also self-heals a drifted `has_unresolved_conflicts=false` flag back to `true` when unresolved conflict artifacts still exist locally.
 
