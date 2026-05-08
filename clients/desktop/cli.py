@@ -4,6 +4,7 @@ import argparse
 import base64
 import json
 import sys
+from time import sleep as default_sleep
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, TextIO
@@ -11,6 +12,7 @@ from typing import Any, Callable, Optional, Sequence, TextIO
 from vault_core import BlobDownloadSessionResult
 
 from .runner import DesktopSyncRunner
+from .scheduler import DesktopSyncScheduleConfig, DesktopSyncScheduler
 from .service import DesktopSyncService, build_desktop_sync_service
 from .sync_runtime import DesktopSyncHttpConfig
 
@@ -100,6 +102,14 @@ def create_parser() -> argparse.ArgumentParser:
     sync_once_parser.add_argument("--rewritten-at", type=int, required=True)
     sync_once_parser.add_argument("--now-ms", type=int)
 
+    sync_loop_parser = subparsers.add_parser("sync-loop")
+    sync_loop_parser.add_argument("--iterations", type=int, required=True)
+    sync_loop_parser.add_argument("--normalized-at", type=int, required=True)
+    sync_loop_parser.add_argument("--rewritten-at", type=int, required=True)
+    sync_loop_parser.add_argument("--interval-seconds", type=float, default=0.0)
+    sync_loop_parser.add_argument("--step-ms", type=int, default=0)
+    sync_loop_parser.add_argument("--now-ms", type=int)
+
     download_parser = subparsers.add_parser("download-blobs")
     download_parser.add_argument("--blob-id", action="append", dest="blob_ids", required=True)
     download_parser.add_argument("--output-dir")
@@ -118,6 +128,7 @@ def run_cli(
     *,
     stdout: TextIO,
     service_builder: ServiceBuilder = build_cli_service,
+    sleep: Callable[[float], None] = default_sleep,
 ) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
@@ -143,6 +154,20 @@ def run_cli(
             init_now_ms=args.now_ms,
             recovery_normalized_at=args.normalized_at,
             pull_rewritten_at=args.rewritten_at,
+        )
+    elif args.command == "sync-loop":
+        result = DesktopSyncScheduler(
+            DesktopSyncRunner(service),
+            sleep=sleep,
+        ).run_loop(
+            DesktopSyncScheduleConfig(
+                iterations=args.iterations,
+                init_now_ms=args.now_ms,
+                recovery_normalized_at=args.normalized_at,
+                pull_rewritten_at=args.rewritten_at,
+                interval_seconds=args.interval_seconds,
+                step_ms=args.step_ms,
+            )
         )
     elif args.command == "download-blobs":
         result = service.download_blobs(args.blob_ids)

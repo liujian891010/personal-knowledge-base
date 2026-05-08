@@ -101,9 +101,14 @@ class DesktopCliTests(unittest.TestCase):
         self.created.append((config, vault_root))
         return self.service
 
-    def _run(self, *argv: str):
+    def _run(self, *argv: str, sleep=None):
         stdout = io.StringIO()
-        exit_code = run_cli(argv, stdout=stdout, service_builder=self._builder)
+        exit_code = run_cli(
+            argv,
+            stdout=stdout,
+            service_builder=self._builder,
+            sleep=(lambda _: None) if sleep is None else sleep,
+        )
         return exit_code, json.loads(stdout.getvalue())
 
     def test_init_command_builds_service_and_returns_json(self) -> None:
@@ -226,6 +231,104 @@ class DesktopCliTests(unittest.TestCase):
                 ("status", None),
             ],
         )
+
+    def test_sync_loop_command_routes_scheduler_sequence(self) -> None:
+        slept: list[float] = []
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-loop",
+            "--iterations",
+            "3",
+            "--now-ms",
+            "1770000040400",
+            "--normalized-at",
+            "1770000040410",
+            "--rewritten-at",
+            "1770000040420",
+            "--step-ms",
+            "50",
+            "--interval-seconds",
+            "1.25",
+            sleep=slept.append,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload,
+            {
+                "config": {
+                    "init_now_ms": 1770000040400,
+                    "interval_seconds": 1.25,
+                    "iterations": 3,
+                    "pull_rewritten_at": 1770000040420,
+                    "recovery_normalized_at": 1770000040410,
+                    "step_ms": 50,
+                },
+                "iterations": [
+                    {
+                        "init_now_ms": 1770000040400,
+                        "iteration": 0,
+                        "pull_rewritten_at": 1770000040420,
+                        "recovery_normalized_at": 1770000040410,
+                        "run_once": {
+                            "final_snapshot": {"files": 1, "kind": "status"},
+                            "initialized": {"kind": "init", "value": 1770000040400},
+                            "pull": {"kind": "pull", "rewritten_at": 1770000040420},
+                            "recovery": {"kind": "recover", "normalized_at": 1770000040410},
+                        },
+                    },
+                    {
+                        "init_now_ms": 1770000040450,
+                        "iteration": 1,
+                        "pull_rewritten_at": 1770000040470,
+                        "recovery_normalized_at": 1770000040460,
+                        "run_once": {
+                            "final_snapshot": {"files": 1, "kind": "status"},
+                            "initialized": {"kind": "init", "value": 1770000040450},
+                            "pull": {"kind": "pull", "rewritten_at": 1770000040470},
+                            "recovery": {"kind": "recover", "normalized_at": 1770000040460},
+                        },
+                    },
+                    {
+                        "init_now_ms": 1770000040500,
+                        "iteration": 2,
+                        "pull_rewritten_at": 1770000040520,
+                        "recovery_normalized_at": 1770000040510,
+                        "run_once": {
+                            "final_snapshot": {"files": 1, "kind": "status"},
+                            "initialized": {"kind": "init", "value": 1770000040500},
+                            "pull": {"kind": "pull", "rewritten_at": 1770000040520},
+                            "recovery": {"kind": "recover", "normalized_at": 1770000040510},
+                        },
+                    },
+                ],
+            },
+        )
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040400),
+                ("recover", 1770000040410),
+                ("pull", 1770000040420),
+                ("status", None),
+                ("init", 1770000040450),
+                ("recover", 1770000040460),
+                ("pull", 1770000040470),
+                ("status", None),
+                ("init", 1770000040500),
+                ("recover", 1770000040510),
+                ("pull", 1770000040520),
+                ("status", None),
+            ],
+        )
+        self.assertEqual(slept, [1.25, 1.25])
 
     def test_download_blobs_command_routes_blob_ids_and_base64_encodes_payload(self) -> None:
         exit_code, payload = self._run(

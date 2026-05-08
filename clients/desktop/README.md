@@ -36,6 +36,23 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   --rewritten-at 1770000100200
 ```
 
+`sync-loop` runs bounded repeated `sync-once` iterations, with optional timestamp stepping and sleep interval:
+
+```powershell
+$env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
+  --vault-root C:\vaults\pkb `
+  --base-url https://sync.example.com `
+  --vault-id vault-001 `
+  --device-id desktop-shanghai `
+  sync-loop `
+  --iterations 3 `
+  --now-ms 1770000100000 `
+  --normalized-at 1770000100100 `
+  --rewritten-at 1770000100200 `
+  --step-ms 1000 `
+  --interval-seconds 2
+```
+
 `submit-commit` payload files use `file_id -> base64 bytes` JSON objects:
 
 ```json
