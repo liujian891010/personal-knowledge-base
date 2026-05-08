@@ -24,7 +24,7 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
 
 Add `--download-required-blobs` to have `pull` immediately follow up on the returned `required_blob_ids`, and optionally combine it with `--output-dir .\downloaded-blobs` to materialize the encrypted blob payloads locally.
 
-Add `--decrypt-required-blobs` on top of that to route the downloaded encrypted blobs through the desktop crypto provider and return an explicit `file_id -> plaintext` result, while still stopping short of writing those files back into the live vault.
+Add `--decrypt-required-blobs` on top of that to route the downloaded encrypted blobs through the desktop crypto provider and return an explicit `file_id -> plaintext` result. Add `--plaintext-output-dir .\materialized` when that decrypted payload should be materialized under a separate local directory using manifest-relative paths, while still stopping short of writing those files back into the live vault.
 
 `sync-once` is the current one-shot automation boundary:
 
@@ -116,7 +116,7 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
 
 `sync-cycle-loop` accepts the same `--submit-detected` mode for automatic local change submit on each iteration.
 
-Current `pull` / `sync-*` JSON results also expose `required_blob_ids` under the applied reconcile result. The desktop service can now follow that through two explicit boundaries: downloading the required encrypted blobs, and downloading plus decrypting them into a `file_id -> plaintext` result. Writing those plaintext files back into the live vault is still a later boundary tied to full `sync_apply_journal` materialization.
+Current `pull` / `sync-*` JSON results also expose `required_blob_ids` under the applied reconcile result. The desktop service can now follow that through three explicit boundaries: downloading the required encrypted blobs, downloading plus decrypting them into a `file_id -> plaintext` result, and materializing those plaintext files under a caller-provided output root. Writing those plaintext files back into the live vault is still a later boundary tied to full `sync_apply_journal` materialization.
 
 `sync-worker` is a thinner bounded worker wrapper around `sync-cycle-loop`: it auto-plans timestamps, defaults to `continue_on_error=true`, and derives `step_ms` from `interval_seconds` when you do not provide one.
 

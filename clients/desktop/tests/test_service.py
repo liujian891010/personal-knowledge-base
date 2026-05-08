@@ -10,7 +10,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.request import Request
 
-from clients.desktop import DesktopSyncHttpConfig, build_desktop_sync_service
+from clients.desktop import (
+    DesktopPullRequiredBlobFile,
+    DesktopPullRequiredBlobPlan,
+    DesktopPullRequiredBlobResult,
+    DesktopSyncHttpConfig,
+    build_desktop_sync_service,
+)
 from clients.desktop.crypto import (
     build_placeholder_blob_id,
     build_placeholder_encrypted_blob_payload,
@@ -680,6 +686,44 @@ class DesktopSyncServiceTests(unittest.TestCase):
             with mock.patch.object(type(service), "download_blobs", return_value=download_result):
                 with self.assertRaisesRegex(KeyError, "downloaded blob payload not found: blob-live"):
                     service.download_and_decrypt_pull_required_blobs(pull)
+
+    def test_materialize_pull_required_plaintext_writes_manifest_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            pull = self._build_pull_result(required_blob_ids=[], manifest_files=[])
+            resolved = DesktopPullRequiredBlobResult(
+                pull=pull,
+                plan=DesktopPullRequiredBlobPlan(
+                    vault_id="vault-001",
+                    revision=8,
+                    blob_ids=["blob-a"],
+                    files=[
+                        DesktopPullRequiredBlobFile(
+                            file_id="file-a",
+                            path="Notes/A.md",
+                            type="note",
+                            blob_id="blob-a",
+                            content_hash="sha256:abc",
+                        )
+                    ],
+                ),
+                download=None,
+                plaintext_by_file_id={"file-a": b"# materialized\n"},
+            )
+
+            written_paths = service.materialize_pull_required_plaintext(
+                resolved,
+                Path(tmpdir) / "materialized",
+            )
+
+            self.assertEqual(
+                written_paths,
+                {"file-a": Path(tmpdir) / "materialized" / "Notes" / "A.md"},
+            )
+            self.assertEqual(
+                (Path(tmpdir) / "materialized" / "Notes" / "A.md").read_bytes(),
+                b"# materialized\n",
+            )
 
     def test_load_worker_state_and_health_routes_workspace_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

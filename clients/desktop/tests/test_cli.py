@@ -8,6 +8,11 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
+from clients.desktop import (
+    DesktopPullRequiredBlobFile,
+    DesktopPullRequiredBlobPlan,
+    DesktopPullRequiredBlobResult,
+)
 from clients.desktop.cli import run_cli
 from vault_core import (
     BlobDownloadCapability,
@@ -32,6 +37,7 @@ class FakeService:
         self.skip_submit_detected_if_needed = False
         self.pull_and_ack_payload = None
         self.download_and_decrypt_pull_payload = None
+        self.materialize_pull_required_plaintext_payload = None
         self.detect_local_changes_payload = {
             "vault_id": "vault-001",
             "tracked_record_count": 2,
@@ -175,6 +181,12 @@ class FakeService:
             "download": None,
             "plaintext_by_file_id_base64": {},
         }
+
+    def materialize_pull_required_plaintext(self, resolved, output_root: Path):
+        self.calls.append(("materialize-pull-required-plaintext", resolved, output_root))
+        if self.materialize_pull_required_plaintext_payload is not None:
+            return self.materialize_pull_required_plaintext_payload
+        return {}
 
     def submit_commit(
         self,
@@ -631,6 +643,114 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload, self.service.download_and_decrypt_pull_payload)
         self.assertEqual([call[0] for call in self.service.calls], ["pull", "download-and-decrypt-pull-required-blobs"])
+
+    def test_pull_command_rejects_plaintext_output_dir_without_decrypt_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaisesRegex(
+                ValueError,
+                "pull --plaintext-output-dir requires --decrypt-required-blobs",
+            ):
+                self._run(
+                    "--vault-root",
+                    "C:/vault",
+                    "--base-url",
+                    "https://sync.example.com",
+                    "--vault-id",
+                    "vault-001",
+                    "--device-id",
+                    "desktop-shanghai",
+                    "pull",
+                    "--rewritten-at",
+                    "1770000040100",
+                    "--plaintext-output-dir",
+                    tmpdir,
+                )
+
+    def test_pull_command_can_materialize_decrypted_required_blobs(self) -> None:
+        self.service.pull_and_ack_payload = {
+            "pull": {
+                "reconcile": {
+                    "applied": {
+                        "required_blob_ids": ["blob-a"],
+                    }
+                }
+            }
+        }
+        self.service.download_and_decrypt_pull_payload = DesktopPullRequiredBlobResult(
+            pull=self.service.pull_and_ack_payload,
+            plan=DesktopPullRequiredBlobPlan(
+                vault_id="vault-001",
+                revision=8,
+                blob_ids=["blob-a"],
+                files=[
+                    DesktopPullRequiredBlobFile(
+                        file_id="file-a",
+                        path="Notes/A.md",
+                        type="note",
+                        blob_id="blob-a",
+                        content_hash="sha256:abc",
+                    )
+                ],
+            ),
+            download=None,
+            plaintext_by_file_id={"file-a": b"# A\n"},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.service.materialize_pull_required_plaintext_payload = {
+                "file-a": Path(tmpdir) / "Notes" / "A.md"
+            }
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "pull",
+                "--rewritten-at",
+                "1770000040100",
+                "--download-required-blobs",
+                "--decrypt-required-blobs",
+                "--plaintext-output-dir",
+                tmpdir,
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                payload,
+                {
+                    "pull": self.service.pull_and_ack_payload,
+                    "plan": {
+                        "vault_id": "vault-001",
+                        "revision": 8,
+                        "blob_ids": ["blob-a"],
+                        "files": [
+                            {
+                                "file_id": "file-a",
+                                "path": "Notes/A.md",
+                                "type": "note",
+                                "blob_id": "blob-a",
+                                "content_hash": "sha256:abc",
+                            }
+                        ],
+                    },
+                    "download": None,
+                    "written_plaintext_paths": {
+                        "file-a": str(Path(tmpdir) / "Notes" / "A.md"),
+                    },
+                },
+            )
+            self.assertEqual(
+                [call[0] for call in self.service.calls],
+                [
+                    "pull",
+                    "download-and-decrypt-pull-required-blobs",
+                    "materialize-pull-required-plaintext",
+                ],
+            )
 
     def test_recover_command_routes_normalized_at(self) -> None:
         exit_code, payload = self._run(
