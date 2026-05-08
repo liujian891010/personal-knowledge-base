@@ -9,7 +9,9 @@ from clients.desktop.runner import DesktopSyncCycleResult
 from clients.desktop.worker import (
     DesktopSyncWorker,
     DesktopSyncWorkerConfig,
+    build_desktop_sync_worker_health,
     build_desktop_sync_worker_state_record,
+    load_desktop_sync_worker_state,
 )
 
 
@@ -154,6 +156,7 @@ class DesktopSyncWorkerTests(unittest.TestCase):
             self.assertEqual(written["success_count"], 1)
             self.assertEqual(written["failure_count"], 0)
             self.assertEqual(written["state_path"], str(state_path))
+            self.assertEqual(written["latest_failure"], None)
             self.assertEqual(result.state_path, state_path)
 
     def test_build_state_record_projects_worker_result_summary(self) -> None:
@@ -175,6 +178,32 @@ class DesktopSyncWorkerTests(unittest.TestCase):
         self.assertEqual(record.finished_at_ms, 1770000073000)
         self.assertEqual(record.success_count, 1)
         self.assertEqual(record.failure_count, 0)
+        self.assertIsNone(record.latest_failure)
+
+    def test_load_state_and_build_health_from_written_file(self) -> None:
+        runner = FakeRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / ".noteapp" / "sync-worker-state.json"
+            DesktopSyncWorker(
+                runner,
+                sleep=lambda _: None,
+                now_ms_provider=lambda: 1770000074000,
+                state_path=state_path,
+            ).run(
+                DesktopSyncWorkerConfig(
+                    iterations=1,
+                    submit_file_ids=["file-a"],
+                )
+            )
+
+            state = load_desktop_sync_worker_state(state_path)
+            health = build_desktop_sync_worker_health(state)
+
+            self.assertEqual(state.started_at_ms, 1770000074000)
+            self.assertEqual(health.status, "healthy")
+            self.assertEqual(health.failure_count, 0)
+            self.assertIsNone(health.latest_failure)
 
 
 if __name__ == "__main__":

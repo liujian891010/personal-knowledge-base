@@ -29,6 +29,56 @@ class FakeService:
         self.calls: list[tuple[str, int | None]] = []
         self.fail_recover_at_calls: set[int] = set()
         self.fail_submit_workspace_at_calls: set[int] = set()
+        self.worker_state_payload = {
+            "started_at_ms": 1770000045000,
+            "finished_at_ms": 1770000045001,
+            "effective_step_ms": 2500,
+            "success_count": 2,
+            "failure_count": 1,
+            "stopped_early": False,
+            "state_path": "C:/vault/.noteapp/sync-worker-state.json",
+            "latest_failure": {
+                "iteration": 1,
+                "error_type": "RuntimeError",
+                "error_message": "submit failed at call 0",
+            },
+            "config": {
+                "iterations": 2,
+                "interval_seconds": 2.5,
+                "step_ms": None,
+                "continue_on_error": True,
+                "init_now_ms": None,
+                "recovery_normalized_at": None,
+                "submit_created_at": None,
+                "submit_file_ids": ["file-a"],
+                "commit_intent_id": None,
+                "cleanup_normalized_at": None,
+                "pull_rewritten_at": None,
+                "encrypted_blob_by_file_id": None,
+            },
+            "time_plan": {
+                "base_now_ms": 1770000045000,
+                "init_now_ms": 1770000045000,
+                "recovery_normalized_at": 1770000045010,
+                "submit_created_at": 1770000045020,
+                "cleanup_normalized_at": 1770000045021,
+                "pull_rewritten_at": 1770000045030,
+            },
+        }
+        self.worker_health_payload = {
+            "status": "degraded",
+            "started_at_ms": 1770000045000,
+            "finished_at_ms": 1770000045001,
+            "success_count": 2,
+            "failure_count": 1,
+            "stopped_early": False,
+            "state_path": "C:/vault/.noteapp/sync-worker-state.json",
+            "latest_failure": {
+                "iteration": 1,
+                "error_type": "RuntimeError",
+                "error_message": "submit failed at call 0",
+            },
+        }
 
     def ensure_initialized(self, *, now_ms=None):
         self.calls.append(("init", now_ms))
@@ -37,6 +87,14 @@ class FakeService:
     def load_snapshot(self):
         self.calls.append(("status", None))
         return {"kind": "status", "files": 1}
+
+    def load_worker_state(self):
+        self.calls.append(("worker-state", None))
+        return self.worker_state_payload
+
+    def load_worker_health(self):
+        self.calls.append(("worker-health", None))
+        return self.worker_health_payload
 
     def pull_and_ack(self, *, rewritten_at: int):
         self.calls.append(("pull", rewritten_at))
@@ -196,6 +254,40 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload, {"files": 1, "kind": "status"})
         self.assertEqual(self.service.calls, [("status", None)])
+
+    def test_worker_state_command_routes_to_load_worker_state(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "worker-state",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["latest_failure"]["iteration"], 1)
+        self.assertEqual(self.service.calls, [("worker-state", None)])
+
+    def test_worker_health_command_routes_to_load_worker_health(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "worker-health",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["status"], "degraded")
+        self.assertEqual(self.service.calls, [("worker-health", None)])
 
     def test_pull_command_routes_rewritten_at(self) -> None:
         exit_code, payload = self._run(

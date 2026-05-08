@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.request import Request
 
 from clients.desktop import DesktopSyncHttpConfig, build_desktop_vault_workspace
+from clients.desktop.worker import write_desktop_sync_worker_state
 from vault_core import (
     CommitIntentJournalRecord,
     VaultStateRecord,
@@ -205,6 +206,79 @@ class DesktopVaultWorkspaceTests(unittest.TestCase):
                     ("GET", "https://sync.example.com/vaults/vault-001/manifests/8"),
                 ],
             )
+
+    def test_load_worker_state_and_health_reads_latest_worker_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            workspace = build_desktop_vault_workspace(
+                DesktopSyncHttpConfig(
+                    base_url="https://sync.example.com",
+                    vault_id="vault-001",
+                    device_id="desktop-shanghai",
+                ),
+                root,
+            )
+            workspace.ensure_initialized(now_ms=1770000022000)
+            write_desktop_sync_worker_state(
+                workspace.paths.worker_state_path,
+                type(
+                    "FakeResult",
+                    (),
+                    {
+                        "started_at_ms": 1770000023000,
+                        "finished_at_ms": 1770000023001,
+                        "effective_step_ms": 0,
+                        "state_path": workspace.paths.worker_state_path,
+                        "config": type(
+                            "FakeConfig",
+                            (),
+                            {
+                                "iterations": 1,
+                                "interval_seconds": 30.0,
+                                "step_ms": None,
+                                "continue_on_error": True,
+                                "init_now_ms": None,
+                                "recovery_normalized_at": None,
+                                "submit_created_at": None,
+                                "submit_file_ids": None,
+                                "commit_intent_id": None,
+                                "cleanup_normalized_at": None,
+                                "pull_rewritten_at": None,
+                                "encrypted_blob_by_file_id": None,
+                            },
+                        )(),
+                        "time_plan": type(
+                            "FakePlan",
+                            (),
+                            {
+                                "base_now_ms": 1770000023000,
+                                "init_now_ms": 1770000023000,
+                                "recovery_normalized_at": 1770000023010,
+                                "submit_created_at": None,
+                                "cleanup_normalized_at": None,
+                                "pull_rewritten_at": 1770000023020,
+                            },
+                        )(),
+                        "loop": type(
+                            "FakeLoop",
+                            (),
+                            {
+                                "success_count": 1,
+                                "failure_count": 0,
+                                "stopped_early": False,
+                                "iterations": [],
+                            },
+                        )(),
+                    },
+                )(),
+            )
+
+            state = workspace.load_worker_state()
+            health = workspace.load_worker_health()
+
+            self.assertEqual(state.started_at_ms, 1770000023000)
+            self.assertEqual(health.status, "healthy")
+            self.assertEqual(health.success_count, 1)
 
 
 if __name__ == "__main__":
