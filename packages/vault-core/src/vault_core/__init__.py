@@ -78,11 +78,15 @@ from .sync_api import (
 )
 from .sync_client import (
     CommitPreflightResult,
+    CommitSubmissionExecutionResult,
     CreateCommitExecutionResult,
+    SyncBlobUploader,
     SyncCommitTransport,
     SyncHttpJsonResponse,
+    execute_blob_uploads,
     execute_commit_preflight,
     execute_create_commit,
+    execute_commit_submission,
 )
 from .sync_commit import (
     CommitRecoveryPlan,
@@ -224,7 +228,9 @@ __all__ = [
     "CommitConflictResponsePayload",
     "CreateCommitResponsePayload",
     "CommitPreflightResult",
+    "CommitSubmissionExecutionResult",
     "CreateCommitExecutionResult",
+    "SyncBlobUploader",
     "SyncCommitTransport",
     "SyncHttpJsonResponse",
     "add_file",
@@ -267,8 +273,10 @@ __all__ = [
     "execute_pull_reconcile",
     "execute_submitted_commit_confirmation",
     "execute_submitted_commit_confirmation_remote_state",
+    "execute_blob_uploads",
     "execute_commit_preflight",
     "execute_create_commit",
+    "execute_commit_submission",
     "finalize_commit_manifest",
     "finalize_commit_submission",
     "finalize_commit_submission_cleanup",

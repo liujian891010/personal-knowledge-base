@@ -13,6 +13,7 @@ from vault_core import (
     CommitIntentJournalRecord,
     CommitNetworkPlan,
     CommitPreflightResult,
+    CommitSubmissionExecutionResult,
     CommitSnapshotEntry,
     CommitSnapshotTable,
     CommitSubmissionBundle,
@@ -24,8 +25,10 @@ from vault_core import (
     ManifestRecord,
     SyncHttpJsonResponse,
     VaultStateRecord,
+    execute_blob_uploads,
     execute_commit_preflight,
     execute_create_commit,
+    execute_commit_submission,
 )
 
 
@@ -57,6 +60,21 @@ class FakeSyncCommitTransport:
         if self.create_commit_response is None:
             raise AssertionError("create commit response was not configured")
         return self.create_commit_response
+
+
+class FakeSyncBlobUploader:
+    def __init__(self, *, error_blob_id: str | None = None) -> None:
+        self.error_blob_id = error_blob_id
+        self.calls: list[tuple[BlobUploadPlanEntry, BlobUploadCapability]] = []
+
+    def upload_blob(
+        self,
+        upload: BlobUploadPlanEntry,
+        capability: BlobUploadCapability,
+    ) -> None:
+        self.calls.append((upload, capability))
+        if upload.blob_id == self.error_blob_id:
+            raise RuntimeError(f"upload failed for {upload.blob_id}")
 
 
 def _build_submission() -> CommitSubmissionBundle:
@@ -256,6 +274,38 @@ class SyncClientTests(unittest.TestCase):
         self.assertEqual([call[0] for call in transport.calls], ["blob_check", "blob_upload_init"])
         self.assertEqual(transport.calls[1][2]["blobs"][0]["blob_id"], "blob_a")
 
+    def test_execute_blob_uploads_rejects_duplicate_capabilities(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duplicate blob_ids"):
+            execute_blob_uploads(
+                FakeSyncBlobUploader(),
+                BlobUploadPlan(
+                    vault_id="vault_pkb_001",
+                    entries=[
+                        BlobUploadPlanEntry(
+                            blob_id="blob_a",
+                            content_hash="sha256:a",
+                            encrypted_size=32,
+                            blob_staging_path=Path("C:/tmp/blob_a.blob.staging"),
+                            file_ids=["file_a"],
+                        )
+                    ],
+                ),
+                BlobUploadInitResponsePayload(
+                    uploads=[
+                        BlobUploadCapability(
+                            blob_id="blob_a",
+                            upload_url="https://example.com/upload/blob_a_1",
+                            expires_at="2026-05-08T12:00:00Z",
+                        ),
+                        BlobUploadCapability(
+                            blob_id="blob_a",
+                            upload_url="https://example.com/upload/blob_a_2",
+                            expires_at="2026-05-08T12:01:00Z",
+                        ),
+                    ]
+                ),
+            )
+
     def test_execute_create_commit_parses_success_and_conflict(self) -> None:
         request = CreateCommitRequestPayload(
             commit_intent_id="intent_1",
@@ -310,6 +360,126 @@ class SyncClientTests(unittest.TestCase):
         conflict = execute_create_commit(conflict_transport, request)
         self.assertEqual(conflict.status, "conflict")
         self.assertEqual(conflict.conflict.code, "base_revision_conflict")
+
+    def test_execute_commit_submission_uploads_missing_blobs_then_commits(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "existing_blob_ids": ["blob_b"],
+                    "missing_blob_ids": ["blob_a"],
+                },
+            ),
+            blob_upload_init=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "uploads": [
+                        {
+                            "blob_id": "blob_a",
+                            "upload_url": "https://example.com/upload/blob_a",
+                            "expires_at": "2026-05-08T12:00:00Z",
+                            "headers": {"x-upload-token": "token_1"},
+                        }
+                    ]
+                },
+            ),
+            create_commit=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "vault_id": "vault_pkb_001",
+                    "new_revision": 8,
+                    "head_manifest_summary": "sha256:head8",
+                    "acked_revision_for_device": 8,
+                },
+            ),
+        )
+        uploader = FakeSyncBlobUploader()
+
+        result = execute_commit_submission(
+            transport,
+            uploader,
+            _build_submission(),
+            snapshot_table=_build_snapshot_table(),
+        )
+
+        self.assertEqual(
+            result,
+            CommitSubmissionExecutionResult(
+                preflight=result.preflight,
+                uploaded_blob_ids=["blob_a"],
+                commit=CreateCommitExecutionResult(
+                    status="committed",
+                    request=result.preflight.network_plan.request,
+                    response=CreateCommitResponsePayload(
+                        vault_id="vault_pkb_001",
+                        new_revision=8,
+                        head_manifest_summary="sha256:head8",
+                        acked_revision_for_device=8,
+                    ),
+                ),
+            ),
+        )
+        self.assertEqual([call[0] for call in transport.calls], ["blob_check", "blob_upload_init", "create_commit"])
+        self.assertEqual(len(uploader.calls), 1)
+        self.assertEqual(uploader.calls[0][0].blob_id, "blob_a")
+        self.assertEqual(
+            uploader.calls[0][1],
+            BlobUploadCapability(
+                blob_id="blob_a",
+                upload_url="https://example.com/upload/blob_a",
+                expires_at="2026-05-08T12:00:00Z",
+                headers={"x-upload-token": "token_1"},
+            ),
+        )
+
+    def test_execute_commit_submission_stops_before_commit_when_upload_fails(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "existing_blob_ids": [],
+                    "missing_blob_ids": ["blob_a", "blob_b"],
+                },
+            ),
+            blob_upload_init=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "uploads": [
+                        {
+                            "blob_id": "blob_a",
+                            "upload_url": "https://example.com/upload/blob_a",
+                            "expires_at": "2026-05-08T12:00:00Z",
+                        },
+                        {
+                            "blob_id": "blob_b",
+                            "upload_url": "https://example.com/upload/blob_b",
+                            "expires_at": "2026-05-08T12:00:00Z",
+                        },
+                    ]
+                },
+            ),
+            create_commit=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "vault_id": "vault_pkb_001",
+                    "new_revision": 8,
+                    "head_manifest_summary": "sha256:head8",
+                    "acked_revision_for_device": 8,
+                },
+            ),
+        )
+        uploader = FakeSyncBlobUploader(error_blob_id="blob_b")
+
+        with self.assertRaisesRegex(RuntimeError, "upload failed for blob_b"):
+            execute_commit_submission(
+                transport,
+                uploader,
+                _build_submission(),
+                snapshot_table=_build_snapshot_table(),
+            )
+
+        self.assertEqual([call[0] for call in transport.calls], ["blob_check", "blob_upload_init"])
+        self.assertEqual([call[0].blob_id for call in uploader.calls], ["blob_a", "blob_b"])
 
 
 if __name__ == "__main__":
