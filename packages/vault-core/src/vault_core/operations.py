@@ -108,6 +108,26 @@ def register_conflict_copy(
     return document.replace_files(updated_files, updated_at=updated_at)
 
 
+def remove_conflict_copy(
+    document: FileMapDocument,
+    *,
+    file_id: str,
+    updated_at: int,
+) -> FileMapDocument:
+    updated_files = []
+    removed = False
+    for record in document.files:
+        if record.file_id != file_id:
+            updated_files.append(record)
+            continue
+        if record.status != "conflict_copy":
+            raise ValueError(f"file_id is not a conflict_copy: {file_id}")
+        removed = True
+    if not removed:
+        raise KeyError(f"conflict file_id not found: {file_id}")
+    return document.replace_files(updated_files, updated_at=updated_at)
+
+
 def mark_deleted(
     document: FileMapDocument,
     *,

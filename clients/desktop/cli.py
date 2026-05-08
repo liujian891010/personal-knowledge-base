@@ -157,6 +157,10 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("detect-local-changes")
     subparsers.add_parser("worker-state")
     subparsers.add_parser("worker-health")
+    resolve_conflicts_parser = subparsers.add_parser("resolve-conflicts")
+    resolve_conflicts_parser.add_argument("--resolved-at", type=int, required=True)
+    resolve_conflicts_parser.add_argument("--file-id", action="append", dest="file_ids")
+    resolve_conflicts_parser.add_argument("--orphan-path", action="append", dest="orphan_paths")
 
     pull_parser = subparsers.add_parser("pull")
     pull_parser.add_argument("--rewritten-at", type=int, required=True)
@@ -295,6 +299,12 @@ def run_cli(
         result = service.load_worker_state()
     elif args.command == "worker-health":
         result = service.load_worker_health()
+    elif args.command == "resolve-conflicts":
+        result = service.resolve_conflicts(
+            resolved_at=args.resolved_at,
+            conflict_file_ids=args.file_ids,
+            orphan_relative_paths=args.orphan_paths,
+        )
     elif args.command == "pull":
         if sum(
             1

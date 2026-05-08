@@ -39,6 +39,7 @@ from .sync_runtime import (
     build_desktop_sync_session,
 )
 from .service import (
+    DesktopConflictResolutionResult,
     DesktopCommitCleanupResult,
     DesktopPullApplyStagingResult,
     DesktopPullApplyDeleteFile,
@@ -83,6 +84,7 @@ from .workspace import (
 __all__ = [
     "DesktopSyncHttpConfig",
     "DesktopSyncRuntime",
+    "DesktopConflictResolutionResult",
     "DesktopCommitCleanupResult",
     "DesktopPullApplyStagingResult",
     "DesktopPullApplyDeleteFile",

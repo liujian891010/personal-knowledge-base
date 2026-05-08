@@ -123,6 +123,7 @@ from vault_core import (
     recover_orphaned_commit_session,
     replace_active_wiki_task,
     register_conflict_copy,
+    remove_conflict_copy,
     rename_file,
     select_reclaimable_tombstones,
     select_pending_tombstones_for_commit,
@@ -388,6 +389,60 @@ class VaultCoreStorageTests(unittest.TestCase):
         self.assertEqual(len(updated.files), 2)
         conflict = [record for record in updated.files if record.status == "conflict_copy"][0]
         self.assertEqual(conflict.conflict_source_file_id, "file_note_a")
+
+    def test_remove_conflict_copy_drops_secondary_record(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000010000,
+            files=[
+                FileRecord(
+                    file_id="file_note_a",
+                    path="Notes/A.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000010000,
+                ),
+                FileRecord(
+                    file_id="file_note_a_conflict",
+                    path="Notes/A (conflict 2026-04-29 Desktop-Win).md",
+                    type="note",
+                    status="conflict_copy",
+                    updated_at=1770000011000,
+                    conflict_source_file_id="file_note_a",
+                ),
+            ],
+        )
+
+        updated = remove_conflict_copy(
+            document,
+            file_id="file_note_a_conflict",
+            updated_at=1770000012000,
+        )
+
+        self.assertEqual(updated.updated_at, 1770000012000)
+        self.assertEqual([record.file_id for record in updated.files], ["file_note_a"])
+
+    def test_remove_conflict_copy_rejects_non_conflict_record(self) -> None:
+        document = FileMapDocument(
+            vault_id="vault_pkb_001",
+            updated_at=1770000010000,
+            files=[
+                FileRecord(
+                    file_id="file_note_a",
+                    path="Notes/A.md",
+                    type="note",
+                    status="active",
+                    updated_at=1770000010000,
+                )
+            ],
+        )
+
+        with self.assertRaisesRegex(ValueError, "file_id is not a conflict_copy: file_note_a"):
+            remove_conflict_copy(
+                document,
+                file_id="file_note_a",
+                updated_at=1770000012000,
+            )
 
     def test_manifest_summary_hash_tracks_head_state_not_transport_metadata(self) -> None:
         base = ManifestRecord(
