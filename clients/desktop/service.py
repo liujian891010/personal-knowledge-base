@@ -497,6 +497,27 @@ class DesktopVaultSummary:
 
 
 @dataclass(frozen=True)
+class DesktopSyncPanelAction:
+    action_id: str
+    label: str
+    enabled: bool
+    emphasis: str
+    reason: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class DesktopSyncPanelModel:
+    level: str
+    headline: str
+    detail: str
+    conflict_badge_count: int
+    change_badge_count: int
+    primary_action: DesktopSyncPanelAction
+    secondary_actions: list[DesktopSyncPanelAction]
+    summary: DesktopVaultSummary
+
+
+@dataclass(frozen=True)
 class DesktopPullApplySessionResult:
     pull: PullSyncSessionResult
     plan: DesktopPullApplyPlan
@@ -1487,6 +1508,146 @@ class DesktopSyncService:
                 has_active_commit_journal=commit_journal is not None,
                 has_active_sync_apply_journal=sync_apply_journal is not None,
             ),
+        )
+
+    def build_sync_panel_model(self) -> DesktopSyncPanelModel:
+        summary = self.summarize_vault()
+        conflict_badge_count = len(summary.conflicts.conflict_copies) + len(summary.conflicts.conflict_orphans)
+        change_badge_count = summary.changes.change_count
+        secondary_actions = [
+            DesktopSyncPanelAction(
+                action_id="show-vault-summary",
+                label="Open Summary",
+                enabled=True,
+                emphasis="normal",
+            ),
+            DesktopSyncPanelAction(
+                action_id="list-conflicts",
+                label="Show Conflicts",
+                enabled=conflict_badge_count > 0,
+                emphasis="normal",
+                reason=None if conflict_badge_count > 0 else "No unresolved conflicts",
+            ),
+            DesktopSyncPanelAction(
+                action_id="worker-health",
+                label="Worker Health",
+                enabled=summary.worker_health is not None,
+                emphasis="normal",
+                reason=None if summary.worker_health is not None else "No worker state recorded yet",
+            ),
+        ]
+
+        if summary.commit_gate.has_active_sync_apply_journal:
+            return DesktopSyncPanelModel(
+                level="danger",
+                headline="Sync recovery required",
+                detail="A pull/apply journal is still active. Resume recovery before new sync or commit work.",
+                conflict_badge_count=conflict_badge_count,
+                change_badge_count=change_badge_count,
+                primary_action=DesktopSyncPanelAction(
+                    action_id="recover-pull-apply",
+                    label="Resume Pull Recovery",
+                    enabled=True,
+                    emphasis="primary",
+                ),
+                secondary_actions=secondary_actions,
+                summary=summary,
+            )
+        if summary.commit_gate.has_active_commit_journal or summary.state.commit_in_progress:
+            return DesktopSyncPanelModel(
+                level="danger",
+                headline="Commit recovery required",
+                detail="A previous commit is still in progress or awaiting recovery confirmation.",
+                conflict_badge_count=conflict_badge_count,
+                change_badge_count=change_badge_count,
+                primary_action=DesktopSyncPanelAction(
+                    action_id="recover",
+                    label="Resume Commit Recovery",
+                    enabled=True,
+                    emphasis="primary",
+                ),
+                secondary_actions=secondary_actions,
+                summary=summary,
+            )
+        if conflict_badge_count > 0:
+            return DesktopSyncPanelModel(
+                level="warning",
+                headline=f"{conflict_badge_count} unresolved conflict artifacts",
+                detail="Resolve local conflict copies before the next commit can be submitted.",
+                conflict_badge_count=conflict_badge_count,
+                change_badge_count=change_badge_count,
+                primary_action=DesktopSyncPanelAction(
+                    action_id="list-conflicts",
+                    label="Review Conflicts",
+                    enabled=True,
+                    emphasis="primary",
+                ),
+                secondary_actions=secondary_actions,
+                summary=summary,
+            )
+        if summary.commit_gate.requires_full_pull:
+            return DesktopSyncPanelModel(
+                level="warning",
+                headline="Full pull required",
+                detail="The local manifest baseline is stale. Run pull/reconcile before creating a new commit.",
+                conflict_badge_count=conflict_badge_count,
+                change_badge_count=change_badge_count,
+                primary_action=DesktopSyncPanelAction(
+                    action_id="pull",
+                    label="Run Pull",
+                    enabled=True,
+                    emphasis="primary",
+                ),
+                secondary_actions=secondary_actions,
+                summary=summary,
+            )
+        if summary.worker_health is not None and summary.worker_health.status != "healthy":
+            return DesktopSyncPanelModel(
+                level="warning",
+                headline="Background sync needs attention",
+                detail="The latest worker run did not finish cleanly. Review worker health before relying on background sync.",
+                conflict_badge_count=conflict_badge_count,
+                change_badge_count=change_badge_count,
+                primary_action=DesktopSyncPanelAction(
+                    action_id="worker-health",
+                    label="Inspect Worker Health",
+                    enabled=True,
+                    emphasis="primary",
+                ),
+                secondary_actions=secondary_actions,
+                summary=summary,
+            )
+        if change_badge_count > 0:
+            return DesktopSyncPanelModel(
+                level="info",
+                headline=f"{change_badge_count} local changes pending",
+                detail="Local edits are ready for the next submit or sync cycle.",
+                conflict_badge_count=conflict_badge_count,
+                change_badge_count=change_badge_count,
+                primary_action=DesktopSyncPanelAction(
+                    action_id="submit-detected-commit",
+                    label="Submit Local Changes",
+                    enabled=summary.commit_gate.can_submit_commit,
+                    emphasis="primary",
+                    reason=None if summary.commit_gate.can_submit_commit else ", ".join(summary.commit_gate.blocking_reasons),
+                ),
+                secondary_actions=secondary_actions,
+                summary=summary,
+            )
+        return DesktopSyncPanelModel(
+            level="success",
+            headline="Vault is in sync",
+            detail="No unresolved conflicts, no pending local changes, and no blocked sync state detected.",
+            conflict_badge_count=0,
+            change_badge_count=0,
+            primary_action=DesktopSyncPanelAction(
+                action_id="pull",
+                label="Check For Remote Changes",
+                enabled=True,
+                emphasis="primary",
+            ),
+            secondary_actions=secondary_actions,
+            summary=summary,
         )
 
     def list_conflicts(self) -> DesktopConflictStatus:
