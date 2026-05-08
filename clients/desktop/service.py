@@ -481,6 +481,8 @@ class DesktopSyncService:
                 isolated_staging_paths=[],
                 removed_plan_path=self._cleanup_pull_apply_plan_file(),
             )
+        if journal.phase == "preparing":
+            return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
         if journal.phase == "materializing":
             if materialized_snapshot is None or not self._workspace_matches_document(materialized_snapshot.document):
                 return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
