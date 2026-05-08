@@ -27,6 +27,8 @@ class FakeResult:
 class FakeService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, int | None]] = []
+        self.fail_recover_at_calls: set[int] = set()
+        self.fail_submit_workspace_at_calls: set[int] = set()
 
     def ensure_initialized(self, *, now_ms=None):
         self.calls.append(("init", now_ms))
@@ -42,6 +44,9 @@ class FakeService:
 
     def resume_commit_recovery(self, *, normalized_at: int):
         self.calls.append(("recover", normalized_at))
+        recover_count = sum(1 for call in self.calls if call[0] == "recover") - 1
+        if recover_count in self.fail_recover_at_calls:
+            raise RuntimeError(f"recover failed at call {recover_count}")
         return {"kind": "recover", "normalized_at": normalized_at}
 
     def download_blobs(self, blob_ids):
@@ -110,6 +115,9 @@ class FakeService:
                 encrypted_blob_by_file_id,
             )
         )
+        submit_count = sum(1 for call in self.calls if call[0] == "submit-workspace-commit") - 1
+        if submit_count in self.fail_submit_workspace_at_calls:
+            raise RuntimeError(f"submit failed at call {submit_count}")
         return {
             "kind": "submit-workspace-commit",
             "created_at": created_at,
@@ -297,6 +305,7 @@ class DesktopCliTests(unittest.TestCase):
             payload,
             {
                 "config": {
+                    "continue_on_error": False,
                     "init_now_ms": 1770000040400,
                     "interval_seconds": 1.25,
                     "iterations": 3,
@@ -310,6 +319,7 @@ class DesktopCliTests(unittest.TestCase):
                         "iteration": 0,
                         "pull_rewritten_at": 1770000040420,
                         "recovery_normalized_at": 1770000040410,
+                        "failure": None,
                         "run_once": {
                             "final_snapshot": {"files": 1, "kind": "status"},
                             "initialized": {"kind": "init", "value": 1770000040400},
@@ -322,6 +332,7 @@ class DesktopCliTests(unittest.TestCase):
                         "iteration": 1,
                         "pull_rewritten_at": 1770000040470,
                         "recovery_normalized_at": 1770000040460,
+                        "failure": None,
                         "run_once": {
                             "final_snapshot": {"files": 1, "kind": "status"},
                             "initialized": {"kind": "init", "value": 1770000040450},
@@ -334,6 +345,7 @@ class DesktopCliTests(unittest.TestCase):
                         "iteration": 2,
                         "pull_rewritten_at": 1770000040520,
                         "recovery_normalized_at": 1770000040510,
+                        "failure": None,
                         "run_once": {
                             "final_snapshot": {"files": 1, "kind": "status"},
                             "initialized": {"kind": "init", "value": 1770000040500},
@@ -342,6 +354,9 @@ class DesktopCliTests(unittest.TestCase):
                         },
                     },
                 ],
+                "failure_count": 0,
+                "stopped_early": False,
+                "success_count": 3,
             },
         )
         self.assertEqual(
@@ -508,6 +523,7 @@ class DesktopCliTests(unittest.TestCase):
                 "config": {
                     "cleanup_normalized_at": 1770000040621,
                     "commit_intent_id": None,
+                    "continue_on_error": False,
                     "encrypted_blob_by_file_id": None,
                     "init_now_ms": 1770000040600,
                     "interval_seconds": 0.5,
@@ -525,6 +541,7 @@ class DesktopCliTests(unittest.TestCase):
                         "iteration": 0,
                         "pull_rewritten_at": 1770000040630,
                         "recovery_normalized_at": 1770000040610,
+                        "failure": None,
                         "run_cycle": {
                             "final_snapshot": {"files": 1, "kind": "status"},
                             "initialized": {"kind": "init", "value": 1770000040600},
@@ -546,6 +563,7 @@ class DesktopCliTests(unittest.TestCase):
                         "iteration": 1,
                         "pull_rewritten_at": 1770000040730,
                         "recovery_normalized_at": 1770000040710,
+                        "failure": None,
                         "run_cycle": {
                             "final_snapshot": {"files": 1, "kind": "status"},
                             "initialized": {"kind": "init", "value": 1770000040700},
@@ -562,6 +580,9 @@ class DesktopCliTests(unittest.TestCase):
                         "submit_created_at": 1770000040720,
                     },
                 ],
+                "failure_count": 0,
+                "stopped_early": False,
+                "success_count": 2,
             },
         )
         self.assertEqual(
@@ -580,6 +601,77 @@ class DesktopCliTests(unittest.TestCase):
             ],
         )
         self.assertEqual(slept, [0.5])
+
+    def test_sync_loop_command_can_continue_on_error(self) -> None:
+        self.service.fail_recover_at_calls = {1}
+        slept: list[float] = []
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-loop",
+            "--iterations",
+            "3",
+            "--normalized-at",
+            "1770000040800",
+            "--rewritten-at",
+            "1770000040810",
+            "--step-ms",
+            "5",
+            "--interval-seconds",
+            "0.1",
+            "--continue-on-error",
+            sleep=slept.append,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["success_count"], 2)
+        self.assertEqual(payload["failure_count"], 1)
+        self.assertEqual(payload["iterations"][1]["run_once"], None)
+        self.assertEqual(payload["iterations"][1]["failure"]["error_type"], "RuntimeError")
+        self.assertEqual(slept, [0.1, 0.1])
+
+    def test_sync_cycle_loop_command_can_continue_on_error(self) -> None:
+        self.service.fail_submit_workspace_at_calls = {0}
+        slept: list[float] = []
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-cycle-loop",
+            "--iterations",
+            "2",
+            "--normalized-at",
+            "1770000040900",
+            "--submit-created-at",
+            "1770000040910",
+            "--file-id",
+            "file-a",
+            "--rewritten-at",
+            "1770000040920",
+            "--continue-on-error",
+            "--interval-seconds",
+            "0.2",
+            sleep=slept.append,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["success_count"], 1)
+        self.assertEqual(payload["failure_count"], 1)
+        self.assertEqual(payload["iterations"][0]["run_cycle"], None)
+        self.assertEqual(payload["iterations"][0]["failure"]["error_type"], "RuntimeError")
+        self.assertIsNotNone(payload["iterations"][1]["run_cycle"])
+        self.assertEqual(slept, [0.2])
 
     def test_download_blobs_command_routes_blob_ids_and_base64_encodes_payload(self) -> None:
         exit_code, payload = self._run(

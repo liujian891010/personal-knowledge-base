@@ -15,6 +15,7 @@ class DesktopSyncScheduleConfig:
     interval_seconds: float = 0.0
     init_now_ms: Optional[int] = None
     step_ms: int = 0
+    continue_on_error: bool = False
 
     def __post_init__(self) -> None:
         if self.iterations < 1:
@@ -31,13 +32,17 @@ class DesktopSyncIterationResult:
     init_now_ms: Optional[int]
     recovery_normalized_at: int
     pull_rewritten_at: int
-    run_once: DesktopSyncRunOnceResult
+    run_once: Optional[DesktopSyncRunOnceResult]
+    failure: Optional["DesktopSyncIterationFailure"]
 
 
 @dataclass(frozen=True)
 class DesktopSyncLoopResult:
     config: DesktopSyncScheduleConfig
     iterations: list[DesktopSyncIterationResult]
+    success_count: int
+    failure_count: int
+    stopped_early: bool
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,7 @@ class DesktopSyncCycleScheduleConfig:
     commit_intent_id: Optional[str] = None
     cleanup_normalized_at: Optional[int] = None
     step_ms: int = 0
+    continue_on_error: bool = False
 
     def __post_init__(self) -> None:
         if self.iterations < 1:
@@ -75,6 +81,12 @@ class DesktopSyncCycleScheduleConfig:
 
 
 @dataclass(frozen=True)
+class DesktopSyncIterationFailure:
+    error_type: str
+    error_message: str
+
+
+@dataclass(frozen=True)
 class DesktopSyncCycleIterationResult:
     iteration: int
     init_now_ms: Optional[int]
@@ -82,13 +94,17 @@ class DesktopSyncCycleIterationResult:
     submit_created_at: Optional[int]
     pull_rewritten_at: int
     cleanup_normalized_at: Optional[int]
-    run_cycle: DesktopSyncCycleResult
+    run_cycle: Optional[DesktopSyncCycleResult]
+    failure: Optional[DesktopSyncIterationFailure]
 
 
 @dataclass(frozen=True)
 class DesktopSyncCycleLoopResult:
     config: DesktopSyncCycleScheduleConfig
     iterations: list[DesktopSyncCycleIterationResult]
+    success_count: int
+    failure_count: int
+    stopped_early: bool
 
 
 @dataclass(frozen=True)
@@ -98,6 +114,9 @@ class DesktopSyncScheduler:
 
     def run_loop(self, config: DesktopSyncScheduleConfig) -> DesktopSyncLoopResult:
         iterations: list[DesktopSyncIterationResult] = []
+        success_count = 0
+        failure_count = 0
+        stopped_early = False
 
         for iteration in range(config.iterations):
             offset_ms = iteration * config.step_ms
@@ -106,11 +125,23 @@ class DesktopSyncScheduler:
             )
             recovery_normalized_at = config.recovery_normalized_at + offset_ms
             pull_rewritten_at = config.pull_rewritten_at + offset_ms
-            run_once = self.runner.run_once(
-                init_now_ms=init_now_ms,
-                recovery_normalized_at=recovery_normalized_at,
-                pull_rewritten_at=pull_rewritten_at,
-            )
+            try:
+                run_once = self.runner.run_once(
+                    init_now_ms=init_now_ms,
+                    recovery_normalized_at=recovery_normalized_at,
+                    pull_rewritten_at=pull_rewritten_at,
+                )
+                failure = None
+                success_count += 1
+            except Exception as exc:
+                if not config.continue_on_error:
+                    raise
+                run_once = None
+                failure = DesktopSyncIterationFailure(
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                )
+                failure_count += 1
             iterations.append(
                 DesktopSyncIterationResult(
                     iteration=iteration,
@@ -118,6 +149,7 @@ class DesktopSyncScheduler:
                     recovery_normalized_at=recovery_normalized_at,
                     pull_rewritten_at=pull_rewritten_at,
                     run_once=run_once,
+                    failure=failure,
                 )
             )
             if iteration + 1 < config.iterations and config.interval_seconds > 0:
@@ -126,10 +158,16 @@ class DesktopSyncScheduler:
         return DesktopSyncLoopResult(
             config=config,
             iterations=iterations,
+            success_count=success_count,
+            failure_count=failure_count,
+            stopped_early=stopped_early,
         )
 
     def run_cycle_loop(self, config: DesktopSyncCycleScheduleConfig) -> DesktopSyncCycleLoopResult:
         iterations: list[DesktopSyncCycleIterationResult] = []
+        success_count = 0
+        failure_count = 0
+        stopped_early = False
 
         for iteration in range(config.iterations):
             offset_ms = iteration * config.step_ms
@@ -144,16 +182,28 @@ class DesktopSyncScheduler:
                 if config.cleanup_normalized_at is None
                 else config.cleanup_normalized_at + offset_ms
             )
-            run_cycle = self.runner.run_cycle(
-                init_now_ms=init_now_ms,
-                recovery_normalized_at=recovery_normalized_at,
-                submit_created_at=submit_created_at,
-                submit_file_ids=config.submit_file_ids,
-                encrypted_blob_by_file_id=config.encrypted_blob_by_file_id,
-                commit_intent_id=config.commit_intent_id,
-                cleanup_normalized_at=cleanup_normalized_at,
-                pull_rewritten_at=pull_rewritten_at,
-            )
+            try:
+                run_cycle = self.runner.run_cycle(
+                    init_now_ms=init_now_ms,
+                    recovery_normalized_at=recovery_normalized_at,
+                    submit_created_at=submit_created_at,
+                    submit_file_ids=config.submit_file_ids,
+                    encrypted_blob_by_file_id=config.encrypted_blob_by_file_id,
+                    commit_intent_id=config.commit_intent_id,
+                    cleanup_normalized_at=cleanup_normalized_at,
+                    pull_rewritten_at=pull_rewritten_at,
+                )
+                failure = None
+                success_count += 1
+            except Exception as exc:
+                if not config.continue_on_error:
+                    raise
+                run_cycle = None
+                failure = DesktopSyncIterationFailure(
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                )
+                failure_count += 1
             iterations.append(
                 DesktopSyncCycleIterationResult(
                     iteration=iteration,
@@ -163,6 +213,7 @@ class DesktopSyncScheduler:
                     pull_rewritten_at=pull_rewritten_at,
                     cleanup_normalized_at=cleanup_normalized_at,
                     run_cycle=run_cycle,
+                    failure=failure,
                 )
             )
             if iteration + 1 < config.iterations and config.interval_seconds > 0:
@@ -171,4 +222,7 @@ class DesktopSyncScheduler:
         return DesktopSyncCycleLoopResult(
             config=config,
             iterations=iterations,
+            success_count=success_count,
+            failure_count=failure_count,
+            stopped_early=stopped_early,
         )

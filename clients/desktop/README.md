@@ -53,6 +53,8 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   --interval-seconds 2
 ```
 
+Add `--continue-on-error` when the loop should capture iteration failures and keep going instead of aborting on the first exception.
+
 `sync-cycle` adds an optional local workspace commit step between recovery and pull:
 
 ```powershell
@@ -90,6 +92,8 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
   --step-ms 1000 `
   --interval-seconds 2
 ```
+
+`sync-cycle-loop` also supports `--continue-on-error`, returning per-iteration failure records in JSON while continuing later iterations.
 
 `submit-commit` payload files use `file_id -> base64 bytes` JSON objects:
 

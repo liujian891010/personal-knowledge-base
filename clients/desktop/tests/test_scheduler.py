@@ -14,6 +14,8 @@ class FakeRunner:
     def __init__(self) -> None:
         self.calls: list[tuple[int | None, int, int]] = []
         self.cycle_calls: list[tuple[int | None, int, int | None, list[str] | None, dict[str, bytes] | None, str | None, int | None, int]] = []
+        self.fail_once_at_iterations: set[int] = set()
+        self.fail_cycle_at_iterations: set[int] = set()
 
     def run_once(
         self,
@@ -23,6 +25,8 @@ class FakeRunner:
         pull_rewritten_at: int,
     ) -> DesktopSyncRunOnceResult:
         self.calls.append((init_now_ms, recovery_normalized_at, pull_rewritten_at))
+        if len(self.calls) - 1 in self.fail_once_at_iterations:
+            raise RuntimeError(f"run_once failed at iteration {len(self.calls) - 1}")
         return DesktopSyncRunOnceResult(
             initialized={"step": "init", "now_ms": init_now_ms},
             recovery={"step": "recover", "normalized_at": recovery_normalized_at},
@@ -55,6 +59,8 @@ class FakeRunner:
                 pull_rewritten_at,
             )
         )
+        if len(self.cycle_calls) - 1 in self.fail_cycle_at_iterations:
+            raise RuntimeError(f"run_cycle failed at iteration {len(self.cycle_calls) - 1}")
         return DesktopSyncCycleResult(
             initialized={"step": "init", "now_ms": init_now_ms},
             recovery={"step": "recover", "normalized_at": recovery_normalized_at},
@@ -97,11 +103,15 @@ class DesktopSyncSchedulerTests(unittest.TestCase):
             ],
         )
         self.assertEqual(slept, [1.5, 1.5])
+        self.assertEqual(result.success_count, 3)
+        self.assertEqual(result.failure_count, 0)
+        self.assertFalse(result.stopped_early)
         self.assertEqual([item.iteration for item in result.iterations], [0, 1, 2])
         self.assertEqual(
             result.iterations[1].run_once.pull,
             {"step": "pull", "rewritten_at": 1770000060225},
         )
+        self.assertIsNone(result.iterations[1].failure)
 
     def test_run_loop_allows_missing_init_now_ms_without_sleep(self) -> None:
         runner = FakeRunner()
@@ -124,6 +134,8 @@ class DesktopSyncSchedulerTests(unittest.TestCase):
         )
         self.assertEqual(slept, [])
         self.assertEqual(result.config.iterations, 2)
+        self.assertEqual(result.success_count, 2)
+        self.assertEqual(result.failure_count, 0)
 
     def test_schedule_config_rejects_invalid_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "iterations"):
@@ -196,6 +208,58 @@ class DesktopSyncSchedulerTests(unittest.TestCase):
         )
         self.assertEqual(slept, [2.0])
         self.assertEqual(result.iterations[1].run_cycle.submitted["created_at"], 1770000062190)
+        self.assertEqual(result.success_count, 2)
+        self.assertEqual(result.failure_count, 0)
+
+    def test_run_loop_can_continue_on_error_and_capture_failure(self) -> None:
+        runner = FakeRunner()
+        runner.fail_once_at_iterations = {1}
+        slept: list[float] = []
+
+        result = DesktopSyncScheduler(runner, sleep=slept.append).run_loop(
+            DesktopSyncScheduleConfig(
+                iterations=3,
+                init_now_ms=1770000063000,
+                recovery_normalized_at=1770000063100,
+                pull_rewritten_at=1770000063200,
+                step_ms=10,
+                interval_seconds=0.25,
+                continue_on_error=True,
+            )
+        )
+
+        self.assertEqual(result.success_count, 2)
+        self.assertEqual(result.failure_count, 1)
+        self.assertFalse(result.stopped_early)
+        self.assertEqual(result.iterations[1].run_once, None)
+        self.assertEqual(result.iterations[1].failure.error_type, "RuntimeError")
+        self.assertIn("iteration 1", result.iterations[1].failure.error_message)
+        self.assertEqual(slept, [0.25, 0.25])
+
+    def test_run_cycle_loop_can_continue_on_error_and_capture_failure(self) -> None:
+        runner = FakeRunner()
+        runner.fail_cycle_at_iterations = {0}
+        slept: list[float] = []
+
+        result = DesktopSyncScheduler(runner, sleep=slept.append).run_cycle_loop(
+            DesktopSyncCycleScheduleConfig(
+                iterations=2,
+                init_now_ms=1770000064000,
+                recovery_normalized_at=1770000064100,
+                submit_created_at=1770000064150,
+                submit_file_ids=["file-a"],
+                pull_rewritten_at=1770000064200,
+                interval_seconds=0.5,
+                continue_on_error=True,
+            )
+        )
+
+        self.assertEqual(result.success_count, 1)
+        self.assertEqual(result.failure_count, 1)
+        self.assertEqual(result.iterations[0].run_cycle, None)
+        self.assertEqual(result.iterations[0].failure.error_type, "RuntimeError")
+        self.assertIsNotNone(result.iterations[1].run_cycle)
+        self.assertEqual(slept, [0.5])
 
     def test_cycle_schedule_config_rejects_incomplete_submit_config(self) -> None:
         with self.assertRaisesRegex(ValueError, "submit_file_ids"):
