@@ -13,6 +13,7 @@ from typing import Any, Callable, Optional, Sequence, TextIO
 from vault_core import BlobDownloadSessionResult
 
 from .runner import DesktopSyncRunner
+from .service import DesktopPullRequiredBlobResult
 from .scheduler import (
     DesktopSyncCycleScheduleConfig,
     DesktopSyncScheduleConfig,
@@ -72,6 +73,16 @@ def _to_jsonable(value: Any) -> Any:
             "downloaded_blobs_base64": {
                 blob_id: base64.b64encode(payload).decode("ascii")
                 for blob_id, payload in value.downloaded_blobs.items()
+            },
+        }
+    if isinstance(value, DesktopPullRequiredBlobResult):
+        return {
+            "pull": _to_jsonable(value.pull),
+            "plan": _to_jsonable(value.plan),
+            "download": None if value.download is None else _to_jsonable(value.download),
+            "plaintext_by_file_id_base64": {
+                file_id: base64.b64encode(payload).decode("ascii")
+                for file_id, payload in value.plaintext_by_file_id.items()
             },
         }
     if is_dataclass(value):
@@ -150,6 +161,7 @@ def create_parser() -> argparse.ArgumentParser:
     pull_parser = subparsers.add_parser("pull")
     pull_parser.add_argument("--rewritten-at", type=int, required=True)
     pull_parser.add_argument("--download-required-blobs", action="store_true")
+    pull_parser.add_argument("--decrypt-required-blobs", action="store_true")
     pull_parser.add_argument("--output-dir")
 
     recover_parser = subparsers.add_parser("recover")
@@ -277,29 +289,36 @@ def run_cli(
         result = service.load_worker_health()
     elif args.command == "pull":
         result = service.pull_and_ack(rewritten_at=args.rewritten_at)
+        if args.decrypt_required_blobs and not args.download_required_blobs:
+            raise ValueError("pull --decrypt-required-blobs requires --download-required-blobs")
+        if args.output_dir and args.decrypt_required_blobs:
+            raise ValueError("pull --output-dir cannot be combined with --decrypt-required-blobs")
         if args.output_dir and not args.download_required_blobs:
             raise ValueError("pull --output-dir requires --download-required-blobs")
         if args.download_required_blobs:
-            required_blob_ids = _extract_required_blob_ids_from_pull_result(result)
-            download_result = None
-            if required_blob_ids:
-                download_result = service.download_blobs(required_blob_ids)
-            if args.output_dir and download_result is not None:
-                output_dir = Path(args.output_dir)
-                result = {
-                    "pull": result,
-                    "download": {
-                        "init": _to_jsonable(download_result.init),
-                        "written_blob_paths": _to_jsonable(
-                            _write_downloaded_blobs(output_dir, download_result.downloaded_blobs)
-                        ),
-                    },
-                }
+            if args.decrypt_required_blobs:
+                result = service.download_and_decrypt_pull_required_blobs(result)
             else:
-                result = {
-                    "pull": result,
-                    "download": download_result,
-                }
+                required_blob_ids = _extract_required_blob_ids_from_pull_result(result)
+                download_result = None
+                if required_blob_ids:
+                    download_result = service.download_blobs(required_blob_ids)
+                if args.output_dir and download_result is not None:
+                    output_dir = Path(args.output_dir)
+                    result = {
+                        "pull": result,
+                        "download": {
+                            "init": _to_jsonable(download_result.init),
+                            "written_blob_paths": _to_jsonable(
+                                _write_downloaded_blobs(output_dir, download_result.downloaded_blobs)
+                            ),
+                        },
+                    }
+                else:
+                    result = {
+                        "pull": result,
+                        "download": download_result,
+                    }
     elif args.command == "recover":
         result = service.resume_commit_recovery(normalized_at=args.normalized_at)
     elif args.command == "sync-once":

@@ -14,6 +14,7 @@ from .crypto import (
     build_placeholder_blob_crypto_provider,
     build_placeholder_encrypted_blob_map,
     build_placeholder_encrypted_blob_payload,
+    decrypt_placeholder_encrypted_blob_payload,
 )
 from .runner import (
     DesktopSyncCycleResult,
@@ -41,6 +42,9 @@ from .service import (
     DesktopCommitCleanupResult,
     DesktopCommitSessionResult,
     DesktopPreparedCommit,
+    DesktopPullRequiredBlobFile,
+    DesktopPullRequiredBlobPlan,
+    DesktopPullRequiredBlobResult,
     DesktopSyncService,
     build_desktop_sync_service,
 )
@@ -72,6 +76,9 @@ __all__ = [
     "DesktopCommitCleanupResult",
     "DesktopCommitSessionResult",
     "DesktopPreparedCommit",
+    "DesktopPullRequiredBlobFile",
+    "DesktopPullRequiredBlobPlan",
+    "DesktopPullRequiredBlobResult",
     "DesktopSyncCycleResult",
     "DesktopSyncRunOnceResult",
     "DesktopSyncRunner",
@@ -106,6 +113,7 @@ __all__ = [
     "build_placeholder_blob_crypto_provider",
     "build_placeholder_encrypted_blob_map",
     "build_placeholder_encrypted_blob_payload",
+    "decrypt_placeholder_encrypted_blob_payload",
     "main",
     "build_desktop_sync_service",
     "build_desktop_sync_runtime",
