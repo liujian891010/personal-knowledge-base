@@ -1099,6 +1099,74 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 self.assertEqual(loaded_journal.phase, "materializing")
                 self.assertEqual(loaded_journal.ops_hash, "sha256:ops8")
 
+    def test_finalize_applied_pull_plan_clears_journal_and_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            staging_path = root / ".noteapp" / "staging" / "file-live.staging"
+            staging_path.parent.mkdir(parents=True, exist_ok=True)
+            staging_path.write_bytes(b"# rewritten\n")
+
+            journal = SyncApplyJournalRecord(
+                vault_id="vault-001",
+                journal_id="journal-1",
+                target_revision=8,
+                target_manifest_hash="sha256:head8",
+                phase="materializing",
+                ops_hash="sha256:ops8",
+                created_at=1770000040100,
+                updated_at=1770000040200,
+            )
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(connection, journal)
+
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[
+                    DesktopPullApplyWriteFile(
+                        file_id="file-live",
+                        target_path="Notes/Live.md",
+                        staging_path=".noteapp/staging/file-live.staging",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# rewritten\n").hexdigest(),
+                    )
+                ],
+                moves=[],
+                deletes=[],
+                blocking_paths=[],
+                ops_hash="sha256:ops8",
+            )
+            execution = type(
+                "Execution",
+                (),
+                {
+                    "journal": journal,
+                    "written_paths": {"file-live": root / "Notes" / "Live.md"},
+                    "moved_paths": {},
+                    "deleted_paths": [],
+                },
+            )()
+            staged = DesktopPullApplyStagingResult(
+                journal=journal,
+                written_staging_paths={"file-live": staging_path},
+            )
+
+            finalized = service.finalize_applied_pull_plan(
+                plan,
+                execution,
+                staged,
+                finalized_at=1770000040300,
+            )
+
+            self.assertFalse(staging_path.exists())
+            self.assertEqual(finalized.removed_staging_paths, [staging_path])
+            self.assertEqual(finalized.state.last_applied_revision, 8)
+            self.assertEqual(finalized.state.acked_revision, 8)
+            self.assertEqual(finalized.state.pending_ack_to_server, [8])
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
+
     def test_pull_and_apply_nonblocking_rejects_blocking_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
@@ -1121,6 +1189,60 @@ class DesktopSyncServiceTests(unittest.TestCase):
                         "pull apply requires a later two-phase materialization boundary for blocking paths: Notes/A.md",
                     ):
                         service.pull_and_apply_nonblocking(rewritten_at=1770000040100)
+
+    def test_pull_and_apply_nonblocking_orchestrates_finalize(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            before_snapshot = service.load_snapshot()
+            pull = self._build_pull_result(required_blob_ids=[], manifest_files=[])
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[],
+                moves=[],
+                deletes=[],
+                blocking_paths=[],
+                ops_hash="sha256:ops8",
+            )
+            resolved = DesktopPullRequiredBlobResult(
+                pull=pull,
+                plan=DesktopPullRequiredBlobPlan(vault_id="vault-001", revision=8, blob_ids=[], files=[]),
+                download=None,
+                plaintext_by_file_id={},
+            )
+            staged = DesktopPullApplyStagingResult(journal=None, written_staging_paths={})
+            execution = type(
+                "Execution",
+                (),
+                {
+                    "journal": None,
+                    "written_paths": {},
+                    "moved_paths": {},
+                    "deleted_paths": [],
+                },
+            )()
+            finalized = type(
+                "Finalized",
+                (),
+                {
+                    "state": service.load_snapshot().state,
+                    "removed_staging_paths": [],
+                },
+            )()
+
+            with mock.patch.object(type(service), "_pull_and_ack_with_snapshot", return_value=(before_snapshot, pull)):
+                with mock.patch.object(type(service), "_build_pull_apply_plan", return_value=plan):
+                    with mock.patch.object(type(service), "download_and_decrypt_pull_required_blobs", return_value=resolved):
+                        with mock.patch.object(type(service), "stage_pull_required_plaintext_for_apply", return_value=staged):
+                            with mock.patch.object(type(service), "apply_staged_pull_plan", return_value=execution):
+                                with mock.patch.object(type(service), "finalize_applied_pull_plan", return_value=finalized):
+                                    session = service.pull_and_apply_nonblocking(rewritten_at=1770000040100)
+
+            self.assertIs(session.pull, pull)
+            self.assertIs(session.plan, plan)
+            self.assertIs(session.staged, staged)
+            self.assertIs(session.execution, execution)
+            self.assertIs(session.finalized, finalized)
 
     def test_prepare_commit_rejects_active_sync_apply_journal(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
