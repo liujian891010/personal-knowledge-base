@@ -359,6 +359,75 @@ class DesktopCliTests(unittest.TestCase):
         )
         self.assertEqual(slept, [1.25, 1.25])
 
+    def test_sync_cycle_command_routes_optional_workspace_submit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            encrypted_dir = Path(tmpdir) / "encrypted"
+            encrypted_dir.mkdir(parents=True, exist_ok=True)
+            (encrypted_dir / "file-a.blob").write_bytes(b"enc-a")
+
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "sync-cycle",
+                "--now-ms",
+                "1770000040430",
+                "--normalized-at",
+                "1770000040440",
+                "--submit-created-at",
+                "1770000040450",
+                "--file-id",
+                "file-a",
+                "--commit-intent-id",
+                "intent-010",
+                "--cleanup-normalized-at",
+                "1770000040451",
+                "--encrypted-dir",
+                str(encrypted_dir),
+                "--rewritten-at",
+                "1770000040460",
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload,
+            {
+                "final_snapshot": {"files": 1, "kind": "status"},
+                "initialized": {"kind": "init", "value": 1770000040430},
+                "pull": {"kind": "pull", "rewritten_at": 1770000040460},
+                "recovery": {"kind": "recover", "normalized_at": 1770000040440},
+                "submitted": {
+                    "kind": "submit-workspace-commit",
+                    "created_at": 1770000040450,
+                    "file_ids": ["file-a"],
+                    "commit_intent_id": "intent-010",
+                    "encrypted_sizes": {"file-a": 5},
+                },
+            },
+        )
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040430),
+                ("recover", 1770000040440),
+                (
+                    "submit-workspace-commit",
+                    1770000040450,
+                    ["file-a"],
+                    "intent-010",
+                    1770000040451,
+                    {"file-a": b"enc-a"},
+                ),
+                ("pull", 1770000040460),
+                ("status", None),
+            ],
+        )
+
     def test_download_blobs_command_routes_blob_ids_and_base64_encodes_payload(self) -> None:
         exit_code, payload = self._run(
             "--vault-root",

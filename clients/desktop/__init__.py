@@ -1,5 +1,6 @@
 from .cli import build_cli_service, main
 from .runner import (
+    DesktopSyncCycleResult,
     DesktopSyncRunOnceResult,
     DesktopSyncRunner,
     build_desktop_sync_runner,
@@ -36,6 +37,7 @@ __all__ = [
     "DesktopCommitCleanupResult",
     "DesktopCommitSessionResult",
     "DesktopPreparedCommit",
+    "DesktopSyncCycleResult",
     "DesktopSyncRunOnceResult",
     "DesktopSyncRunner",
     "DesktopSyncIterationResult",
