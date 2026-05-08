@@ -223,6 +223,28 @@ class FakeService:
             ),
         }
 
+    def submit_detected_changes(
+        self,
+        *,
+        created_at: int,
+        commit_intent_id=None,
+        cleanup_normalized_at=None,
+    ):
+        self.calls.append(
+            (
+                "submit-detected-commit",
+                created_at,
+                commit_intent_id,
+                cleanup_normalized_at,
+            )
+        )
+        return {
+            "kind": "submit-detected-commit",
+            "created_at": created_at,
+            "commit_intent_id": commit_intent_id,
+            "cleanup_normalized_at": cleanup_normalized_at,
+        }
+
 
 class DesktopCliTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -1367,6 +1389,40 @@ class DesktopCliTests(unittest.TestCase):
                     None,
                 )
             ],
+        )
+
+    def test_submit_detected_commit_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "submit-detected-commit",
+            "--created-at",
+            "1770000040800",
+            "--commit-intent-id",
+            "intent-003",
+            "--cleanup-normalized-at",
+            "1770000040801",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload,
+            {
+                "kind": "submit-detected-commit",
+                "created_at": 1770000040800,
+                "commit_intent_id": "intent-003",
+                "cleanup_normalized_at": 1770000040801,
+            },
+        )
+        self.assertEqual(
+            self.service.calls,
+            [("submit-detected-commit", 1770000040800, "intent-003", 1770000040801)],
         )
 
 

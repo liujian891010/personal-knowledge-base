@@ -4,7 +4,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from clients.desktop.change_detection import detect_local_workspace_changes
+from clients.desktop.change_detection import (
+    build_tracked_change_commit_plan,
+    detect_local_workspace_changes,
+)
+from clients.desktop.crypto import build_placeholder_blob_id
 from vault_core import FileMapDocument, FileRecord
 
 
@@ -93,6 +97,69 @@ class DesktopChangeDetectionTests(unittest.TestCase):
             self.assertEqual(result.change_count, 0)
             self.assertEqual(result.modified_file_ids, [])
             self.assertEqual(result.missing_file_ids, [])
+
+    def test_build_tracked_change_commit_plan_projects_updated_document(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Notes").mkdir(parents=True, exist_ok=True)
+            payload = b"# changed\n"
+            (root / "Notes" / "Tracked.md").write_bytes(payload)
+
+            document = FileMapDocument(
+                vault_id="vault-001",
+                updated_at=1770000050200,
+                files=[
+                    FileRecord(
+                        file_id="file-tracked",
+                        path="Notes/Tracked.md",
+                        type="note",
+                        status="active",
+                        updated_at=1770000050000,
+                        content_hash="sha256:stale",
+                        meta={
+                            "blob_id": "blob-old",
+                            "size": 1,
+                            "mtime": 1770000050000,
+                            "mime_type": "text/markdown",
+                        },
+                    )
+                ],
+            )
+
+            plan = build_tracked_change_commit_plan(root, document)
+
+            self.assertEqual(plan.change_set.modified_file_ids, ["file-tracked"])
+            self.assertEqual(plan.content_by_file_id, {"file-tracked": payload})
+            self.assertEqual(plan.document.files[0].meta["mime_type"], "text/markdown")
+            self.assertEqual(
+                plan.document.files[0].meta["blob_id"],
+                build_placeholder_blob_id(plan.document.files[0].content_hash),
+            )
+
+    def test_build_tracked_change_commit_plan_rejects_untracked_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Notes").mkdir(parents=True, exist_ok=True)
+            (root / "Notes" / "Tracked.md").write_bytes(b"# tracked\n")
+            (root / "Notes" / "Loose.md").write_bytes(b"# loose\n")
+
+            document = FileMapDocument(
+                vault_id="vault-001",
+                updated_at=1770000050300,
+                files=[
+                    FileRecord(
+                        file_id="file-tracked",
+                        path="Notes/Tracked.md",
+                        type="note",
+                        status="active",
+                        updated_at=1770000050000,
+                        content_hash="sha256:stale",
+                    )
+                ],
+            )
+
+            with self.assertRaisesRegex(ValueError, "unsupported items"):
+                build_tracked_change_commit_plan(root, document)
 
 
 if __name__ == "__main__":

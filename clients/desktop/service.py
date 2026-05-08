@@ -30,7 +30,11 @@ from vault_core import (
 )
 from vault_core.sync_http import UrlopenLike
 
-from .change_detection import DesktopWorkspaceChangeSet
+from .change_detection import (
+    DesktopTrackedChangeCommitPlan,
+    DesktopWorkspaceChangeSet,
+    build_tracked_change_commit_plan,
+)
 from .crypto import build_placeholder_encrypted_blob_map
 from .sync_runtime import DesktopSyncHttpConfig
 from .worker_state import DesktopSyncWorkerHealth, DesktopSyncWorkerStateRecord
@@ -126,6 +130,13 @@ class DesktopSyncService:
 
         return content_by_file_id
 
+    def build_tracked_change_commit_plan(self) -> DesktopTrackedChangeCommitPlan:
+        snapshot = self.load_snapshot()
+        return build_tracked_change_commit_plan(
+            self.workspace.vault_root,
+            snapshot.document,
+        )
+
     def cleanup_failed_commit(self, *, normalized_at: int) -> DesktopCommitCleanupResult:
         with closing(self.workspace._open_connection()) as connection:
             state = cleanup_failed_commit_submission(
@@ -146,6 +157,23 @@ class DesktopSyncService:
         encrypted_blob_by_file_id: Optional[Mapping[str, bytes]] = None,
         commit_intent_id: Optional[str] = None,
     ) -> DesktopPreparedCommit:
+        return self._prepare_commit_with_snapshot(
+            self.load_snapshot(),
+            created_at=created_at,
+            content_by_file_id=content_by_file_id,
+            encrypted_blob_by_file_id=encrypted_blob_by_file_id,
+            commit_intent_id=commit_intent_id,
+        )
+
+    def _prepare_commit_with_snapshot(
+        self,
+        snapshot: DesktopWorkspaceSnapshot,
+        *,
+        created_at: int,
+        content_by_file_id: Mapping[str, bytes],
+        encrypted_blob_by_file_id: Optional[Mapping[str, bytes]] = None,
+        commit_intent_id: Optional[str] = None,
+    ) -> DesktopPreparedCommit:
         resolved_commit_intent_id = commit_intent_id or str(uuid4())
         resolved_encrypted_blob_by_file_id = (
             build_placeholder_encrypted_blob_map(content_by_file_id)
@@ -154,7 +182,6 @@ class DesktopSyncService:
         )
 
         with closing(self.workspace._open_connection()) as connection:
-            snapshot = self.workspace._load_snapshot_from_connection(connection)
             submission = prepare_commit_submission(
                 connection,
                 state=snapshot.state,
@@ -199,6 +226,63 @@ class DesktopSyncService:
             snapshot_materialization=snapshot_materialization,
             blob_staging_materialization=blob_staging_materialization,
             snapshot_table=snapshot_table,
+        )
+
+    def submit_detected_changes(
+        self,
+        *,
+        created_at: int,
+        commit_intent_id: Optional[str] = None,
+        cleanup_normalized_at: Optional[int] = None,
+    ) -> DesktopCommitSessionResult:
+        snapshot = self.load_snapshot()
+        plan = build_tracked_change_commit_plan(self.workspace.vault_root, snapshot.document)
+        prepared = self._prepare_commit_with_snapshot(
+            DesktopWorkspaceSnapshot(
+                document=plan.document,
+                state=snapshot.state,
+                tombstones=snapshot.tombstones,
+            ),
+            created_at=created_at,
+            content_by_file_id=plan.content_by_file_id,
+            commit_intent_id=commit_intent_id,
+        )
+        resolved_cleanup_at = created_at if cleanup_normalized_at is None else cleanup_normalized_at
+
+        try:
+            network = self.workspace.runtime.session.submit_commit(
+                prepared.submission,
+                snapshot_table=prepared.snapshot_table,
+            )
+        except Exception:
+            cleanup = self.cleanup_failed_commit(normalized_at=resolved_cleanup_at)
+            raise
+
+        if network.commit.status != "committed":
+            return DesktopCommitSessionResult(
+                prepared=prepared,
+                network=network,
+                cleanup=self.cleanup_failed_commit(normalized_at=resolved_cleanup_at),
+            )
+
+        response = network.commit.response
+        if response is None:
+            raise ValueError("committed submit_commit result must include response")
+
+        current_tombstones = load_tombstone_ledger(self.workspace.paths.ledger_path)
+        with closing(self.workspace._open_connection()) as connection:
+            finalized = finalize_commit_submission_cleanup(
+                connection,
+                vault_root=self.workspace.vault_root,
+                ledger_path=self.workspace.paths.ledger_path,
+                manifest=prepared.submission.manifest,
+                local_tombstones=current_tombstones,
+                committed_revision=response.new_revision,
+            )
+        return DesktopCommitSessionResult(
+            prepared=prepared,
+            network=network,
+            finalized=finalized,
         )
 
     def submit_commit(
