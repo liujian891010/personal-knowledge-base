@@ -1,0 +1,316 @@
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+
+from vault_core import (
+    BlobCheckResult,
+    BlobUploadCapability,
+    BlobUploadInitRequestPayload,
+    BlobUploadInitResponsePayload,
+    BlobUploadPlan,
+    BlobUploadPlanEntry,
+    CommitIntentJournalRecord,
+    CommitNetworkPlan,
+    CommitPreflightResult,
+    CommitSnapshotEntry,
+    CommitSnapshotTable,
+    CommitSubmissionBundle,
+    CreateCommitBlobRef,
+    CreateCommitExecutionResult,
+    CreateCommitRequestPayload,
+    CreateCommitResponsePayload,
+    ManifestFileEntry,
+    ManifestRecord,
+    SyncHttpJsonResponse,
+    VaultStateRecord,
+    execute_commit_preflight,
+    execute_create_commit,
+)
+
+
+class FakeSyncCommitTransport:
+    def __init__(
+        self,
+        *,
+        blob_check: SyncHttpJsonResponse,
+        blob_upload_init: SyncHttpJsonResponse | None = None,
+        create_commit: SyncHttpJsonResponse | None = None,
+    ) -> None:
+        self.blob_check_response = blob_check
+        self.blob_upload_init_response = blob_upload_init
+        self.create_commit_response = create_commit
+        self.calls: list[tuple[str, str, dict[str, object]]] = []
+
+    def post_blob_check(self, vault_id: str, payload: dict[str, object]) -> SyncHttpJsonResponse:
+        self.calls.append(("blob_check", vault_id, payload))
+        return self.blob_check_response
+
+    def post_blob_upload_init(self, vault_id: str, payload: dict[str, object]) -> SyncHttpJsonResponse:
+        self.calls.append(("blob_upload_init", vault_id, payload))
+        if self.blob_upload_init_response is None:
+            raise AssertionError("blob upload init response was not configured")
+        return self.blob_upload_init_response
+
+    def post_create_commit(self, vault_id: str, payload: dict[str, object]) -> SyncHttpJsonResponse:
+        self.calls.append(("create_commit", vault_id, payload))
+        if self.create_commit_response is None:
+            raise AssertionError("create commit response was not configured")
+        return self.create_commit_response
+
+
+def _build_submission() -> CommitSubmissionBundle:
+    manifest = ManifestRecord(
+        vault_id="vault_pkb_001",
+        revision=0,
+        base_revision=7,
+        created_by_device="desktop-shanghai",
+        created_at=1770000019200,
+        summary_hash="pending",
+        files=[
+            ManifestFileEntry(
+                file_id="file_a",
+                path="Notes/A.md",
+                type="note",
+                content_hash="sha256:a",
+                blob_id="blob_a",
+                size=16,
+                mtime=1770000019190,
+            ),
+            ManifestFileEntry(
+                file_id="file_b",
+                path="Notes/B.md",
+                type="note",
+                content_hash="sha256:b",
+                blob_id="blob_b",
+                size=8,
+                mtime=1770000019191,
+            ),
+        ],
+        tombstones=[],
+    )
+    return CommitSubmissionBundle(
+        manifest=manifest,
+        intent_manifest_hash="sha256:intent",
+        journal=CommitIntentJournalRecord(
+            vault_id="vault_pkb_001",
+            commit_intent_id="intent_1",
+            intent_manifest_hash="sha256:intent",
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            status="submitted",
+            intent_delete_seq_upper_bound=5,
+            created_at=1770000019200,
+            updated_at=1770000019201,
+        ),
+        state=VaultStateRecord(
+            vault_id="vault_pkb_001",
+            last_applied_revision=7,
+            remote_head_revision=7,
+            acked_revision=7,
+            pending_ack_to_server=[],
+            commit_in_progress=True,
+            last_manifest_summary="sha256:head7",
+            last_manifest_summary_status="valid",
+            local_delete_sequence=5,
+        ),
+    )
+
+
+def _build_snapshot_table() -> CommitSnapshotTable:
+    return CommitSnapshotTable(
+        vault_id="vault_pkb_001",
+        base_revision=7,
+        created_at=1770000019200,
+        entries=[
+            CommitSnapshotEntry(
+                file_id="file_a",
+                path="Notes/A.md",
+                type="note",
+                content_hash="sha256:a",
+                blob_id="blob_a",
+                plaintext_size=16,
+                encrypted_size=32,
+                mtime=1770000019190,
+                mime_type=None,
+                snapshot_path=Path("C:/tmp/file_a.snapshot.plain"),
+                blob_staging_path=Path("C:/tmp/blob_a.blob.staging"),
+            ),
+            CommitSnapshotEntry(
+                file_id="file_b",
+                path="Notes/B.md",
+                type="note",
+                content_hash="sha256:b",
+                blob_id="blob_b",
+                plaintext_size=8,
+                encrypted_size=24,
+                mtime=1770000019191,
+                mime_type=None,
+                snapshot_path=Path("C:/tmp/file_b.snapshot.plain"),
+                blob_staging_path=Path("C:/tmp/blob_b.blob.staging"),
+            ),
+        ],
+    )
+
+
+class SyncClientTests(unittest.TestCase):
+    def test_execute_commit_preflight_skips_upload_init_when_no_blobs_are_missing(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "existing_blob_ids": ["blob_a", "blob_b"],
+                    "missing_blob_ids": [],
+                },
+            )
+        )
+
+        result = execute_commit_preflight(
+            transport,
+            _build_submission(),
+            snapshot_table=_build_snapshot_table(),
+        )
+
+        self.assertEqual(
+            result,
+            CommitPreflightResult(
+                network_plan=CommitNetworkPlan(
+                    request=CreateCommitRequestPayload(
+                        commit_intent_id="intent_1",
+                        base_revision=7,
+                        created_by_device="desktop-shanghai",
+                        intent_manifest_hash="sha256:intent",
+                        intent_delete_seq_upper_bound=5,
+                        manifest=_build_submission().manifest,
+                        blob_refs=[
+                            CreateCommitBlobRef(blob_id="blob_a", file_id="file_a"),
+                            CreateCommitBlobRef(blob_id="blob_b", file_id="file_b"),
+                        ],
+                    ),
+                    blob_check=BlobCheckResult(
+                        requested_blob_ids=["blob_a", "blob_b"],
+                        existing_blob_ids=["blob_a", "blob_b"],
+                        missing_blob_ids=[],
+                    ),
+                    blob_uploads=BlobUploadPlan(vault_id="vault_pkb_001", entries=[]),
+                ),
+                upload_init_request=None,
+                upload_init_response=None,
+            ),
+        )
+        self.assertEqual([call[0] for call in transport.calls], ["blob_check"])
+
+    def test_execute_commit_preflight_requests_upload_capabilities_for_missing_blobs(self) -> None:
+        transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "existing_blob_ids": ["blob_b"],
+                    "missing_blob_ids": ["blob_a"],
+                },
+            ),
+            blob_upload_init=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "uploads": [
+                        {
+                            "blob_id": "blob_a",
+                            "upload_url": "https://example.com/upload/blob_a",
+                            "expires_at": "2026-05-08T12:00:00Z",
+                        }
+                    ]
+                },
+            ),
+        )
+
+        result = execute_commit_preflight(
+            transport,
+            _build_submission(),
+            snapshot_table=_build_snapshot_table(),
+        )
+
+        self.assertEqual(
+            result.upload_init_request,
+            BlobUploadInitRequestPayload(
+                blobs=[
+                    result.upload_init_request.blobs[0].__class__(
+                        blob_id="blob_a",
+                        encrypted_size=32,
+                        content_hash="sha256:a",
+                    ),
+                ]
+            ),
+        )
+        self.assertEqual(
+            result.upload_init_response,
+            BlobUploadInitResponsePayload(
+                uploads=[
+                    BlobUploadCapability(
+                        blob_id="blob_a",
+                        upload_url="https://example.com/upload/blob_a",
+                        expires_at="2026-05-08T12:00:00Z",
+                    )
+                ]
+            ),
+        )
+        self.assertEqual([call[0] for call in transport.calls], ["blob_check", "blob_upload_init"])
+        self.assertEqual(transport.calls[1][2]["blobs"][0]["blob_id"], "blob_a")
+
+    def test_execute_create_commit_parses_success_and_conflict(self) -> None:
+        request = CreateCommitRequestPayload(
+            commit_intent_id="intent_1",
+            base_revision=7,
+            created_by_device="desktop-shanghai",
+            intent_manifest_hash="sha256:intent",
+            intent_delete_seq_upper_bound=5,
+            manifest=_build_submission().manifest,
+            blob_refs=[
+                CreateCommitBlobRef(blob_id="blob_a", file_id="file_a"),
+                CreateCommitBlobRef(blob_id="blob_b", file_id="file_b"),
+            ],
+        )
+        success_transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            create_commit=SyncHttpJsonResponse(
+                status_code=200,
+                payload={
+                    "vault_id": "vault_pkb_001",
+                    "new_revision": 8,
+                    "head_manifest_summary": "sha256:head8",
+                    "acked_revision_for_device": 8,
+                },
+            ),
+        )
+        success = execute_create_commit(success_transport, request)
+        self.assertEqual(
+            success,
+            CreateCommitExecutionResult(
+                status="committed",
+                request=request,
+                response=CreateCommitResponsePayload(
+                    vault_id="vault_pkb_001",
+                    new_revision=8,
+                    head_manifest_summary="sha256:head8",
+                    acked_revision_for_device=8,
+                ),
+            ),
+        )
+
+        conflict_transport = FakeSyncCommitTransport(
+            blob_check=SyncHttpJsonResponse(status_code=200, payload={"existing_blob_ids": [], "missing_blob_ids": []}),
+            create_commit=SyncHttpJsonResponse(
+                status_code=409,
+                payload={
+                    "code": "base_revision_conflict",
+                    "current_head_revision": 9,
+                    "current_manifest_summary": "sha256:head9",
+                },
+            ),
+        )
+        conflict = execute_create_commit(conflict_transport, request)
+        self.assertEqual(conflict.status, "conflict")
+        self.assertEqual(conflict.conflict.code, "base_revision_conflict")
+
+
+if __name__ == "__main__":
+    unittest.main()
