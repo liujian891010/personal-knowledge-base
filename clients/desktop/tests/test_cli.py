@@ -35,6 +35,7 @@ class FakeService:
         self.fail_recover_at_calls: set[int] = set()
         self.fail_submit_workspace_at_calls: set[int] = set()
         self.skip_submit_detected_if_needed = False
+        self.commit_recovery_payload = None
         self.pull_and_ack_payload = None
         self.pull_and_plan_apply_payload = None
         self.pull_and_apply_payload = None
@@ -172,6 +173,8 @@ class FakeService:
         recover_count = sum(1 for call in self.calls if call[0] == "recover") - 1
         if recover_count in self.fail_recover_at_calls:
             raise RuntimeError(f"recover failed at call {recover_count}")
+        if self.commit_recovery_payload is not None:
+            return self.commit_recovery_payload
         return {"kind": "recover", "normalized_at": normalized_at}
 
     def resume_pull_apply_recovery(self, *, normalized_at: int):
@@ -1675,6 +1678,56 @@ class DesktopCliTests(unittest.TestCase):
             "1770000040540",
             "--submit-created-at",
             "1770000040550",
+            "--file-id",
+            "file-a",
+            "--rewritten-at",
+            "1770000040560",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040530),
+                ("recover", 1770000040540),
+                ("recover-pull-apply", 1770000040540),
+                ("pull-and-apply", 1770000040560),
+                ("submit-workspace-commit", 1770000040561, ["file-a"], None, 1770000040562, None),
+                ("status", None),
+            ],
+        )
+
+    def test_sync_cycle_command_pulls_before_submit_when_commit_recovery_requires_full_pull(self) -> None:
+        self.service.commit_recovery_payload = {
+            "mode": "submitted_confirmation",
+            "submitted": {
+                "recovery": {
+                    "requires_full_pull": True,
+                    "state": {
+                        "last_manifest_summary_status": "stale",
+                    },
+                },
+            },
+        }
+
+        exit_code, _ = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-cycle",
+            "--now-ms",
+            "1770000040530",
+            "--normalized-at",
+            "1770000040540",
+            "--submit-created-at",
+            "1770000040550",
+            "--cleanup-normalized-at",
+            "1770000040551",
             "--file-id",
             "file-a",
             "--rewritten-at",
