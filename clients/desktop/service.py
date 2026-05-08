@@ -2089,34 +2089,9 @@ class DesktopSyncService:
             )
             return result
 
-        payload: object | None
-        if action.command == "vault-summary":
-            payload = self.summarize_vault()
-        elif action.command == "list-conflicts":
-            payload = self.list_conflicts()
-        elif action.command == "worker-health":
-            payload = self.load_worker_health()
-        elif action.command == "detect-local-changes":
-            payload = self.detect_local_changes()
-        elif action.command == "sync-activity":
-            payload = self.list_sync_activity(limit=_resolve_sync_activity_limit(action.argv))
-        elif action.command == "resolve-conflicts":
-            payload = self.resolve_conflicts(
-                resolved_at=resolved_now_ms,
-                resolve_all="--all" in action.argv,
-            )
-        elif action.command == "recover-pull-apply":
-            payload = self.resume_pull_apply_recovery(normalized_at=resolved_now_ms)
-        elif action.command == "recover":
-            payload = self.resume_commit_recovery(normalized_at=resolved_now_ms)
-        elif action.command == "pull":
-            payload = self.pull_and_ack(rewritten_at=resolved_now_ms)
-        elif action.command == "submit-detected-commit":
-            payload = self.submit_detected_changes_if_needed(
-                created_at=resolved_now_ms,
-                cleanup_normalized_at=resolved_now_ms,
-            )
-        else:
+        try:
+            payload = self._execute_supported_sync_action(action, resolved_now_ms=resolved_now_ms)
+        except KeyError:
             result = DesktopSyncActionExecutionResult(
                 action=action,
                 source=source,
@@ -2132,7 +2107,15 @@ class DesktopSyncService:
                 message=result.message,
             )
             return result
-
+        except Exception as error:
+            self._record_sync_activity(
+                occurred_at_ms=resolved_now_ms,
+                action=action,
+                source=source,
+                status="failed",
+                message=f"{type(error).__name__}: {error}",
+            )
+            raise
         result = DesktopSyncActionExecutionResult(
             action=action,
             source=source,
@@ -2148,6 +2131,40 @@ class DesktopSyncService:
             message=result.message,
         )
         return result
+
+    def _execute_supported_sync_action(
+        self,
+        action: DesktopSyncPanelAction,
+        *,
+        resolved_now_ms: int,
+    ) -> object | None:
+        if action.command == "vault-summary":
+            return self.summarize_vault()
+        if action.command == "list-conflicts":
+            return self.list_conflicts()
+        if action.command == "worker-health":
+            return self.load_worker_health()
+        if action.command == "detect-local-changes":
+            return self.detect_local_changes()
+        if action.command == "sync-activity":
+            return self.list_sync_activity(limit=_resolve_sync_activity_limit(action.argv))
+        if action.command == "resolve-conflicts":
+            return self.resolve_conflicts(
+                resolved_at=resolved_now_ms,
+                resolve_all="--all" in action.argv,
+            )
+        if action.command == "recover-pull-apply":
+            return self.resume_pull_apply_recovery(normalized_at=resolved_now_ms)
+        if action.command == "recover":
+            return self.resume_commit_recovery(normalized_at=resolved_now_ms)
+        if action.command == "pull":
+            return self.pull_and_ack(rewritten_at=resolved_now_ms)
+        if action.command == "submit-detected-commit":
+            return self.submit_detected_changes_if_needed(
+                created_at=resolved_now_ms,
+                cleanup_normalized_at=resolved_now_ms,
+            )
+        raise KeyError(action.command)
 
     def list_conflicts(self) -> DesktopConflictStatus:
         snapshot = self._promote_unresolved_conflict_state_if_needed(self.load_snapshot())

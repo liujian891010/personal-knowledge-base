@@ -790,6 +790,22 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(feed.total_count, 2)
             self.assertEqual(feed.records[-1].action_id, "sync-activity")
 
+    def test_execute_sync_action_records_failed_activity_before_reraising(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            with mock.patch.object(type(service), "pull_and_ack", side_effect=RuntimeError("network down")):
+                with self.assertRaisesRegex(RuntimeError, "network down"):
+                    service.execute_sync_action("pull", now_ms=1770000040904)
+
+            feed = service.list_sync_activity(limit=5)
+            self.assertEqual(feed.total_count, 1)
+            self.assertEqual(feed.records[0].action_id, "pull")
+            self.assertEqual(feed.records[0].status, "failed")
+            self.assertEqual(feed.records[0].level, "danger")
+            self.assertEqual(feed.records[0].message, "RuntimeError: network down")
+
     def test_load_workspace_content_rejects_workspace_snapshot_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
