@@ -478,6 +478,96 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertTrue(summary.state.has_unresolved_conflicts)
             self.assertEqual(summary.changes.change_count, 0)
 
+    def test_build_sync_panel_model_prioritizes_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(
+                    connection,
+                    SyncApplyJournalRecord(
+                        vault_id="vault-001",
+                        journal_id="journal-123",
+                        target_revision=8,
+                        target_manifest_hash="sha256:head8",
+                        phase="materializing",
+                        created_at=1770000040600,
+                        updated_at=1770000040600,
+                        ops_hash="sha256:ops8",
+                    ),
+                )
+
+            panel = service.build_sync_panel_model()
+
+            self.assertEqual(panel.level, "danger")
+            self.assertEqual(panel.primary_action.action_id, "recover-pull-apply")
+            self.assertEqual(panel.conflict_badge_count, 0)
+            self.assertEqual(panel.change_badge_count, 0)
+
+    def test_build_sync_panel_model_prioritizes_conflicts_over_pending_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, payload, _ = self._seed_workspace(root)
+            conflict_path = root / "Notes" / "Live (conflict 2026-04-29 Desktop-Win).md"
+            conflict_path.write_bytes(payload + b" conflict")
+            conflict_hash = "sha256:" + hashlib.sha256(conflict_path.read_bytes()).hexdigest()
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                FileMapDocument(
+                    vault_id="vault-001",
+                    updated_at=1770000040100,
+                    files=[
+                        FileRecord(
+                            file_id="file-live",
+                            path="Notes/Live.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000030090,
+                            content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
+                            meta={
+                                "blob_id": "blob-live",
+                                "size": len(payload),
+                                "mtime": 1770000030080,
+                                "mime_type": "text/markdown",
+                            },
+                        ),
+                        FileRecord(
+                            file_id="file-conflict",
+                            path="Notes/Live (conflict 2026-04-29 Desktop-Win).md",
+                            type="note",
+                            status="conflict_copy",
+                            updated_at=1770000040100,
+                            content_hash=conflict_hash,
+                            conflict_source_file_id="file-live",
+                        ),
+                    ],
+                ),
+            )
+            live_path = root / "Notes" / "Live.md"
+            live_path.write_bytes(payload + b" modified")
+
+            panel = service.build_sync_panel_model()
+
+            self.assertEqual(panel.level, "warning")
+            self.assertEqual(panel.primary_action.action_id, "list-conflicts")
+            self.assertEqual(panel.conflict_badge_count, 1)
+            self.assertGreaterEqual(panel.change_badge_count, 1)
+
+    def test_build_sync_panel_model_marks_pending_changes_ready_for_submit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, payload, _ = self._seed_workspace(root)
+            live_path = root / "Notes" / "Live.md"
+            live_path.write_bytes(payload + b" modified")
+
+            panel = service.build_sync_panel_model()
+
+            self.assertEqual(panel.level, "info")
+            self.assertEqual(panel.primary_action.action_id, "submit-detected-commit")
+            self.assertTrue(panel.primary_action.enabled)
+            self.assertGreaterEqual(panel.change_badge_count, 1)
+            self.assertEqual(panel.conflict_badge_count, 0)
+
     def test_load_workspace_content_rejects_workspace_snapshot_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
