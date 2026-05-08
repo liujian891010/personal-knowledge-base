@@ -4,11 +4,11 @@ import hashlib
 import mimetypes
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from vault_core import FileMapDocument, FileRecord, TombstoneRecord
 from vault_core.constants import NOTEAPP_DIRNAME, VAULTINFO_FILENAME
-from vault_core.operations import mark_deleted
+from vault_core.operations import add_file, mark_deleted
 
 from .crypto import build_placeholder_blob_id
 
@@ -40,6 +40,13 @@ def _infer_file_type(relative_path: str) -> str:
     if normalized.suffix.lower() in {".md", ".markdown"}:
         return "note"
     return "attachment"
+
+
+def build_placeholder_file_id(relative_path: str) -> str:
+    digest = hashlib.sha256(
+        b"pkb-placeholder-file-id-v1\x00" + relative_path.encode("utf-8")
+    ).hexdigest()
+    return f"file-{digest}"
 
 
 def _iter_workspace_files(vault_root: Path) -> Iterable[Path]:
@@ -191,14 +198,17 @@ def build_tracked_change_commit_plan(
     tombstones: Optional[Iterable[TombstoneRecord]] = None,
     current_local_delete_sequence: int = 0,
     deleted_by_device: Optional[str] = None,
+    file_id_builder: Optional[Callable[[str], str]] = None,
 ) -> DesktopTrackedChangeCommitPlan:
     change_set = detect_local_workspace_changes(vault_root, document)
     unsupported = [
         change
         for change in change_set.changes
-        if change.kind not in {"modified", "missing"}
-        or change.record_status != "active"
-        or change.file_id is None
+        if (
+            change.kind in {"modified", "missing"}
+            and (change.record_status != "active" or change.file_id is None)
+        )
+        or change.kind not in {"modified", "missing", "untracked"}
     ]
     if unsupported:
         unsupported_kinds = ", ".join(
@@ -208,7 +218,7 @@ def build_tracked_change_commit_plan(
             "detected local changes include unsupported items for tracked submit: "
             + unsupported_kinds
         )
-    if not change_set.modified_file_ids and not change_set.missing_file_ids:
+    if not change_set.changes:
         raise ValueError("no supported tracked changes detected")
 
     modified_file_id_set = set(change_set.modified_file_ids)
@@ -217,6 +227,7 @@ def build_tracked_change_commit_plan(
     working_document = document
     resolved_tombstones = list(tombstones or [])
     local_delete_sequence = current_local_delete_sequence
+    resolve_file_id = build_placeholder_file_id if file_id_builder is None else file_id_builder
 
     updated_files: list[FileRecord] = []
 
@@ -273,6 +284,61 @@ def build_tracked_change_commit_plan(
             deleted_by_device=deleted_by_device,
         )
         resolved_tombstones.append(tombstone)
+
+    for change in change_set.changes:
+        if change.kind != "untracked":
+            continue
+        relative_path = _normalize_relative_path(change.path)
+        path = _resolve_workspace_file_path(vault_root, relative_path)
+        payload = path.read_bytes()
+        stat = path.stat()
+        content_hash = _compute_content_hash(payload)
+        file_id = resolve_file_id(relative_path)
+        mtime_ms = stat.st_mtime_ns // 1_000_000
+        working_document = add_file(
+            working_document,
+            file_id=file_id,
+            path=relative_path,
+            type=change.file_type,
+            updated_at=mtime_ms,
+            content_hash=content_hash,
+        )
+        appended = []
+        for record in working_document.files:
+            if record.file_id != file_id:
+                appended.append(record)
+                continue
+            appended.append(
+                FileRecord(
+                    file_id=file_id,
+                    path=relative_path,
+                    type=change.file_type,
+                    status="active",
+                    updated_at=mtime_ms,
+                    content_hash=content_hash,
+                    last_known_revision=None,
+                    meta={
+                        "blob_id": build_placeholder_blob_id(content_hash),
+                        "size": len(payload),
+                        "mtime": mtime_ms,
+                        "mime_type": mimetypes.guess_type(relative_path)[0],
+                    },
+                )
+            )
+        working_document = working_document.replace_files(appended, updated_at=max(working_document.updated_at, mtime_ms))
+        content_by_file_id[file_id] = payload
+
+    for record in working_document.files:
+        if record.status != "active" or record.file_id in content_by_file_id:
+            continue
+        path = _resolve_workspace_file_path(vault_root, record.path)
+        payload = path.read_bytes()
+        content_hash = _compute_content_hash(payload)
+        if content_hash != record.content_hash:
+            raise ValueError(
+                f"active file drifted outside detected change plan: {record.file_id}"
+            )
+        content_by_file_id[record.file_id] = payload
 
     return DesktopTrackedChangeCommitPlan(
         change_set=change_set,
