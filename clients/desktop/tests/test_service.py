@@ -1389,6 +1389,49 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(recovered.isolated_staging_paths, [])
             self.assertIsNone(recovered.removed_plan_path)
 
+    def test_resume_pull_apply_recovery_isolates_unjournaled_pull_apply_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            staging_path = root / ".noteapp" / "staging" / "leftover.staging"
+            staging_path.parent.mkdir(parents=True, exist_ok=True)
+            staging_path.write_text("payload", encoding="utf-8")
+            service.workspace.paths.sync_apply_plan_path.parent.mkdir(parents=True, exist_ok=True)
+            service.workspace.paths.sync_apply_plan_path.write_text("{}", encoding="utf-8")
+
+            recovered = service.resume_pull_apply_recovery(normalized_at=1770000040200)
+
+            self.assertEqual(recovered.mode, "orphaned")
+            self.assertIsNone(recovered.journal_phase)
+            self.assertEqual(recovered.state.last_manifest_summary_status, "stale")
+            self.assertIsNone(recovered.state.last_manifest_summary)
+            self.assertEqual(recovered.removed_staging_paths, [])
+            self.assertEqual(len(recovered.isolated_staging_paths), 1)
+            self.assertFalse(staging_path.exists())
+            self.assertEqual(recovered.isolated_staging_paths[0].parent.name, "staging-orphans")
+            self.assertEqual(recovered.removed_plan_path, service.workspace.paths.sync_apply_plan_path)
+            self.assertFalse(service.workspace.paths.sync_apply_plan_path.exists())
+
+    def test_resume_pull_apply_recovery_ignores_unjournaled_commit_blob_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            blob_staging_path = root / ".noteapp" / "staging" / "blob-live.blob.staging"
+            blob_staging_path.parent.mkdir(parents=True, exist_ok=True)
+            blob_staging_path.write_bytes(b"blob")
+
+            recovered = service.resume_pull_apply_recovery(normalized_at=1770000040200)
+
+            self.assertEqual(recovered.mode, "idle")
+            self.assertIsNone(recovered.journal_phase)
+            self.assertIsNone(recovered.state)
+            self.assertEqual(recovered.removed_staging_paths, [])
+            self.assertEqual(recovered.isolated_staging_paths, [])
+            self.assertTrue(blob_staging_path.exists())
+            self.assertIsNone(recovered.removed_plan_path)
+
     def test_resume_pull_apply_recovery_finalizes_finalizing_journal(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
