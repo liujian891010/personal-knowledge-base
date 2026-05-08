@@ -363,7 +363,10 @@ class DesktopSyncService:
                 "pull apply requires a later two-phase materialization boundary for blocking paths: "
                 + ", ".join(plan.blocking_paths)
             )
-        resolved = self.download_and_decrypt_pull_required_blobs(pull)
+        resolved = self.download_and_decrypt_pull_required_blobs(
+            pull,
+            apply_plan=plan,
+        )
         staged = self.stage_pull_required_plaintext_for_apply(
             resolved,
             started_at=rewritten_at,
@@ -532,6 +535,8 @@ class DesktopSyncService:
     def build_pull_required_blob_plan(
         self,
         pull: PullSyncSessionResult,
+        *,
+        apply_plan: Optional[DesktopPullApplyPlan] = None,
     ) -> DesktopPullRequiredBlobPlan:
         applied = pull.pull.reconcile.applied
         if applied is None:
@@ -553,6 +558,22 @@ class DesktopSyncService:
             )
 
         required_blob_id_set = set(applied.required_blob_ids)
+        manifest_entry_by_file_id = {
+            entry.file_id: entry
+            for entry in manifest.sorted_files()
+        }
+        if apply_plan is not None:
+            for move in apply_plan.moves:
+                entry = manifest_entry_by_file_id.get(move.file_id)
+                if entry is None:
+                    raise ValueError(f"pull manifest is missing move target file_id: {move.file_id}")
+                source_path = _resolve_workspace_file_path(self.workspace.vault_root, move.source_path)
+                if not source_path.exists() or not source_path.is_file():
+                    required_blob_id_set.add(entry.blob_id)
+                    continue
+                actual_hash = _compute_content_hash(source_path.read_bytes())
+                if actual_hash != move.content_hash:
+                    required_blob_id_set.add(entry.blob_id)
         files: list[DesktopPullRequiredBlobFile] = []
         blob_ids: list[str] = []
         seen_blob_ids: set[str] = set()
@@ -598,8 +619,13 @@ class DesktopSyncService:
     def download_and_decrypt_pull_required_blobs(
         self,
         pull: PullSyncSessionResult,
+        *,
+        apply_plan: Optional[DesktopPullApplyPlan] = None,
     ) -> DesktopPullRequiredBlobResult:
-        plan = self.build_pull_required_blob_plan(pull)
+        plan = self.build_pull_required_blob_plan(
+            pull,
+            apply_plan=apply_plan,
+        )
         download = None
         downloaded_blobs: dict[str, bytes] = {}
         if plan.blob_ids:
@@ -833,6 +859,29 @@ class DesktopSyncService:
                 source_path = _resolve_workspace_file_path(self.workspace.vault_root, item.source_path)
                 move_staging_path = _resolve_pull_apply_staging_path(self.workspace.vault_root, item.file_id)
                 if source_path.exists():
+                    payload = source_path.read_bytes()
+                    actual_hash = _compute_content_hash(payload)
+                    if actual_hash != item.content_hash:
+                        self._preserve_dirty_pull_conflict_copy(
+                            connection,
+                            source_file_id=item.file_id,
+                            live_path=source_path,
+                            original_relative_path=item.source_path,
+                            expected_content_hash=item.content_hash,
+                            materialized_at=materialized_at,
+                        )
+                        if not move_staging_path.exists() or not move_staging_path.is_file():
+                            raise FileNotFoundError(
+                                f"staged pull payload required for dirty move conflict: {item.file_id}"
+                            )
+                        staged_hash = _compute_content_hash(move_staging_path.read_bytes())
+                        if staged_hash != item.content_hash:
+                            raise ValueError(
+                                f"staged pull payload hash mismatch for file_id {item.file_id}: "
+                                f"expected {item.content_hash}, got {staged_hash}"
+                            )
+                        source_path.unlink(missing_ok=True)
+                        continue
                     move_staging_path.parent.mkdir(parents=True, exist_ok=True)
                     source_path.replace(move_staging_path)
                     continue
@@ -898,6 +947,41 @@ class DesktopSyncService:
                     source_path = _resolve_workspace_file_path(self.workspace.vault_root, item.source_path)
                 target_path = _resolve_workspace_file_path(self.workspace.vault_root, item.target_path)
                 if source_path.exists():
+                    payload = source_path.read_bytes()
+                    actual_hash = _compute_content_hash(payload)
+                    if actual_hash != item.content_hash:
+                        if item.source_path in blocking_paths or item.target_path in blocking_paths:
+                            raise ValueError(
+                                f"blocking move staging hash mismatch for file_id {item.file_id}: "
+                                f"expected {item.content_hash}, got {actual_hash}"
+                            )
+                        self._preserve_dirty_pull_conflict_copy(
+                            connection,
+                            source_file_id=item.file_id,
+                            live_path=source_path,
+                            original_relative_path=item.source_path,
+                            expected_content_hash=item.content_hash,
+                            materialized_at=materialized_at,
+                        )
+                        staged_source_path = _resolve_pull_apply_staging_path(
+                            self.workspace.vault_root,
+                            item.file_id,
+                        )
+                        if not staged_source_path.exists() or not staged_source_path.is_file():
+                            raise FileNotFoundError(
+                                f"staged pull payload required for dirty move conflict: {item.file_id}"
+                            )
+                        staged_payload = staged_source_path.read_bytes()
+                        staged_hash = _compute_content_hash(staged_payload)
+                        if staged_hash != item.content_hash:
+                            raise ValueError(
+                                f"staged pull payload hash mismatch for file_id {item.file_id}: "
+                                f"expected {item.content_hash}, got {staged_hash}"
+                            )
+                        _write_bytes_atomic(target_path, staged_payload)
+                        source_path.unlink(missing_ok=True)
+                        moved_paths[item.file_id] = target_path
+                        continue
                     target_path.parent.mkdir(parents=True, exist_ok=True)
                     source_path.replace(target_path)
                     moved_paths[item.file_id] = target_path

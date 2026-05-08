@@ -642,6 +642,52 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(resolved.plaintext_by_file_id["file-a"], payload)
             self.assertEqual(resolved.plaintext_by_file_id["file-b"], payload)
 
+    def test_build_pull_required_blob_plan_includes_dirty_move_source_blob(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            move_source = root / "Notes" / "Move-old.md"
+            move_source.write_bytes(b"# local dirty move\n")
+            pull = self._build_pull_result(
+                required_blob_ids=[],
+                manifest_files=[
+                    ManifestFileEntry(
+                        file_id="file-move",
+                        path="Notes/Move-new.md",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# canonical move\n").hexdigest(),
+                        blob_id="blob-move",
+                        size=len(b"# canonical move\n"),
+                        mtime=1770000030001,
+                    )
+                ],
+            )
+            apply_plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[],
+                moves=[
+                    DesktopPullApplyMoveFile(
+                        file_id="file-move",
+                        source_path="Notes/Move-old.md",
+                        target_path="Notes/Move-new.md",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# canonical move\n").hexdigest(),
+                    )
+                ],
+                deletes=[],
+                blocking_paths=[],
+                ops_hash="sha256:ops8",
+            )
+
+            plan = service.build_pull_required_blob_plan(
+                pull,
+                apply_plan=apply_plan,
+            )
+
+            self.assertEqual(plan.blob_ids, ["blob-move"])
+            self.assertEqual([item.file_id for item in plan.files], ["file-move"])
+
     def test_build_pull_required_blob_plan_rejects_required_blob_ids_missing_from_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
@@ -1311,6 +1357,84 @@ class DesktopSyncServiceTests(unittest.TestCase):
             )
             self.assertEqual(execution.deleted_paths, [])
             self.assertEqual(execution.journal.phase, "materializing")
+
+    def test_apply_staged_pull_plan_materializes_dirty_move_from_staged_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            move_source = root / "Notes" / "Move-old.md"
+            move_source.write_bytes(b"# local dirty move\n")
+            staging_path = root / ".noteapp" / "staging" / "file-move.staging"
+            staging_path.parent.mkdir(parents=True, exist_ok=True)
+            staging_path.write_bytes(b"# canonical move\n")
+
+            snapshot = service.load_snapshot()
+            document = snapshot.document.replace_files(
+                [
+                    *snapshot.document.files,
+                    FileRecord(
+                        file_id="file-move",
+                        path="Notes/Move-new.md",
+                        type="note",
+                        status="active",
+                        updated_at=1770000040150,
+                        content_hash="sha256:" + hashlib.sha256(b"# canonical move\n").hexdigest(),
+                        last_known_revision=8,
+                    ),
+                ],
+                updated_at=1770000040150,
+            )
+            write_filemap_atomic(service.workspace.paths.filemap_path, document)
+
+            journal = SyncApplyJournalRecord(
+                vault_id="vault-001",
+                journal_id="journal-1",
+                target_revision=8,
+                target_manifest_hash="sha256:head8",
+                phase="staging",
+                ops_hash="sha256:old",
+                created_at=1770000040100,
+                updated_at=1770000040100,
+            )
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(connection, journal)
+
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[],
+                moves=[
+                    DesktopPullApplyMoveFile(
+                        file_id="file-move",
+                        source_path="Notes/Move-old.md",
+                        target_path="Notes/Move-new.md",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(b"# canonical move\n").hexdigest(),
+                    )
+                ],
+                deletes=[],
+                blocking_paths=[],
+                ops_hash="sha256:ops8",
+            )
+            staged = DesktopPullApplyStagingResult(
+                journal=journal,
+                written_staging_paths={"file-move": staging_path},
+            )
+
+            service.apply_staged_pull_plan(
+                plan,
+                staged,
+                materialized_at=1770000040200,
+            )
+            snapshot = service.load_snapshot()
+            conflict_records = [record for record in snapshot.document.files if record.status == "conflict_copy"]
+
+            self.assertFalse(move_source.exists())
+            self.assertEqual((root / "Notes" / "Move-new.md").read_bytes(), b"# canonical move\n")
+            self.assertTrue(snapshot.state.has_unresolved_conflicts)
+            self.assertEqual(len(conflict_records), 1)
+            self.assertEqual(conflict_records[0].conflict_source_file_id, "file-move")
+            self.assertEqual((root / conflict_records[0].path).read_bytes(), b"# local dirty move\n")
 
     def test_finalize_applied_pull_plan_clears_journal_and_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
