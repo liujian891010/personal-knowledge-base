@@ -18,6 +18,10 @@ class FakeService:
         self.calls.append(("recover", normalized_at))
         return {"step": "recover", "normalized_at": normalized_at}
 
+    def resume_pull_apply_recovery(self, *, normalized_at: int):
+        self.calls.append(("recover-pull-apply", normalized_at))
+        return {"step": "recover-pull-apply", "normalized_at": normalized_at}
+
     def pull_and_ack(self, *, rewritten_at: int):
         self.calls.append(("pull", rewritten_at))
         return {"step": "pull", "rewritten_at": rewritten_at}
@@ -126,6 +130,10 @@ class DesktopSyncRunnerTests(unittest.TestCase):
             {"step": "recover", "normalized_at": 1770000050100},
         )
         self.assertEqual(
+            result.pull_apply_recovery,
+            {"step": "recover-pull-apply", "normalized_at": 1770000050100},
+        )
+        self.assertEqual(
             result.pull,
             {"step": "pull", "rewritten_at": 1770000050200},
         )
@@ -135,6 +143,7 @@ class DesktopSyncRunnerTests(unittest.TestCase):
             [
                 ("init", 1770000050000),
                 ("recover", 1770000050100),
+                ("recover-pull-apply", 1770000050100),
                 ("pull", 1770000050200),
                 ("status", None),
             ],
@@ -170,6 +179,7 @@ class DesktopSyncRunnerTests(unittest.TestCase):
             [
                 ("init", 1770000051000),
                 ("recover", 1770000051010),
+                ("recover-pull-apply", 1770000051010),
                 (
                     "submit",
                     1770000051020,
@@ -200,6 +210,7 @@ class DesktopSyncRunnerTests(unittest.TestCase):
             [
                 ("init", 1770000051100),
                 ("recover", 1770000051110),
+                ("recover-pull-apply", 1770000051110),
                 ("submit", 1770000051120, ["file-a"], None, None, None),
                 ("pull", 1770000051130),
                 ("status", None),
@@ -233,6 +244,7 @@ class DesktopSyncRunnerTests(unittest.TestCase):
             [
                 ("init", 1770000051200),
                 ("recover", 1770000051210),
+                ("recover-pull-apply", 1770000051210),
                 ("submit-detected", 1770000051220, "intent-detected-001", 1770000051221),
                 ("pull", 1770000051230),
                 ("status", None),
@@ -257,6 +269,7 @@ class DesktopSyncRunnerTests(unittest.TestCase):
             [
                 ("init", 1770000051300),
                 ("recover", 1770000051310),
+                ("recover-pull-apply", 1770000051310),
                 ("submit-detected", 1770000051320, None, None),
                 ("pull", 1770000051330),
                 ("status", None),

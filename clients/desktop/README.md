@@ -56,6 +56,8 @@ $env:PYTHONPATH='packages/vault-core/src;.'; python -m clients.desktop.cli `
 
 For `sync-once`, `sync-loop`, `sync-cycle`, and `sync-cycle-loop`, these orchestration timestamps can now be omitted. The desktop client will derive a consistent ordered set from the current clock, while still allowing any explicit argument to override the generated value.
 
+Those higher-level orchestration paths now run both commit recovery and pull-apply recovery before any new submit or pull step, so an active `sync_apply_journal` is drained through the recovery path before normal sync work resumes.
+
 `sync-loop` runs bounded repeated `sync-once` iterations, with optional timestamp stepping and sleep interval:
 
 ```powershell

@@ -17,6 +17,7 @@ class DesktopSyncRunOnceResult:
     recovery: object
     pull: object
     final_snapshot: DesktopWorkspaceSnapshot
+    pull_apply_recovery: object | None = None
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class DesktopSyncCycleResult:
     submitted: Optional[object]
     pull: object
     final_snapshot: DesktopWorkspaceSnapshot
+    pull_apply_recovery: object | None = None
 
 
 @dataclass(frozen=True)
@@ -43,11 +45,15 @@ class DesktopSyncRunner:
         recovery = self.service.resume_commit_recovery(
             normalized_at=recovery_normalized_at,
         )
+        pull_apply_recovery = self.service.resume_pull_apply_recovery(
+            normalized_at=recovery_normalized_at,
+        )
         pull = self.service.pull_and_ack(rewritten_at=pull_rewritten_at)
         final_snapshot = self.service.load_snapshot()
         return DesktopSyncRunOnceResult(
             initialized=initialized,
             recovery=recovery,
+            pull_apply_recovery=pull_apply_recovery,
             pull=pull,
             final_snapshot=final_snapshot,
         )
@@ -67,6 +73,9 @@ class DesktopSyncRunner:
     ) -> DesktopSyncCycleResult:
         initialized = self.service.ensure_initialized(now_ms=init_now_ms)
         recovery = self.service.resume_commit_recovery(
+            normalized_at=recovery_normalized_at,
+        )
+        pull_apply_recovery = self.service.resume_pull_apply_recovery(
             normalized_at=recovery_normalized_at,
         )
 
@@ -110,6 +119,7 @@ class DesktopSyncRunner:
         return DesktopSyncCycleResult(
             initialized=initialized,
             recovery=recovery,
+            pull_apply_recovery=pull_apply_recovery,
             submitted=submitted,
             pull=pull,
             final_snapshot=final_snapshot,
