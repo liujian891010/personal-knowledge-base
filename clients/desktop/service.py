@@ -1328,9 +1328,14 @@ class DesktopSyncService:
         resolved_at: int,
         conflict_file_ids: Optional[Iterable[str]] = None,
         orphan_relative_paths: Optional[Iterable[str]] = None,
+        resolve_all: bool = False,
     ) -> DesktopConflictResolutionResult:
         requested_conflict_file_ids = list(dict.fromkeys(conflict_file_ids or []))
         requested_orphan_paths = list(dict.fromkeys(orphan_relative_paths or []))
+        if resolve_all:
+            status = self.list_conflicts()
+            requested_conflict_file_ids = [item.file_id for item in status.conflict_copies if item.file_id is not None]
+            requested_orphan_paths = [item.path for item in status.conflict_orphans]
         if not requested_conflict_file_ids and not requested_orphan_paths:
             raise ValueError("resolve-conflicts requires at least one conflict file_id or orphan path")
 
