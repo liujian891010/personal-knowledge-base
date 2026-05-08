@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from contextlib import closing, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -81,6 +82,7 @@ class DesktopSyncService:
     workspace: DesktopVaultWorkspace
     blob_crypto_provider: DesktopBlobCryptoProvider
     file_id_builder: Callable[[str], str]
+    detected_submit_plan_hook: Optional[Callable[[DesktopTrackedChangeCommitPlan], None]] = None
 
     @property
     def config(self) -> DesktopSyncHttpConfig:
@@ -131,6 +133,58 @@ class DesktopSyncService:
             content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
             content_by_file_id[file_id] = content_path.read_bytes()
 
+        return content_by_file_id
+
+    def load_workspace_content_for_document(
+        self,
+        document: FileMapDocument,
+    ) -> dict[str, bytes]:
+        drifted_file_ids: list[str] = []
+        content_by_file_id: dict[str, bytes] = {}
+
+        for record in document.files:
+            if record.status != "active":
+                continue
+            content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            if not content_path.exists() or not content_path.is_file():
+                drifted_file_ids.append(record.file_id)
+                continue
+            payload = content_path.read_bytes()
+            content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
+            meta = record.meta or {}
+            mtime_ms = content_path.stat().st_mtime_ns // 1_000_000
+            size_bytes = len(payload)
+            expected_token = meta.get("source_version_token")
+            if not isinstance(expected_token, str) or not expected_token:
+                if record.content_hash is None:
+                    drifted_file_ids.append(record.file_id)
+                    continue
+                expected_mtime = meta.get("mtime")
+                expected_size = meta.get("size")
+                if (
+                    isinstance(expected_mtime, int)
+                    and expected_mtime >= 0
+                    and isinstance(expected_size, int)
+                    and expected_size >= 0
+                ):
+                    expected_token = (
+                        f"mtime:{expected_mtime}:size:{expected_size}:hash:{record.content_hash}"
+                    )
+                else:
+                    expected_token = f"updated_at:{record.updated_at}:hash:{record.content_hash}"
+            current_token = f"mtime:{mtime_ms}:size:{size_bytes}:hash:{content_hash}"
+            if (
+                content_hash != record.content_hash
+                or current_token != expected_token
+            ):
+                drifted_file_ids.append(record.file_id)
+                continue
+            content_by_file_id[record.file_id] = payload
+
+        if drifted_file_ids:
+            raise ValueError(
+                "workspace snapshot drift detected: " + ", ".join(sorted(drifted_file_ids))
+            )
         return content_by_file_id
 
     def build_tracked_change_commit_plan(self) -> DesktopTrackedChangeCommitPlan:
@@ -313,6 +367,13 @@ class DesktopSyncService:
             file_id_builder=self.file_id_builder,
             blob_id_builder=self.blob_crypto_provider.build_blob_id,
         )
+        if self.detected_submit_plan_hook is not None:
+            self.detected_submit_plan_hook(plan)
+        refreshed_content_by_file_id = self.load_workspace_content_for_document(plan.document)
+        plan = replace(
+            plan,
+            content_by_file_id=refreshed_content_by_file_id,
+        )
         return self._submit_tracked_change_plan(
             snapshot,
             plan,
@@ -344,6 +405,13 @@ class DesktopSyncService:
             deleted_by_device=self.config.device_id,
             file_id_builder=self.file_id_builder,
             blob_id_builder=self.blob_crypto_provider.build_blob_id,
+        )
+        if self.detected_submit_plan_hook is not None:
+            self.detected_submit_plan_hook(plan)
+        refreshed_content_by_file_id = self.load_workspace_content_for_document(plan.document)
+        plan = replace(
+            plan,
+            content_by_file_id=refreshed_content_by_file_id,
         )
         return self._submit_tracked_change_plan(
             snapshot,

@@ -5,7 +5,7 @@ import json
 import tempfile
 import unittest
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.request import Request
 
@@ -148,6 +148,8 @@ class DesktopSyncServiceTests(unittest.TestCase):
         live_note_path = root / "Notes" / "Live.md"
         live_note_path.parent.mkdir(parents=True, exist_ok=True)
         live_note_path.write_bytes(payload)
+        live_stat = live_note_path.stat()
+        live_mtime_ms = live_stat.st_mtime_ns // 1_000_000
         document = FileMapDocument(
             vault_id="vault-001",
             updated_at=1770000030100,
@@ -157,12 +159,12 @@ class DesktopSyncServiceTests(unittest.TestCase):
                     path="Notes/Live.md",
                     type="note",
                     status="active",
-                    updated_at=1770000030090,
+                    updated_at=live_mtime_ms,
                     content_hash="sha256:" + hashlib.sha256(payload).hexdigest(),
                     meta={
                         "blob_id": "blob-live",
                         "size": len(payload),
-                        "mtime": 1770000030080,
+                        "mtime": live_mtime_ms,
                         "mime_type": "text/markdown",
                     },
                 )
@@ -196,6 +198,15 @@ class DesktopSyncServiceTests(unittest.TestCase):
             service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
 
             content_by_file_id = service.load_workspace_content(["file-live"])
+
+            self.assertEqual(content_by_file_id, {"file-live": payload})
+
+    def test_load_workspace_content_for_document_validates_snapshot_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
+            snapshot = service.load_snapshot()
+
+            content_by_file_id = service.load_workspace_content_for_document(snapshot.document)
 
             self.assertEqual(content_by_file_id, {"file-live": payload})
 
@@ -508,6 +519,27 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 blob_opener.calls[0][2],
                 build_placeholder_encrypted_blob_payload(updated_payload),
             )
+
+    def test_submit_detected_changes_rejects_workspace_snapshot_drift_after_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, payload, _ = self._seed_workspace(Path(tmpdir))
+            updated_payload = payload + b"updated"
+            drifted_payload = updated_payload + b"-drift"
+            live_path = Path(tmpdir) / "Notes" / "Live.md"
+            live_path.write_bytes(updated_payload)
+            service = replace(
+                service,
+                detected_submit_plan_hook=lambda _: live_path.write_bytes(drifted_payload),
+            )
+
+            with self.assertRaisesRegex(ValueError, "workspace snapshot drift detected: file-live"):
+                service.submit_detected_changes(
+                    created_at=1770000030200,
+                    commit_intent_id="intent-drift-001",
+                )
+
+            self.assertEqual(api_opener.calls, [])
+            self.assertEqual(blob_opener.calls, [])
 
     def test_submit_detected_changes_uses_injected_blob_crypto_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
