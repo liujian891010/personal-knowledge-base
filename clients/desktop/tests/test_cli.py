@@ -1649,6 +1649,51 @@ class DesktopCliTests(unittest.TestCase):
             ],
         )
 
+    def test_sync_cycle_command_pulls_before_submit_when_recovery_requires_full_pull(self) -> None:
+        self.service.pull_apply_recovery_payload = {
+            "kind": "recover-pull-apply",
+            "normalized_at": 1770000040540,
+            "mode": "degraded",
+            "state": {
+                "last_manifest_summary_status": "stale",
+            },
+        }
+
+        exit_code, _ = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "sync-cycle",
+            "--now-ms",
+            "1770000040530",
+            "--normalized-at",
+            "1770000040540",
+            "--submit-created-at",
+            "1770000040550",
+            "--file-id",
+            "file-a",
+            "--rewritten-at",
+            "1770000040560",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("init", 1770000040530),
+                ("recover", 1770000040540),
+                ("recover-pull-apply", 1770000040540),
+                ("pull-and-apply", 1770000040560),
+                ("submit-workspace-commit", 1770000040550, ["file-a"], None, 1770000040551, None),
+                ("status", None),
+            ],
+        )
+
     def test_sync_cycle_command_can_auto_generate_time_arguments(self) -> None:
         exit_code, payload = self._run(
             "--vault-root",

@@ -34,6 +34,20 @@ class DesktopSyncCycleResult:
 class DesktopSyncRunner:
     service: DesktopSyncService
 
+    @staticmethod
+    def _recovery_requires_pull_before_submit(recovery: object | None) -> bool:
+        if recovery is None:
+            return False
+        if isinstance(recovery, dict):
+            state = recovery.get("state")
+            if isinstance(state, dict):
+                return state.get("last_manifest_summary_status") != "valid"
+            return recovery.get("mode") in {"degraded", "orphaned"}
+        state = getattr(recovery, "state", None)
+        if state is not None:
+            return getattr(state, "last_manifest_summary_status", None) != "valid"
+        return getattr(recovery, "mode", None) in {"degraded", "orphaned"}
+
     def run_once(
         self,
         *,
@@ -78,6 +92,9 @@ class DesktopSyncRunner:
         pull_apply_recovery = self.service.resume_pull_apply_recovery(
             normalized_at=recovery_normalized_at,
         )
+        pull: object | None = None
+        if self._recovery_requires_pull_before_submit(pull_apply_recovery):
+            pull = self.service.pull_and_apply(rewritten_at=pull_rewritten_at)
 
         resolved_submit_file_ids = None if submit_file_ids is None else list(submit_file_ids)
         if submit_created_at is None:
@@ -114,7 +131,8 @@ class DesktopSyncRunner:
                     cleanup_normalized_at=cleanup_normalized_at,
                 )
 
-        pull = self.service.pull_and_apply(rewritten_at=pull_rewritten_at)
+        if pull is None:
+            pull = self.service.pull_and_apply(rewritten_at=pull_rewritten_at)
         final_snapshot = self.service.load_snapshot()
         return DesktopSyncCycleResult(
             initialized=initialized,
