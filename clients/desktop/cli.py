@@ -21,6 +21,7 @@ from .scheduler import (
 from .service import DesktopSyncService, build_desktop_sync_service
 from .sync_runtime import DesktopSyncHttpConfig
 from .timing import resolve_desktop_sync_time_plan
+from .workspace import DesktopVaultPaths
 from .worker import DesktopSyncWorker, DesktopSyncWorkerConfig
 
 ServiceBuilder = Callable[[DesktopSyncHttpConfig, Path], DesktopSyncService]
@@ -229,7 +230,8 @@ def run_cli(
         device_id=args.device_id,
         bearer_token=args.bearer_token,
     )
-    service = service_builder(config, Path(args.vault_root))
+    vault_root = Path(args.vault_root)
+    service = service_builder(config, vault_root)
 
     if args.command == "init":
         result = service.ensure_initialized(now_ms=args.now_ms)
@@ -378,6 +380,7 @@ def run_cli(
             DesktopSyncRunner(service),
             sleep=sleep,
             now_ms_provider=resolved_now_ms_provider,
+            state_path=DesktopVaultPaths.from_root(vault_root).worker_state_path,
         ).run(
             DesktopSyncWorkerConfig(
                 iterations=args.iterations,
