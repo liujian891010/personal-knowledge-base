@@ -115,9 +115,9 @@ After each worker run, the desktop client also writes the latest worker summary 
 
 Use `worker-state` to read the persisted local worker summary, and `worker-health` to read a condensed local health view derived from that state file.
 
-Use `detect-local-changes` to scan the current vault root for tracked file modifications, missing tracked files, and untracked local files before wiring automatic submit flows.
+Use `detect-local-changes` to scan the current vault root for tracked file modifications, missing tracked files, and untracked local files before wiring automatic submit flows. A local rename still appears as a `missing + untracked` pair at scan time.
 
-Use `submit-detected-commit` to auto-submit detected `modified`, `missing`, and `untracked` changes with placeholder `file_id`, `blob_id`, and encrypted blob wiring. The current safety boundary still rejects unsupported cases such as modified `conflict_copy` records.
+Use `submit-detected-commit` to auto-submit detected `modified`, `missing`, and `untracked` changes with placeholder `file_id`, `blob_id`, and encrypted blob wiring. The current boundary now folds an unambiguous same-content `missing + untracked` pair into a tracked rename that preserves the original `file_id`. Unsupported cases such as modified `conflict_copy` records are still rejected.
 
 `submit-commit` payload files use `file_id -> base64 bytes` JSON objects:
 
