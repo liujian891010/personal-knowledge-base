@@ -9,6 +9,7 @@ class FakeService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, int | None]] = []
         self.skip_detected_submit = False
+        self.pull_apply_recovery_result = None
 
     def ensure_initialized(self, *, now_ms=None):
         self.calls.append(("init", now_ms))
@@ -20,6 +21,8 @@ class FakeService:
 
     def resume_pull_apply_recovery(self, *, normalized_at: int):
         self.calls.append(("recover-pull-apply", normalized_at))
+        if self.pull_apply_recovery_result is not None:
+            return self.pull_apply_recovery_result
         return {"step": "recover-pull-apply", "normalized_at": normalized_at}
 
     def pull_and_apply(self, *, rewritten_at: int):
@@ -272,6 +275,38 @@ class DesktopSyncRunnerTests(unittest.TestCase):
                 ("recover-pull-apply", 1770000051310),
                 ("submit-detected", 1770000051320, None, None),
                 ("pull-and-apply", 1770000051330),
+                ("status", None),
+            ],
+        )
+
+    def test_run_cycle_pulls_before_submit_when_recovery_requires_full_pull(self) -> None:
+        service = FakeService()
+        service.pull_apply_recovery_result = {
+            "step": "recover-pull-apply",
+            "normalized_at": 1770000051410,
+            "mode": "degraded",
+            "state": {
+                "last_manifest_summary_status": "stale",
+            },
+        }
+
+        result = DesktopSyncRunner(service).run_cycle(
+            init_now_ms=1770000051400,
+            recovery_normalized_at=1770000051410,
+            submit_created_at=1770000051420,
+            submit_file_ids=["file-a"],
+            pull_rewritten_at=1770000051430,
+        )
+
+        self.assertEqual(result.pull["step"], "pull-and-apply")
+        self.assertEqual(
+            service.calls,
+            [
+                ("init", 1770000051400),
+                ("recover", 1770000051410),
+                ("recover-pull-apply", 1770000051410),
+                ("pull-and-apply", 1770000051430),
+                ("submit", 1770000051420, ["file-a"], None, None, None),
                 ("status", None),
             ],
         )
