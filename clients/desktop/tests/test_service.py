@@ -421,6 +421,22 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(api_opener.calls, [])
             self.assertEqual(blob_opener.calls, [])
 
+    def test_submit_detected_changes_if_needed_ignores_ai_raw_and_log_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, _, _ = self._seed_workspace(Path(tmpdir))
+            (Path(tmpdir) / ".ai" / "raw").mkdir(parents=True, exist_ok=True)
+            (Path(tmpdir) / ".ai" / "raw" / "capture.txt").write_text("raw", encoding="utf-8")
+            (Path(tmpdir) / ".ai" / "log.md").write_text("log", encoding="utf-8")
+
+            result = service.submit_detected_changes_if_needed(
+                created_at=1770000030200,
+                commit_intent_id="intent-ai-skip-001",
+            )
+
+            self.assertIsNone(result)
+            self.assertEqual(api_opener.calls, [])
+            self.assertEqual(blob_opener.calls, [])
+
     def test_submit_detected_changes_commits_modified_tracked_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, api_opener, blob_opener, payload, _ = self._seed_workspace(Path(tmpdir))

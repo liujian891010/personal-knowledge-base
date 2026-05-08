@@ -99,6 +99,29 @@ class DesktopChangeDetectionTests(unittest.TestCase):
             self.assertEqual(result.modified_file_ids, [])
             self.assertEqual(result.missing_file_ids, [])
 
+    def test_detect_local_workspace_changes_respects_ai_sync_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / ".ai" / "raw").mkdir(parents=True, exist_ok=True)
+            (root / ".ai" / "wiki").mkdir(parents=True, exist_ok=True)
+            (root / ".ai" / "raw" / "capture.txt").write_text("raw", encoding="utf-8")
+            (root / ".ai" / "log.md").write_text("log", encoding="utf-8")
+            (root / ".ai" / "index.md").write_text("# index\n", encoding="utf-8")
+            (root / ".ai" / "wiki" / "Topic.md").write_text("# wiki\n", encoding="utf-8")
+            (root / ".ai" / "AGENTS.md").write_text("# agents\n", encoding="utf-8")
+
+            result = detect_local_workspace_changes(
+                root,
+                FileMapDocument(vault_id="vault-001", updated_at=1770000050150),
+            )
+
+            self.assertEqual(result.change_count, 3)
+            self.assertEqual([item.path for item in result.changes], [".ai/AGENTS.md", ".ai/index.md", ".ai/wiki/Topic.md"])
+            self.assertEqual(
+                [item.file_type for item in result.changes],
+                ["ai_agents", "ai_index", "ai_wiki"],
+            )
+
     def test_build_tracked_change_commit_plan_projects_updated_document(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
