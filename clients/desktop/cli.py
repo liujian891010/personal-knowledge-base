@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional, Sequence, TextIO
 
 from vault_core import BlobDownloadSessionResult
 
+from .runner import DesktopSyncRunner
 from .service import DesktopSyncService, build_desktop_sync_service
 from .sync_runtime import DesktopSyncHttpConfig
 
@@ -94,6 +95,11 @@ def create_parser() -> argparse.ArgumentParser:
     recover_parser = subparsers.add_parser("recover")
     recover_parser.add_argument("--normalized-at", type=int, required=True)
 
+    sync_once_parser = subparsers.add_parser("sync-once")
+    sync_once_parser.add_argument("--normalized-at", type=int, required=True)
+    sync_once_parser.add_argument("--rewritten-at", type=int, required=True)
+    sync_once_parser.add_argument("--now-ms", type=int)
+
     download_parser = subparsers.add_parser("download-blobs")
     download_parser.add_argument("--blob-id", action="append", dest="blob_ids", required=True)
     download_parser.add_argument("--output-dir")
@@ -132,6 +138,12 @@ def run_cli(
         result = service.pull_and_ack(rewritten_at=args.rewritten_at)
     elif args.command == "recover":
         result = service.resume_commit_recovery(normalized_at=args.normalized_at)
+    elif args.command == "sync-once":
+        result = DesktopSyncRunner(service).run_once(
+            init_now_ms=args.now_ms,
+            recovery_normalized_at=args.normalized_at,
+            pull_rewritten_at=args.rewritten_at,
+        )
     elif args.command == "download-blobs":
         result = service.download_blobs(args.blob_ids)
         if args.output_dir:

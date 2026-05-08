@@ -1,4 +1,9 @@
 from .cli import build_cli_service, main
+from .runner import (
+    DesktopSyncRunOnceResult,
+    DesktopSyncRunner,
+    build_desktop_sync_runner,
+)
 from .sync_runtime import (
     DesktopSyncHttpConfig,
     DesktopSyncRuntime,
@@ -25,7 +30,10 @@ __all__ = [
     "DesktopCommitCleanupResult",
     "DesktopCommitSessionResult",
     "DesktopPreparedCommit",
+    "DesktopSyncRunOnceResult",
+    "DesktopSyncRunner",
     "DesktopSyncService",
+    "build_desktop_sync_runner",
     "build_cli_service",
     "DesktopVaultPaths",
     "DesktopVaultWorkspace",
