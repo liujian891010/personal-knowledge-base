@@ -1,4 +1,9 @@
 from .cli import build_cli_service, main
+from .change_detection import (
+    DesktopWorkspaceChangeRecord,
+    DesktopWorkspaceChangeSet,
+    detect_local_workspace_changes,
+)
 from .crypto import (
     build_placeholder_encrypted_blob_map,
     build_placeholder_encrypted_blob_payload,
@@ -83,6 +88,8 @@ __all__ = [
     "DesktopSyncTimePlan",
     "DesktopVaultPaths",
     "DesktopVaultWorkspace",
+    "DesktopWorkspaceChangeRecord",
+    "DesktopWorkspaceChangeSet",
     "DesktopWorkspaceSnapshot",
     "build_placeholder_encrypted_blob_map",
     "build_placeholder_encrypted_blob_payload",
@@ -91,6 +98,7 @@ __all__ = [
     "build_desktop_sync_runtime",
     "build_desktop_sync_session",
     "build_desktop_vault_workspace",
+    "detect_local_workspace_changes",
     "build_desktop_sync_worker_health",
     "build_desktop_sync_worker_state_record",
     "load_desktop_sync_worker_state",

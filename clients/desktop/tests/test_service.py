@@ -395,6 +395,16 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(state.started_at_ms, 1770000031000)
             self.assertEqual(health.status, "healthy")
 
+    def test_detect_local_changes_routes_workspace_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
+
+            (Path(tmpdir) / "Notes" / "Live.md").write_bytes(payload + b"updated")
+            changes = service.detect_local_changes()
+
+            self.assertEqual(changes.modified_file_ids, ["file-live"])
+            self.assertEqual(changes.change_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

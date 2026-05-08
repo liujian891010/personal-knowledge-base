@@ -115,6 +115,8 @@ After each worker run, the desktop client also writes the latest worker summary 
 
 Use `worker-state` to read the persisted local worker summary, and `worker-health` to read a condensed local health view derived from that state file.
 
+Use `detect-local-changes` to scan the current vault root for tracked file modifications, missing tracked files, and untracked local files before wiring automatic submit flows.
+
 `submit-commit` payload files use `file_id -> base64 bytes` JSON objects:
 
 ```json

@@ -29,6 +29,35 @@ class FakeService:
         self.calls: list[tuple[str, int | None]] = []
         self.fail_recover_at_calls: set[int] = set()
         self.fail_submit_workspace_at_calls: set[int] = set()
+        self.detect_local_changes_payload = {
+            "vault_id": "vault-001",
+            "tracked_record_count": 2,
+            "change_count": 2,
+            "modified_file_ids": ["file-a"],
+            "missing_file_ids": ["file-b"],
+            "changes": [
+                {
+                    "kind": "modified",
+                    "path": "Notes/A.md",
+                    "file_id": "file-a",
+                    "file_type": "note",
+                    "record_status": "active",
+                    "content_hash": "sha256:aaa",
+                    "size_bytes": 123,
+                    "mtime_ms": 1770000044900,
+                },
+                {
+                    "kind": "missing",
+                    "path": "Notes/B.md",
+                    "file_id": "file-b",
+                    "file_type": "note",
+                    "record_status": "active",
+                    "content_hash": "sha256:bbb",
+                    "size_bytes": None,
+                    "mtime_ms": None,
+                },
+            ],
+        }
         self.worker_state_payload = {
             "started_at_ms": 1770000045000,
             "finished_at_ms": 1770000045001,
@@ -87,6 +116,10 @@ class FakeService:
     def load_snapshot(self):
         self.calls.append(("status", None))
         return {"kind": "status", "files": 1}
+
+    def detect_local_changes(self):
+        self.calls.append(("detect-local-changes", None))
+        return self.detect_local_changes_payload
 
     def load_worker_state(self):
         self.calls.append(("worker-state", None))
@@ -254,6 +287,24 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload, {"files": 1, "kind": "status"})
         self.assertEqual(self.service.calls, [("status", None)])
+
+    def test_detect_local_changes_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "detect-local-changes",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["modified_file_ids"], ["file-a"])
+        self.assertEqual(payload["missing_file_ids"], ["file-b"])
+        self.assertEqual(self.service.calls, [("detect-local-changes", None)])
 
     def test_worker_state_command_routes_to_load_worker_state(self) -> None:
         exit_code, payload = self._run(
