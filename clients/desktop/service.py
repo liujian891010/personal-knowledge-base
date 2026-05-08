@@ -411,29 +411,36 @@ class DesktopSyncService:
             if journal.phase == "materializing":
                 materialized_snapshot = self.workspace._load_snapshot_from_connection(connection)
 
-        plan = self._load_pull_apply_plan_file()
-        if plan is not None:
-            self._validate_recovery_pull_apply_plan(plan, journal=journal)
-            staged = DesktopPullApplyStagingResult(journal=journal, written_staging_paths={})
-            execution = self.apply_staged_pull_plan(
-                plan,
-                staged,
-                materialized_at=normalized_at,
-            )
-            finalized = self.finalize_applied_pull_plan(
-                plan,
-                execution,
-                staged,
-                finalized_at=normalized_at,
-            )
-            return DesktopPullApplyRecoveryResult(
-                mode="replayed",
-                journal_phase=journal.phase,
-                state=None if finalized is None else finalized.state,
-                removed_staging_paths=[] if finalized is None else finalized.removed_staging_paths,
-                isolated_staging_paths=[],
-                removed_plan_path=None if finalized is None else finalized.removed_plan_path,
-            )
+        if journal.phase in {"staging", "materializing"}:
+            try:
+                plan = self._load_pull_apply_plan_file()
+            except (KeyError, TypeError, UnicodeDecodeError, ValueError):
+                return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
+            if plan is not None:
+                try:
+                    self._validate_recovery_pull_apply_plan(plan, journal=journal)
+                except ValueError:
+                    return self._degrade_pull_apply_recovery(journal, normalized_at=normalized_at)
+                staged = DesktopPullApplyStagingResult(journal=journal, written_staging_paths={})
+                execution = self.apply_staged_pull_plan(
+                    plan,
+                    staged,
+                    materialized_at=normalized_at,
+                )
+                finalized = self.finalize_applied_pull_plan(
+                    plan,
+                    execution,
+                    staged,
+                    finalized_at=normalized_at,
+                )
+                return DesktopPullApplyRecoveryResult(
+                    mode="replayed",
+                    journal_phase=journal.phase,
+                    state=None if finalized is None else finalized.state,
+                    removed_staging_paths=[] if finalized is None else finalized.removed_staging_paths,
+                    isolated_staging_paths=[],
+                    removed_plan_path=None if finalized is None else finalized.removed_plan_path,
+                )
         if journal.phase in {"filemap_rewrite", "finalizing"}:
             with closing(self.workspace._open_connection()) as connection:
                 finalizing_journal = (

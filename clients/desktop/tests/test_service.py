@@ -1576,6 +1576,129 @@ class DesktopSyncServiceTests(unittest.TestCase):
             with closing(open_database(service.workspace.paths.db_path)) as connection:
                 self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
 
+    def test_resume_pull_apply_recovery_degrades_staging_with_corrupt_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(
+                    connection,
+                    SyncApplyJournalRecord(
+                        vault_id="vault-001",
+                        journal_id="journal-1",
+                        target_revision=8,
+                        target_manifest_hash="sha256:head8",
+                        phase="staging",
+                        ops_hash="sha256:ops8",
+                        created_at=1770000040100,
+                        updated_at=1770000040200,
+                    ),
+                )
+
+            service.workspace.paths.sync_apply_plan_path.parent.mkdir(parents=True, exist_ok=True)
+            service.workspace.paths.sync_apply_plan_path.write_text("{bad json", encoding="utf-8")
+            staging_path = root / ".noteapp" / "staging" / "leftover.staging"
+            staging_path.parent.mkdir(parents=True, exist_ok=True)
+            staging_path.write_text("payload", encoding="utf-8")
+
+            recovered = service.resume_pull_apply_recovery(normalized_at=1770000040300)
+
+            self.assertEqual(recovered.mode, "degraded")
+            self.assertEqual(recovered.journal_phase, "staging")
+            self.assertEqual(recovered.state.last_manifest_summary_status, "stale")
+            self.assertEqual(recovered.removed_staging_paths, [])
+            self.assertEqual(len(recovered.isolated_staging_paths), 1)
+            self.assertEqual(recovered.removed_plan_path, service.workspace.paths.sync_apply_plan_path)
+            self.assertFalse(service.workspace.paths.sync_apply_plan_path.exists())
+            self.assertFalse(staging_path.exists())
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
+
+    def test_resume_pull_apply_recovery_degrades_staging_with_mismatched_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[],
+                moves=[],
+                deletes=[],
+                blocking_paths=[],
+                ops_hash="sha256:not-ops8",
+            )
+            service._write_pull_apply_plan_file(plan)
+
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(
+                    connection,
+                    SyncApplyJournalRecord(
+                        vault_id="vault-001",
+                        journal_id="journal-1",
+                        target_revision=8,
+                        target_manifest_hash="sha256:head8",
+                        phase="staging",
+                        ops_hash="sha256:ops8",
+                        created_at=1770000040100,
+                        updated_at=1770000040200,
+                    ),
+                )
+
+            staging_path = root / ".noteapp" / "staging" / "leftover.staging"
+            staging_path.parent.mkdir(parents=True, exist_ok=True)
+            staging_path.write_text("payload", encoding="utf-8")
+
+            recovered = service.resume_pull_apply_recovery(normalized_at=1770000040300)
+
+            self.assertEqual(recovered.mode, "degraded")
+            self.assertEqual(recovered.journal_phase, "staging")
+            self.assertEqual(recovered.state.last_manifest_summary_status, "stale")
+            self.assertEqual(recovered.removed_staging_paths, [])
+            self.assertEqual(len(recovered.isolated_staging_paths), 1)
+            self.assertEqual(recovered.removed_plan_path, service.workspace.paths.sync_apply_plan_path)
+            self.assertFalse(service.workspace.paths.sync_apply_plan_path.exists())
+            self.assertFalse(staging_path.exists())
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
+
+    def test_resume_pull_apply_recovery_ignores_corrupt_plan_during_finalizing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(
+                    connection,
+                    SyncApplyJournalRecord(
+                        vault_id="vault-001",
+                        journal_id="journal-1",
+                        target_revision=8,
+                        target_manifest_hash="sha256:head8",
+                        phase="finalizing",
+                        ops_hash="sha256:ops8",
+                        created_at=1770000040100,
+                        updated_at=1770000040200,
+                    ),
+                )
+
+            service.workspace.paths.sync_apply_plan_path.parent.mkdir(parents=True, exist_ok=True)
+            service.workspace.paths.sync_apply_plan_path.write_text("{bad json", encoding="utf-8")
+
+            recovered = service.resume_pull_apply_recovery(normalized_at=1770000040300)
+
+            self.assertEqual(recovered.mode, "finalized")
+            self.assertEqual(recovered.journal_phase, "finalizing")
+            self.assertEqual(recovered.state.last_applied_revision, 8)
+            self.assertEqual(recovered.state.pending_ack_to_server, [8])
+            self.assertEqual(recovered.removed_staging_paths, [])
+            self.assertEqual(recovered.isolated_staging_paths, [])
+            self.assertEqual(recovered.removed_plan_path, service.workspace.paths.sync_apply_plan_path)
+            self.assertFalse(service.workspace.paths.sync_apply_plan_path.exists())
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
+
     def test_prepare_commit_rejects_active_sync_apply_journal(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, payload, encrypted_payload = self._seed_workspace(Path(tmpdir))

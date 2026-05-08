@@ -38,6 +38,8 @@ Use `recover-pull-apply --normalized-at ...` when a previous pull apply left `sy
 
 During `pull --apply` / `pull --apply-nonblocking`, the desktop client now also persists a local `.noteapp/sync-apply-plan.json` replay plan. That lets `recover-pull-apply` re-run interrupted `staging` / `materializing` work instead of only handling final journal cleanup.
 
+If that replay plan is missing, corrupt, or no longer matches the active `sync_apply_journal`, `recover-pull-apply` now degrades safely by marking the local manifest summary stale, clearing the journal, and moving leftover staging files into `.noteapp/staging-orphans/`.
+
 `sync-once` is the current one-shot automation boundary:
 
 ```powershell
