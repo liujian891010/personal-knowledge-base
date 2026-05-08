@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import sys
 from dataclasses import asdict, is_dataclass
@@ -29,6 +30,21 @@ def build_cli_service(config: DesktopSyncHttpConfig, vault_root: Path) -> Deskto
     return build_desktop_sync_service(config, vault_root)
 
 
+def _load_base64_payload_map(path: Path) -> dict[str, bytes]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"payload file must contain an object: {path}")
+
+    decoded: dict[str, bytes] = {}
+    for file_id, encoded in payload.items():
+        if not isinstance(file_id, str) or not file_id:
+            raise ValueError(f"payload file contains invalid file_id: {path}")
+        if not isinstance(encoded, str):
+            raise ValueError(f"payload file values must be base64 strings: {path}")
+        decoded[file_id] = base64.b64decode(encoded.encode("ascii"), validate=True)
+    return decoded
+
+
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pkb-desktop-sync")
     parser.add_argument("--vault-root", required=True)
@@ -49,6 +65,13 @@ def create_parser() -> argparse.ArgumentParser:
 
     recover_parser = subparsers.add_parser("recover")
     recover_parser.add_argument("--normalized-at", type=int, required=True)
+
+    submit_parser = subparsers.add_parser("submit-commit")
+    submit_parser.add_argument("--created-at", type=int, required=True)
+    submit_parser.add_argument("--commit-intent-id")
+    submit_parser.add_argument("--cleanup-normalized-at", type=int)
+    submit_parser.add_argument("--content-map", required=True)
+    submit_parser.add_argument("--encrypted-map", required=True)
     return parser
 
 
@@ -77,6 +100,14 @@ def run_cli(
         result = service.pull_and_ack(rewritten_at=args.rewritten_at)
     elif args.command == "recover":
         result = service.resume_commit_recovery(normalized_at=args.normalized_at)
+    elif args.command == "submit-commit":
+        result = service.submit_commit(
+            created_at=args.created_at,
+            commit_intent_id=args.commit_intent_id,
+            cleanup_normalized_at=args.cleanup_normalized_at,
+            content_by_file_id=_load_base64_payload_map(Path(args.content_map)),
+            encrypted_blob_by_file_id=_load_base64_payload_map(Path(args.encrypted_map)),
+        )
     else:
         raise ValueError(f"unsupported command: {args.command}")
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import io
 import json
+import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +36,33 @@ class FakeService:
     def resume_commit_recovery(self, *, normalized_at: int):
         self.calls.append(("recover", normalized_at))
         return {"kind": "recover", "normalized_at": normalized_at}
+
+    def submit_commit(
+        self,
+        *,
+        created_at: int,
+        commit_intent_id=None,
+        cleanup_normalized_at=None,
+        content_by_file_id,
+        encrypted_blob_by_file_id,
+    ):
+        self.calls.append(
+            (
+                "submit-commit",
+                created_at,
+                commit_intent_id,
+                cleanup_normalized_at,
+                content_by_file_id,
+                encrypted_blob_by_file_id,
+            )
+        )
+        return {
+            "kind": "submit-commit",
+            "created_at": created_at,
+            "commit_intent_id": commit_intent_id,
+            "content_sizes": {key: len(value) for key, value in content_by_file_id.items()},
+            "encrypted_sizes": {key: len(value) for key, value in encrypted_blob_by_file_id.items()},
+        }
 
 
 class DesktopCliTests(unittest.TestCase):
@@ -131,6 +160,74 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload, {"kind": "recover", "normalized_at": 1770000040200})
         self.assertEqual(self.service.calls, [("recover", 1770000040200)])
+
+    def test_submit_commit_command_decodes_payload_files_and_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            content_map = Path(tmpdir) / "content.json"
+            encrypted_map = Path(tmpdir) / "encrypted.json"
+            content_map.write_text(
+                json.dumps(
+                    {
+                        "file-a": base64.b64encode(b"hello").decode("ascii"),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            encrypted_map.write_text(
+                json.dumps(
+                    {
+                        "file-a": base64.b64encode(b"encrypted-payload").decode("ascii"),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "submit-commit",
+                "--created-at",
+                "1770000040300",
+                "--commit-intent-id",
+                "intent-001",
+                "--cleanup-normalized-at",
+                "1770000040301",
+                "--content-map",
+                str(content_map),
+                "--encrypted-map",
+                str(encrypted_map),
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload,
+            {
+                "kind": "submit-commit",
+                "created_at": 1770000040300,
+                "commit_intent_id": "intent-001",
+                "content_sizes": {"file-a": 5},
+                "encrypted_sizes": {"file-a": 17},
+            },
+        )
+        self.assertEqual(
+            self.service.calls,
+            [
+                (
+                    "submit-commit",
+                    1770000040300,
+                    "intent-001",
+                    1770000040301,
+                    {"file-a": b"hello"},
+                    {"file-a": b"encrypted-payload"},
+                )
+            ],
+        )
 
 
 if __name__ == "__main__":
