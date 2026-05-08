@@ -1150,6 +1150,61 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 self.assertEqual(loaded_journal.phase, "materializing")
                 self.assertEqual(loaded_journal.ops_hash, "sha256:ops8")
 
+    def test_apply_staged_pull_plan_reuses_materialized_write_when_staging_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            rewritten_payload = b"# rewritten\n"
+            live_path = root / "Notes" / "Live.md"
+            live_path.write_bytes(rewritten_payload)
+
+            journal = SyncApplyJournalRecord(
+                vault_id="vault-001",
+                journal_id="journal-1",
+                target_revision=8,
+                target_manifest_hash="sha256:head8",
+                phase="staging",
+                ops_hash="sha256:old",
+                created_at=1770000040100,
+                updated_at=1770000040100,
+            )
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(connection, journal)
+
+            plan = DesktopPullApplyPlan(
+                vault_id="vault-001",
+                revision=8,
+                writes=[
+                    DesktopPullApplyWriteFile(
+                        file_id="file-live",
+                        target_path="Notes/Live.md",
+                        staging_path=".noteapp/staging/file-live.staging",
+                        type="note",
+                        content_hash="sha256:" + hashlib.sha256(rewritten_payload).hexdigest(),
+                    )
+                ],
+                moves=[],
+                deletes=[],
+                blocking_paths=[],
+                ops_hash="sha256:ops8",
+            )
+            staged = DesktopPullApplyStagingResult(
+                journal=journal,
+                written_staging_paths={},
+            )
+
+            execution = service.apply_staged_pull_plan(
+                plan,
+                staged,
+                materialized_at=1770000040200,
+            )
+
+            self.assertEqual(execution.written_paths, {"file-live": live_path})
+            self.assertEqual(live_path.read_bytes(), rewritten_payload)
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                loaded_journal = load_sync_apply_journal(connection, "vault-001")
+                self.assertEqual(loaded_journal.phase, "materializing")
+
     def test_apply_staged_pull_plan_preserves_dirty_overwrite_as_conflict_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -1832,6 +1887,110 @@ class DesktopSyncServiceTests(unittest.TestCase):
             with closing(open_database(service.workspace.paths.db_path)) as connection:
                 self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
 
+    def test_resume_pull_apply_recovery_replays_partial_materialized_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            rewritten_payload = b"# rewritten\n"
+            added_payload = b"# added\n"
+            rewritten_hash = "sha256:" + hashlib.sha256(rewritten_payload).hexdigest()
+            added_hash = "sha256:" + hashlib.sha256(added_payload).hexdigest()
+            live_path = root / "Notes" / "Live.md"
+            live_path.write_bytes(rewritten_payload)
+            added_staging_path = root / ".noteapp" / "staging" / "file-added.staging"
+            added_staging_path.parent.mkdir(parents=True, exist_ok=True)
+            added_staging_path.write_bytes(added_payload)
+
+            snapshot = service.load_snapshot()
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                snapshot.document.replace_files(
+                    [
+                        replace(
+                            snapshot.document.files[0],
+                            updated_at=1770000040250,
+                            content_hash=rewritten_hash,
+                            meta={
+                                "blob_id": "blob-live-rewritten",
+                                "size": len(rewritten_payload),
+                                "mtime": live_path.stat().st_mtime_ns // 1_000_000,
+                                "mime_type": "text/markdown",
+                            },
+                        ),
+                        FileRecord(
+                            file_id="file-added",
+                            path="Notes/Added.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000040250,
+                            content_hash=added_hash,
+                            meta={
+                                "blob_id": "blob-added",
+                                "size": len(added_payload),
+                                "mtime": 1770000040250,
+                                "mime_type": "text/markdown",
+                            },
+                        ),
+                    ],
+                    updated_at=1770000040250,
+                ),
+            )
+            service._write_pull_apply_plan_file(
+                DesktopPullApplyPlan(
+                    vault_id="vault-001",
+                    revision=8,
+                    writes=[
+                        DesktopPullApplyWriteFile(
+                            file_id="file-live",
+                            target_path="Notes/Live.md",
+                            staging_path=".noteapp/staging/file-live.staging",
+                            type="note",
+                            content_hash=rewritten_hash,
+                        ),
+                        DesktopPullApplyWriteFile(
+                            file_id="file-added",
+                            target_path="Notes/Added.md",
+                            staging_path=".noteapp/staging/file-added.staging",
+                            type="note",
+                            content_hash=added_hash,
+                        ),
+                    ],
+                    moves=[],
+                    deletes=[],
+                    blocking_paths=[],
+                    ops_hash="sha256:ops8",
+                )
+            )
+
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                upsert_sync_apply_journal(
+                    connection,
+                    SyncApplyJournalRecord(
+                        vault_id="vault-001",
+                        journal_id="journal-1",
+                        target_revision=8,
+                        target_manifest_hash="sha256:head8",
+                        phase="materializing",
+                        ops_hash="sha256:ops8",
+                        created_at=1770000040100,
+                        updated_at=1770000040200,
+                    ),
+                )
+
+            recovered = service.resume_pull_apply_recovery(normalized_at=1770000040300)
+
+            self.assertEqual(recovered.mode, "replayed")
+            self.assertEqual(recovered.journal_phase, "materializing")
+            self.assertEqual((root / "Notes" / "Live.md").read_bytes(), rewritten_payload)
+            self.assertEqual((root / "Notes" / "Added.md").read_bytes(), added_payload)
+            self.assertEqual(recovered.state.last_applied_revision, 8)
+            self.assertEqual(recovered.state.pending_ack_to_server, [8])
+            self.assertEqual(recovered.removed_staging_paths, [added_staging_path])
+            self.assertEqual(recovered.removed_plan_path, service.workspace.paths.sync_apply_plan_path)
+            self.assertFalse(service.workspace.paths.sync_apply_plan_path.exists())
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
+
     def test_resume_pull_apply_recovery_degrades_when_replay_payload_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -1992,7 +2151,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             with closing(open_database(service.workspace.paths.db_path)) as connection:
                 self.assertIsNone(load_sync_apply_journal(connection, "vault-001"))
 
-    def test_resume_pull_apply_recovery_finalizes_materialized_workspace_when_replay_fails(self) -> None:
+    def test_resume_pull_apply_recovery_replays_materialized_workspace_when_write_target_is_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             service, _, _, _, _ = self._seed_workspace(root)
@@ -2057,7 +2216,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             recovered = service.resume_pull_apply_recovery(normalized_at=1770000040300)
 
-            self.assertEqual(recovered.mode, "finalized")
+            self.assertEqual(recovered.mode, "replayed")
             self.assertEqual(recovered.journal_phase, "materializing")
             self.assertEqual(recovered.state.last_applied_revision, 8)
             self.assertEqual(recovered.state.pending_ack_to_server, [8])
