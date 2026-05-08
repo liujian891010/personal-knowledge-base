@@ -4,6 +4,12 @@ from .runner import (
     DesktopSyncRunner,
     build_desktop_sync_runner,
 )
+from .scheduler import (
+    DesktopSyncIterationResult,
+    DesktopSyncLoopResult,
+    DesktopSyncScheduleConfig,
+    DesktopSyncScheduler,
+)
 from .sync_runtime import (
     DesktopSyncHttpConfig,
     DesktopSyncRuntime,
@@ -32,6 +38,10 @@ __all__ = [
     "DesktopPreparedCommit",
     "DesktopSyncRunOnceResult",
     "DesktopSyncRunner",
+    "DesktopSyncIterationResult",
+    "DesktopSyncLoopResult",
+    "DesktopSyncScheduleConfig",
+    "DesktopSyncScheduler",
     "DesktopSyncService",
     "build_desktop_sync_runner",
     "build_cli_service",
