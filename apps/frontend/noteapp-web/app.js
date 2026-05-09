@@ -1420,6 +1420,41 @@ function countDraftCharacters(text) {
   return String(text || "").replace(/\s+/g, "").length;
 }
 
+function countDraftLines(text) {
+  const normalized = String(text || "");
+  if (!normalized) {
+    return 0;
+  }
+  return normalized.split(/\r?\n/).length;
+}
+
+function buildEditorDraftInsight(note, draft) {
+  if (!note || !draft) {
+    return null;
+  }
+
+  const savedChars = countDraftCharacters(note.body);
+  const draftChars = countDraftCharacters(draft.body);
+  const delta = draftChars - savedChars;
+  return {
+    dirty: isEditorDraftDirty(note, draft),
+    titleChanged: draft.title !== note.title,
+    savedChars,
+    draftChars,
+    delta,
+    lines: countDraftLines(draft.body),
+  };
+}
+
+function summaryHasBlockingSyncWork() {
+  const summary = state.syncCenter?.summary || null;
+  return Boolean(
+    summary?.commit_gate?.blocking_reasons?.length ||
+      summary?.conflicts?.actual_has_unresolved_conflicts ||
+      summary?.changes?.change_count,
+  );
+}
+
 function countWorkspaceNotes(workspaceShell) {
   return workspaceShell.sections.reduce(
     (total, section) => total + (Array.isArray(section.items) ? section.items.length : 0),
@@ -1430,6 +1465,7 @@ function countWorkspaceNotes(workspaceShell) {
 function renderWorkspaceTree() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
   const filteredSections = buildFilteredWorkspaceSections(workspaceShell);
+  const activeDraft = getActiveEditorDraft();
 
   if (!filteredSections.length) {
     elements.workspaceTree.innerHTML = `
@@ -1457,6 +1493,11 @@ function renderWorkspaceTree() {
                     <span class="tree-node-title">${escapeHtml(item.title)}</span>
                     <span class="tree-node-path">${escapeHtml(item.path)}</span>
                     <span class="tree-node-path">${escapeHtml(item.status)}</span>
+                    ${
+                      activeDraft?.noteId === item.id
+                        ? `<span class="tree-node-path tone-warning-inline">${escapeHtml(isEditorDraftDirty(workspaceShell.notes[item.id], activeDraft) ? "有未保存草稿" : "草稿编辑中")}</span>`
+                        : ""
+                    }
                     <span class="tree-node-signals" data-signal-host="${escapeHtml(item.id)}"></span>
                   </button>
                 `,
@@ -1494,6 +1535,8 @@ function renderWorkspaceTree() {
 function renderWorkspaceRail() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
   const note = getSelectedWorkspaceNote();
+  const editorDraft = getActiveEditorDraft();
+  const draftInsight = buildEditorDraftInsight(note, editorDraft);
   const visibleCount = getVisibleWorkspaceNoteIds(workspaceShell).length;
   const summary = state.syncCenter?.summary || null;
   const conflictCount = summary
@@ -1542,6 +1585,11 @@ function renderWorkspaceRail() {
         <div class="session-rail-pills">
           <span class="mini-pill tone-${resolveTone(note.statusTone)}">${escapeHtml(note.statusLabel)}</span>
           <span class="mini-pill tone-info">${escapeHtml(note.lastSaved)}</span>
+          ${
+            draftInsight
+              ? `<span class="mini-pill ${draftInsight.dirty ? "tone-warning" : "tone-success"}">${draftInsight.dirty ? "有未保存草稿" : "草稿已对齐"}</span>`
+              : ""
+          }
         </div>
       </article>
       <article class="session-rail-item">
@@ -1562,6 +1610,18 @@ function renderWorkspaceRail() {
           }
         </p>
       </article>
+      ${
+        draftInsight
+          ? `
+            <article class="session-rail-item">
+              <span class="session-rail-title">草稿状态</span>
+              <strong>${draftInsight.dirty ? "待保存修改" : "正在编辑"}</strong>
+              <p class="session-rail-copy">字数 ${escapeHtml(draftInsight.draftChars)} · 行数 ${escapeHtml(draftInsight.lines)}</p>
+              <p class="session-rail-copy">${escapeHtml(draftInsight.delta >= 0 ? `比已保存版本多 ${draftInsight.delta} 字` : `比已保存版本少 ${Math.abs(draftInsight.delta)} 字`)}</p>
+            </article>
+          `
+          : ""
+      }
     </div>
   `;
 }
@@ -1728,6 +1788,18 @@ function renderWorkspaceAiPanel() {
     return;
   }
   const syncContext = deriveWorkspaceSyncContext(note);
+  const editorDraft = getActiveEditorDraft();
+  const draftInsight = buildEditorDraftInsight(note, editorDraft);
+  const draftActions = [];
+  if (draftInsight?.dirty) {
+    draftActions.push("先保存本地草稿，再决定是否执行同步动作或切换文档。");
+  }
+  if (draftInsight?.titleChanged) {
+    draftActions.push("标题已被修改，保存后需要确认左侧树和知识图谱节点是否仍符合预期。");
+  }
+  if (draftInsight && summaryHasBlockingSyncWork()) {
+    draftActions.push("当前同步仍有阻塞项，草稿保存后建议先处理同步风险，再考虑提交。");
+  }
   elements.workspaceAiPanel.innerHTML = `
     <div class="pane-heading">
       <div>
@@ -1745,11 +1817,54 @@ function renderWorkspaceAiPanel() {
         <span class="metric-label">告警</span>
         <strong>${escapeHtml(note.ai.warnings)}</strong>
       </article>
+      ${
+        draftInsight
+          ? `
+            <article class="ai-stat">
+              <span class="metric-label">草稿</span>
+              <strong>${escapeHtml(draftInsight.dirty ? "未保存" : "已对齐")}</strong>
+            </article>
+          `
+          : ""
+      }
     </div>
+    ${
+      draftInsight
+        ? `
+          <section class="ai-sync-box">
+            <h3>草稿洞察</h3>
+            <div class="ai-draft-grid">
+              <div class="ai-draft-item">
+                <span class="metric-label">当前字数</span>
+                <strong>${escapeHtml(draftInsight.draftChars)}</strong>
+              </div>
+              <div class="ai-draft-item">
+                <span class="metric-label">正文行数</span>
+                <strong>${escapeHtml(draftInsight.lines)}</strong>
+              </div>
+              <div class="ai-draft-item">
+                <span class="metric-label">相对变化</span>
+                <strong>${escapeHtml(draftInsight.delta >= 0 ? `+${draftInsight.delta}` : draftInsight.delta)}</strong>
+              </div>
+            </div>
+            <div class="detail-actions ai-inline-actions">
+              ${
+                draftInsight.dirty
+                  ? `
+                    <button class="solid detail-inline-button" data-ai-command="save-draft" type="button">保存草稿</button>
+                    <button class="ghost detail-inline-button" data-ai-command="cancel-edit" type="button">取消编辑</button>
+                  `
+                  : `<button class="ghost detail-inline-button" data-ai-command="cancel-edit" type="button">结束编辑</button>`
+              }
+            </div>
+          </section>
+        `
+        : ""
+    }
     <section class="ai-sync-box">
       <h3>操作建议</h3>
       <ul class="ai-list">
-        ${syncContext.actions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        ${[...draftActions, ...syncContext.actions].map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
       </ul>
     </section>
     <section class="ai-section">
@@ -1786,6 +1901,19 @@ function renderWorkspaceAiPanel() {
       }
     </section>
   `;
+
+  for (const button of elements.workspaceAiPanel.querySelectorAll("[data-ai-command]")) {
+    button.addEventListener("click", () => {
+      const command = button.dataset.aiCommand;
+      if (command === "save-draft") {
+        saveEditingSelectedNote();
+        return;
+      }
+      if (command === "cancel-edit") {
+        cancelEditingSelectedNote();
+      }
+    });
+  }
 }
 
 function renderWorkspaceChrome() {
