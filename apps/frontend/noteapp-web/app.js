@@ -2028,8 +2028,10 @@ function renderViewDetailGrid() {
               ? aiWikiNotes
                   .map((entry) =>
                     buildOverviewNoteRow(entry, {
-                      summary: "可继续人工校对、补结构，或纳入下一次同步流程。",
-                      pills: [entry.note.statusLabel || entry.status, entry.note.lastSaved || null],
+                      summary: entry.note.ai?.sourceNoteIds?.length
+                        ? `来源 ${entry.note.ai.sourceNoteIds.length} 篇文档，可继续人工校对、补结构或纳入下一次同步流程。`
+                        : "可继续人工校对、补结构，或纳入下一次同步流程。",
+                      pills: [entry.note.statusLabel || entry.status, entry.note.ai?.sourceScopeLabel || null, entry.note.lastSaved || null],
                       buttons: [
                         `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
                         `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">继续编辑</button>`,
@@ -2366,8 +2368,10 @@ function renderViewDetailGrid() {
                   .slice(0, 4)
                   .map((entry) =>
                     buildOverviewNoteRow(entry, {
-                      summary: "建议先核对结构、来源文档和关键实体，再决定是否纳入正式同步。",
-                      pills: [entry.note.statusLabel || entry.status, entry.note.lastSaved || null],
+                      summary: entry.note.ai?.sourceNoteIds?.length
+                        ? `当前覆盖 ${entry.note.ai.sourceNoteIds.length} 篇来源文档，建议先核对结构、来源文档和关键实体。`
+                        : "建议先核对结构、来源文档和关键实体，再决定是否纳入正式同步。",
+                      pills: [entry.note.statusLabel || entry.status, entry.note.ai?.sourceScopeLabel || null, entry.note.lastSaved || null],
                       buttons: [
                         `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
                         `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">编辑</button>`,
@@ -5314,6 +5318,14 @@ function renderWorkspaceAiPanel() {
   const aiSuggestedQuestions = buildAiCopilotSuggestedQuestions(note, syncContext, draftInsight);
   const aiLastAnswer =
     state.aiCopilot.lastAnswer?.anchorNoteId === note.id ? state.aiCopilot.lastAnswer : null;
+  const aiSourceNotes = Array.isArray(note.ai?.sourceNoteIds)
+    ? note.ai.sourceNoteIds
+        .map((noteId) => {
+          const sourceNote = getCurrentWorkspaceShell().notes[noteId];
+          return sourceNote ? { id: noteId, title: sourceNote.title, path: sourceNote.path } : null;
+        })
+        .filter(Boolean)
+    : [];
   const aiCompiledNote =
     state.aiCompile.lastCompiledNoteId && getCurrentWorkspaceShell().notes[state.aiCompile.lastCompiledNoteId]
       ? getCurrentWorkspaceShell().notes[state.aiCompile.lastCompiledNoteId]
@@ -5559,6 +5571,32 @@ function renderWorkspaceAiPanel() {
           .join("")}
       </div>
     </section>
+    ${
+      aiSourceNotes.length
+        ? `
+          <section class="ai-section">
+            <h3>来源文档</h3>
+            <p class="ai-copy">${escapeHtml(note.ai?.sourceScopeLabel ? `这篇知识页来自 ${note.ai.sourceScopeLabel} 的 ${aiSourceNotes.length} 篇文档。` : `这篇知识页当前关联 ${aiSourceNotes.length} 篇来源文档。`)}</p>
+            <div class="ai-action-list">
+              ${aiSourceNotes
+                .slice(0, 6)
+                .map(
+                  (source) => `
+                    <article class="ai-action-card">
+                      <strong>${escapeHtml(source.title)}</strong>
+                      <p>${escapeHtml(source.path)}</p>
+                      <div class="detail-actions">
+                        <button class="ghost detail-inline-button" data-ai-source-note="${escapeHtml(source.id)}" type="button">打开来源文档</button>
+                      </div>
+                    </article>
+                  `,
+                )
+                .join("")}
+            </div>
+          </section>
+        `
+        : ""
+    }
     <section class="ai-section">
       <h3>风险与校对</h3>
       ${
@@ -6627,6 +6665,8 @@ function compileCurrentScopeToAiWiki() {
       queueDepth: 0,
       warnings: compiledDraft.topEntities.length ? 0 : 1,
       relatedEntities: compiledDraft.topEntities.length ? compiledDraft.topEntities : [currentNote.title],
+      sourceNoteIds: compiledDraft.scopeContext.notes.map((entry) => entry.id).slice(0, 12),
+      sourceScopeLabel: compiledDraft.scopeContext.label,
       suggestions: [
         "先人工核对这篇知识页，再决定是否继续补结构或进入正式同步。",
         "如果范围过大，可切到单篇笔记或分区后重新编译。",
