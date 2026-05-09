@@ -2,6 +2,8 @@ import {
   executeBridgeAction,
   fetchSampleAppSession,
   fetchBridgeStatus,
+  requestAiCopilotAnswer,
+  requestAiWikiCompile,
   refreshAppSession,
   refreshBridgeSnapshot,
   startBridgeStatusPolling,
@@ -4343,6 +4345,90 @@ function buildAiCopilotAnswer({ note, noteBody, syncContext, draftInsight, aiBri
   };
 }
 
+function buildAiCopilotAnswerRequestPayload({ note, syncContext, draftInsight, aiBriefing }) {
+  const scopeContext = resolveAiCopilotScopeContext(note);
+  const scopeNotes = scopeContext.notes;
+  return {
+    question: (state.aiCopilot.question || "").trim() || "这篇内容下一步应该怎么推进？",
+    scopeLabel: scopeContext.label,
+    scopeDetail: scopeContext.detail,
+    anchorNote: {
+      id: note.id,
+      title: note.title,
+      statusLabel: note.statusLabel || "",
+    },
+    scopeNotes: scopeNotes.slice(0, 8).map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      path: entry.path,
+      summary: summarizeRichText(getEditorDraftByNoteId(entry.id)?.body || entry.body, 80),
+    })),
+    aggregatedEntities: Array.from(new Set(scopeNotes.flatMap((entry) => entry.ai?.relatedEntities || []))).slice(0, 5),
+    aggregatedLint: Array.from(new Set(scopeNotes.flatMap((entry) => entry.ai?.lint || []))).slice(0, 3),
+    aggregatedSuggestions: Array.from(new Set(scopeNotes.flatMap((entry) => entry.ai?.suggestions || []))).slice(0, 4),
+    draftDirty: Boolean(draftInsight?.dirty),
+    syncContext: {
+      hasBlockingSyncWork: summaryHasBlockingSyncWork(),
+      signals: syncContext.signals.map((signal) => signal.label).filter(Boolean),
+      actions: syncContext.actions.slice(0, 5),
+    },
+    aiBriefing: {
+      headline: aiBriefing.headline,
+      summary: aiBriefing.summary,
+      outline: aiBriefing.outline.slice(0, 4),
+    },
+  };
+}
+
+function buildAiWikiCompileRequestPayload({ note, syncContext, aiBriefing }) {
+  const scopeContext = resolveAiCopilotScopeContext(note);
+  const scopeNotes = scopeContext.notes;
+  return {
+    targetTitle: state.aiCompile.targetTitle.trim() || buildAiCompileTargetTitle(note),
+    scopeLabel: scopeContext.label,
+    anchorNote: {
+      id: note.id,
+      title: note.title,
+      path: note.path,
+      statusLabel: note.statusLabel || "",
+    },
+    scopeNotes: scopeNotes.slice(0, 8).map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      path: entry.path,
+      summary: summarizeRichText(getEditorDraftByNoteId(entry.id)?.body || entry.body, 80),
+    })),
+    topEntities: Array.from(new Set(scopeNotes.flatMap((entry) => entry.ai?.relatedEntities || []))).slice(0, 8),
+    topLint: Array.from(new Set(scopeNotes.flatMap((entry) => entry.ai?.lint || []))).slice(0, 4),
+    topSuggestions: Array.from(new Set(scopeNotes.flatMap((entry) => entry.ai?.suggestions || []))).slice(0, 4),
+    syncContext: {
+      signals: syncContext.signals.map((signal) => signal.label).filter(Boolean),
+      actions: syncContext.actions.slice(0, 5),
+    },
+    aiBriefing: {
+      headline: aiBriefing.headline,
+      summary: aiBriefing.summary,
+      outline: aiBriefing.outline.slice(0, 4),
+    },
+  };
+}
+
+async function generateAiCopilotAnswer({ note, noteBody, syncContext, draftInsight, aiBriefing }) {
+  try {
+    return await requestAiCopilotAnswer(
+      buildAiCopilotAnswerRequestPayload({
+        note,
+        syncContext,
+        draftInsight,
+        aiBriefing,
+      }),
+    );
+  } catch (error) {
+    elements.workspaceStatus.textContent = "AI 调用边界暂不可用，已退回本地回答生成。";
+    return buildAiCopilotAnswer({ note, noteBody, syncContext, draftInsight, aiBriefing });
+  }
+}
+
 function upsertMarkdownSection(text, heading, content, level = 2) {
   const normalizedBody = String(text || "").trim();
   const normalizedContent = String(content || "").trim();
@@ -5873,7 +5959,7 @@ function renderWorkspaceAiPanel() {
     });
   }
   for (const button of elements.workspaceAiPanel.querySelectorAll("[data-ai-command]")) {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       const command = button.dataset.aiCommand;
       if (command === "start-edit") {
         ensureEditorDraftSession(state.selectedWorkspaceNoteId);
@@ -5881,7 +5967,7 @@ function renderWorkspaceAiPanel() {
         return;
       }
       if (command === "answer-question") {
-        const answer = buildAiCopilotAnswer({
+        const answer = await generateAiCopilotAnswer({
           note,
           noteBody,
           syncContext,
@@ -5986,7 +6072,7 @@ function renderWorkspaceAiPanel() {
         return;
       }
       if (command === "compile-to-ai-wiki") {
-        compileCurrentScopeToAiWiki();
+        await compileCurrentScopeToAiWiki();
         return;
       }
       if (command === "review-ai-wiki") {
@@ -6822,7 +6908,7 @@ ${syncContext.actions.slice(0, 3).map((item, index) => `${index + 1}. ${item}`).
   render();
 }
 
-function compileCurrentScopeToAiWiki() {
+async function compileCurrentScopeToAiWiki() {
   const currentNote = getSelectedWorkspaceNote();
   if (!currentNote) {
     return;
@@ -6836,14 +6922,40 @@ function compileCurrentScopeToAiWiki() {
     syncContext,
     draftInsight: buildEditorDraftInsight(currentNote, getActiveEditorDraft()),
   });
-  const compiledDraft = buildAiCompileDraftBody({
-    note: currentNote,
-    syncContext,
-    aiBriefing,
-  });
+  let compiledDraft = null;
+  try {
+    compiledDraft = await requestAiWikiCompile(
+      buildAiWikiCompileRequestPayload({
+        note: currentNote,
+        syncContext,
+        aiBriefing,
+      }),
+    );
+  } catch (error) {
+    elements.workspaceStatus.textContent = "AI 编译接口暂不可用，已退回本地知识页生成。";
+    const fallbackDraft = buildAiCompileDraftBody({
+      note: currentNote,
+      syncContext,
+      aiBriefing,
+    });
+    compiledDraft = {
+      title: state.aiCompile.targetTitle.trim() || buildAiCompileTargetTitle(currentNote),
+      body: fallbackDraft.body,
+      sourceNoteIds: fallbackDraft.scopeContext.notes.map((entry) => entry.id).slice(0, 12),
+      sourceScopeLabel: fallbackDraft.scopeContext.label,
+      topEntities: fallbackDraft.topEntities,
+      warnings: fallbackDraft.topEntities.length ? 0 : 1,
+      suggestions: [
+        "先人工核对这篇知识页，再决定是否继续补结构或进入正式同步。",
+        "如果范围过大，可切回单篇笔记或分区后重新编译。",
+      ],
+      lint: fallbackDraft.topEntities.length ? [] : ["当前实体提取较弱，建议补充正文后重新编译。"],
+      generatedAtMs: Date.now(),
+    };
+  }
   const workspaceShell = ensureEditableWorkspaceShell();
   const wikiSection = ensureWorkspaceSectionById(workspaceShell, "ai-wiki");
-  const desiredTitle = state.aiCompile.targetTitle.trim() || buildAiCompileTargetTitle(currentNote);
+  const desiredTitle = compiledDraft.title || state.aiCompile.targetTitle.trim() || buildAiCompileTargetTitle(currentNote);
   const desiredPath = resolveWorkspaceNotePathForSection("ai-wiki", desiredTitle);
   const existingItem = wikiSection.items.find((item) => item.title === desiredTitle) || null;
   const compiledId = existingItem?.id || `ai-compile-${Date.now()}`;
@@ -6877,15 +6989,17 @@ function compileCurrentScopeToAiWiki() {
     body: compiledDraft.body,
     ai: {
       queueDepth: 0,
-      warnings: compiledDraft.topEntities.length ? 0 : 1,
-      relatedEntities: compiledDraft.topEntities.length ? compiledDraft.topEntities : [currentNote.title],
-      sourceNoteIds: compiledDraft.scopeContext.notes.map((entry) => entry.id).slice(0, 12),
-      sourceScopeLabel: compiledDraft.scopeContext.label,
-      suggestions: [
-        "先人工核对这篇知识页，再决定是否继续补结构或进入正式同步。",
-        "如果范围过大，可切到单篇笔记或分区后重新编译。",
-      ],
-      lint: compiledDraft.topEntities.length ? [] : ["当前实体提取较弱，建议补充正文后重新编译。"],
+      warnings: Number.isFinite(compiledDraft.warnings) ? compiledDraft.warnings : compiledDraft.topEntities?.length ? 0 : 1,
+      relatedEntities: compiledDraft.topEntities?.length ? compiledDraft.topEntities : [currentNote.title],
+      sourceNoteIds: Array.isArray(compiledDraft.sourceNoteIds) ? compiledDraft.sourceNoteIds : [],
+      sourceScopeLabel: compiledDraft.sourceScopeLabel || "当前文档",
+      suggestions: Array.isArray(compiledDraft.suggestions) && compiledDraft.suggestions.length
+        ? compiledDraft.suggestions
+        : [
+            "先人工核对这篇知识页，再决定是否继续补结构或进入正式同步。",
+            "如果范围过大，可切回单篇笔记或分区后重新编译。",
+          ],
+      lint: Array.isArray(compiledDraft.lint) ? compiledDraft.lint : [],
     },
   };
 
@@ -6908,7 +7022,7 @@ function compileCurrentScopeToAiWiki() {
   pushSessionHistory({
     type: "ai_compile_generated",
     level: "success",
-    detail: `${desiredTitle} · ${compiledDraft.scopeContext.label}`,
+    detail: `${desiredTitle} · ${compiledDraft.sourceScopeLabel || "当前文档"}`,
   });
   render();
 }

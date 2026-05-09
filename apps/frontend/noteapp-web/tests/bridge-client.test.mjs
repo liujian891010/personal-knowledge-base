@@ -4,6 +4,8 @@ import {
   executeBridgeAction,
   fetchSampleAppSession,
   fetchBridgeStatus,
+  requestAiCopilotAnswer,
+  requestAiWikiCompile,
   refreshAppSession,
   refreshBridgeSnapshot,
   startBridgeStatusPolling,
@@ -113,6 +115,52 @@ export async function runBridgeClientTests() {
   assert.equal(refreshSessionRequest.options.method, "POST");
   assert.equal(refreshSessionRequest.options.body, JSON.stringify({ activityLimit: 5 }));
   completed.push("refreshAppSession posts JSON to the app session refresh endpoint");
+  resetGlobals();
+
+  let aiAnswerRequest = null;
+  globalThis.fetch = async (url, options) => {
+    aiAnswerRequest = { url, options };
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          headline: "建议先固化结论",
+          scopeLabel: "当前文档",
+        };
+      },
+    };
+  };
+
+  const aiAnswer = await requestAiCopilotAnswer({ question: "下一步怎么做？" });
+  assert.equal(aiAnswer.headline, "建议先固化结论");
+  assert.equal(aiAnswerRequest.url, "/api/ai/copilot-answer");
+  assert.equal(aiAnswerRequest.options.method, "POST");
+  assert.equal(aiAnswerRequest.options.body, JSON.stringify({ question: "下一步怎么做？" }));
+  completed.push("requestAiCopilotAnswer posts JSON to the AI copilot endpoint");
+  resetGlobals();
+
+  let aiCompileRequest = null;
+  globalThis.fetch = async (url, options) => {
+    aiCompileRequest = { url, options };
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          title: "同步桥接知识页",
+          body: "# 同步桥接知识页",
+        };
+      },
+    };
+  };
+
+  const aiCompile = await requestAiWikiCompile({ targetTitle: "同步桥接知识页" });
+  assert.equal(aiCompile.title, "同步桥接知识页");
+  assert.equal(aiCompileRequest.url, "/api/ai/compile-wiki");
+  assert.equal(aiCompileRequest.options.method, "POST");
+  assert.equal(aiCompileRequest.options.body, JSON.stringify({ targetTitle: "同步桥接知识页" }));
+  completed.push("requestAiWikiCompile posts JSON to the AI wiki compile endpoint");
   resetGlobals();
 
   globalThis.fetch = async () => ({
