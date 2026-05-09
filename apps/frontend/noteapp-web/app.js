@@ -247,6 +247,7 @@ const elements = {
   navButtons: Array.from(document.querySelectorAll("[data-nav-view]")),
   payloadKind: document.getElementById("payload-kind"),
   payloadDetail: document.getElementById("payload-detail"),
+  controlCenterCard: document.getElementById("control-center-card"),
   workspaceShellRoot: document.getElementById("workspace-shell-root"),
   viewModeCard: document.getElementById("view-mode-card"),
   panelCard: document.getElementById("panel-card"),
@@ -737,6 +738,7 @@ function renderNavViewVisibility() {
   elements.cardsGrid.hidden = !showSyncSections;
   elements.activityCard.hidden = !showSyncSections;
   elements.workspaceShellRoot.hidden = state.activeNavView === "settings";
+  elements.controlCenterCard.hidden = state.activeNavView !== "settings";
 }
 
 function deriveWorkspaceSyncContext(note) {
