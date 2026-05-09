@@ -18,4 +18,4 @@ Thumbs.db
 
 # Runtime artifacts
 *.log
-tmp/
+.tmp/
