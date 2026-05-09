@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { delimiter } from "node:path";
@@ -7,6 +8,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, "..");
 const repoRoot = resolve(appRoot, "..", "..", "..");
 const defaultSnapshotPath = join(appRoot, "fixtures", "live-sync-shell.json");
+const localBridgeConfigPath = join(appRoot, "bridge.local.json");
 
 export function printBridgeUsage() {
   console.log(`Usage:
@@ -22,6 +24,9 @@ Environment fallbacks:
   PKB_SYNC_NOW_MS
   PKB_SYNC_SNAPSHOT_OUTPUT
   PYTHON_BIN
+
+Optional local config file:
+  apps/frontend/noteapp-web/bridge.local.json
 `);
 }
 
@@ -43,19 +48,33 @@ export function readArgMap(argv) {
   return map;
 }
 
+function loadLocalBridgeConfig() {
+  if (!existsSync(localBridgeConfigPath)) {
+    return {};
+  }
+  const payload = JSON.parse(readFileSync(localBridgeConfigPath, "utf-8"));
+  return payload && typeof payload === "object" ? payload : {};
+}
+
 export function resolveBridgeConfig({ args = new Map(), env = process.env } = {}) {
+  const localConfig = loadLocalBridgeConfig();
   return {
-    vaultRoot: args.get("--vault-root") || env.PKB_VAULT_ROOT || null,
-    baseUrl: args.get("--base-url") || env.PKB_BASE_URL || null,
-    vaultId: args.get("--vault-id") || env.PKB_VAULT_ID || null,
-    deviceId: args.get("--device-id") || env.PKB_DEVICE_ID || null,
-    bearerToken: args.get("--bearer-token") || env.PKB_BEARER_TOKEN || null,
-    activityLimit: args.get("--activity-limit") || env.PKB_SYNC_ACTIVITY_LIMIT || "20",
-    nowMs: args.get("--now-ms") || env.PKB_SYNC_NOW_MS || null,
+    vaultRoot: args.get("--vault-root") || env.PKB_VAULT_ROOT || localConfig.vaultRoot || null,
+    baseUrl: args.get("--base-url") || env.PKB_BASE_URL || localConfig.baseUrl || null,
+    vaultId: args.get("--vault-id") || env.PKB_VAULT_ID || localConfig.vaultId || null,
+    deviceId: args.get("--device-id") || env.PKB_DEVICE_ID || localConfig.deviceId || null,
+    bearerToken: args.get("--bearer-token") || env.PKB_BEARER_TOKEN || localConfig.bearerToken || null,
+    activityLimit:
+      args.get("--activity-limit") || env.PKB_SYNC_ACTIVITY_LIMIT || localConfig.activityLimit || "20",
+    nowMs: args.get("--now-ms") || env.PKB_SYNC_NOW_MS || localConfig.nowMs || null,
     outputJson: resolve(
-      args.get("--output-json") || env.PKB_SYNC_SNAPSHOT_OUTPUT || defaultSnapshotPath,
+      args.get("--output-json") ||
+        env.PKB_SYNC_SNAPSHOT_OUTPUT ||
+        localConfig.outputJson ||
+        defaultSnapshotPath,
     ),
-    pythonBin: env.PYTHON_BIN || "python",
+    pythonBin: env.PYTHON_BIN || localConfig.pythonBin || "python",
+    configSource: existsSync(localBridgeConfigPath) ? localBridgeConfigPath : "env",
   };
 }
 
@@ -158,4 +177,4 @@ export function buildExecuteActionAndSnapshotArgs(actionId, nowMs, activityLimit
   return commandArgs;
 }
 
-export { appRoot, defaultSnapshotPath, repoRoot };
+export { appRoot, defaultSnapshotPath, localBridgeConfigPath, repoRoot };
