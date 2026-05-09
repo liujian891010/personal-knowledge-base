@@ -343,6 +343,8 @@ const elements = {
   workspaceRail: document.getElementById("workspace-rail"),
   workspaceEditor: document.getElementById("workspace-editor"),
   workspaceAiPanel: document.getElementById("workspace-ai-panel"),
+  sidebarAccountName: document.getElementById("sidebar-account-name"),
+  sidebarAccountPlan: document.getElementById("sidebar-account-plan"),
 };
 
 function formatDateTime(value) {
@@ -1795,6 +1797,17 @@ function collectConflictActions() {
 function renderNavigation() {
   for (const button of elements.navButtons) {
     button.classList.toggle("is-active", button.dataset.navView === state.activeNavView);
+  }
+}
+
+function renderSidebarMeta() {
+  if (elements.sidebarAccountName) {
+    elements.sidebarAccountName.textContent = state.bridgeStatus?.available ? "桌面工作台" : "本地工作台";
+  }
+  if (elements.sidebarAccountPlan) {
+    elements.sidebarAccountPlan.textContent = state.localUiSettings.expertMode
+      ? "高级调试模式"
+      : "普通模式";
   }
 }
 
@@ -6051,11 +6064,6 @@ function renderWorkspaceTree() {
 function renderWorkspaceRail() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
   const note = getSelectedWorkspaceNote();
-  const editorDraft = getActiveEditorDraft();
-  const dirtyDrafts = collectDirtyEditorDrafts();
-  const draftInsight = buildEditorDraftInsight(note, editorDraft);
-  const draftRecoveryStatus = note ? buildDraftRecoveryStatus(state.selectedWorkspaceNoteId) : null;
-  const lastExecution = buildLastExecutionSummary();
   const visibleCount = getVisibleWorkspaceNoteIds(workspaceShell).length;
   const summary = state.syncCenter?.summary || null;
   const conflictCount = summary
@@ -6064,169 +6072,58 @@ function renderWorkspaceRail() {
   const blockingReasons = Array.isArray(summary?.commit_gate?.blocking_reasons)
     ? summary.commit_gate.blocking_reasons.map(formatBlockingReason)
     : [];
-  const syncKind = state.snapshotMetadata
-    ? formatPayloadKindLabel("sync-shell-snapshot")
-    : state.syncCenter
-      ? formatPayloadKindLabel("sync-center")
-      : state.activityFeed
-        ? formatPayloadKindLabel("sync-activity")
-        : "未加载";
-  const noteBody = editorDraft ? editorDraft.body : note?.body || "";
-  const noteSummary = summarizeRichText(noteBody, 96);
-  const readingMinutes = estimateReadingMinutes(noteBody);
   const localWorkspaceSession = summarizeLocalWorkspaceSession();
-
-  if (!note) {
-    elements.workspaceRail.innerHTML = `
-      <div class="sidebar-card-header">
-        <div>
-          <p class="card-section-label">当前上下文</p>
-          <h2>工作区概览</h2>
-        </div>
-        <span class="mini-pill tone-warning">搜索中</span>
-      </div>
-      <div class="empty-state">
-        <p>当前搜索没有命中任何工作区文档。</p>
-      </div>
-    `;
-    return;
-  }
-
+  const aiBoundary = buildAiBoundarySummary();
   elements.workspaceRail.innerHTML = `
-    <div class="sidebar-card-header">
-      <div>
-        <p class="card-section-label">当前上下文</p>
-        <h2>工作区概览</h2>
-      </div>
-      <span class="mini-pill tone-info">${escapeHtml(visibleCount)} / ${escapeHtml(countWorkspaceNotes(workspaceShell))} 篇</span>
-    </div>
-    <div class="session-rail-grid">
-      <article class="session-rail-item rail-highlight-card">
-        <span class="session-rail-title">今日焦点</span>
-        <strong>${escapeHtml(note.title)}</strong>
-        <p class="session-rail-copy">${escapeHtml(noteSummary)}</p>
-        <div class="rail-metric-grid">
-          <div class="rail-metric">
-            <span class="metric-label">路径</span>
-            <strong>${escapeHtml(note.path)}</strong>
-          </div>
-          <div class="rail-metric">
-            <span class="metric-label">阅读</span>
-            <strong>${escapeHtml(`${readingMinutes} 分钟`)}</strong>
-          </div>
+    <div class="sidebar-status-shell">
+      <article class="sidebar-status-card sidebar-status-card-accent">
+        <div class="sidebar-status-row">
+          <span class="session-rail-title">同步状态</span>
+          <span class="mini-pill tone-${state.bridgeStatus?.available ? "success" : "warning"}">${escapeHtml(state.bridgeStatus?.available ? "已连接" : "未连接")}</span>
         </div>
-        <div class="session-rail-pills">
-          <span class="mini-pill tone-${resolveTone(note.statusTone)}">${escapeHtml(note.statusLabel)}</span>
-          <span class="mini-pill tone-info">${escapeHtml(note.lastSaved)}</span>
-          ${
-            draftInsight
-              ? `<span class="mini-pill ${draftInsight.dirty ? "tone-warning" : "tone-success"}">${draftInsight.dirty ? "有未保存草稿" : "草稿已对齐"}</span>`
-              : ""
-          }
-        </div>
-        <div class="detail-actions rail-action-row">
-          <button class="solid detail-inline-button" data-rail-command="edit-current" type="button">${editorDraft ? "继续编辑" : "开始编辑"}</button>
-          <button class="ghost detail-inline-button" data-rail-nav="repository" type="button">仓库浏览</button>
-        </div>
-      </article>
-      <article class="session-rail-item">
-        <span class="session-rail-title">工作区健康</span>
         <strong>${escapeHtml(blockingReasons.length ? "需要继续处理" : "当前可继续")}</strong>
         <div class="rail-metric-grid">
           <div class="rail-metric">
-            <span class="metric-label">会话来源</span>
-            <strong>${escapeHtml(syncKind)}</strong>
-          </div>
-          <div class="rail-metric">
-            <span class="metric-label">冲突工件</span>
-            <strong>${escapeHtml(conflictCount)}</strong>
-          </div>
-          <div class="rail-metric">
-            <span class="metric-label">本地变更</span>
+            <span class="metric-label">变更</span>
             <strong>${escapeHtml(summary?.changes?.change_count ?? 0)}</strong>
           </div>
+          <div class="rail-metric">
+            <span class="metric-label">冲突</span>
+            <strong>${escapeHtml(conflictCount)}</strong>
+          </div>
         </div>
-        <p class="session-rail-copy">${escapeHtml(blockingReasons.length ? blockingReasons.join("，") : "当前没有提交阻塞项，可继续整理内容或进入下一步同步。")}</p>
+        <p class="session-rail-copy">${escapeHtml(blockingReasons.length ? blockingReasons.join("，") : `当前会话来自 ${formatWorkspaceSourceLabel(state.workspaceSourceLabel)}，可以继续整理知识库。`)}</p>
         <div class="detail-actions rail-action-row">
-          <button class="ghost detail-inline-button" data-rail-nav="conflicts" type="button">查看冲突处理</button>
+          <button class="ghost detail-inline-button" data-rail-nav="conflicts" type="button">查看冲突</button>
+          <button class="ghost detail-inline-button" data-rail-nav="settings" type="button">同步设置</button>
         </div>
       </article>
-      <article class="session-rail-item">
-        <span class="session-rail-title">草稿与恢复</span>
-        <strong>${escapeHtml(dirtyDrafts.length ? `${dirtyDrafts.length} 篇未保存草稿` : "当前草稿稳定")}</strong>
-        <div class="rail-metric-grid">
-          <div class="rail-metric">
-            <span class="metric-label">恢复队列</span>
-            <strong>${escapeHtml(state.recoveryDrafts.length)}</strong>
-          </div>
-          <div class="rail-metric">
-            <span class="metric-label">工作区来源</span>
-            <strong>${escapeHtml(formatWorkspaceSourceLabel(state.workspaceSourceLabel))}</strong>
-          </div>
+      <article class="sidebar-status-card">
+        <div class="sidebar-status-row">
+          <span class="session-rail-title">当前焦点</span>
+          <span class="mini-pill tone-info">${escapeHtml(`${visibleCount}/${countWorkspaceNotes(workspaceShell)} 篇`)}</span>
         </div>
-        <p class="session-rail-copy">${escapeHtml(dirtyDrafts.length ? dirtyDrafts.map((draft) => draft.title).join(" · ") : "当前没有挂起的未保存修改。")}</p>
-        ${
-          draftRecoveryStatus
-            ? `<p class="session-rail-copy">${escapeHtml(`${draftRecoveryStatus.label} · ${draftRecoveryStatus.detail}`)}</p>`
-            : ""
-        }
+        <strong>${escapeHtml(note?.title || "未命中文档")}</strong>
+        <p class="session-rail-copy">${escapeHtml(note ? `${note.path} · ${note.lastSaved || note.statusLabel}` : "请在笔记库中选择一篇文档继续浏览或编辑。")}</p>
+        <div class="session-rail-pills">
+          <span class="mini-pill tone-${resolveTone(note?.statusTone || "info")}">${escapeHtml(note?.statusLabel || "等待选择")}</span>
+          <span class="mini-pill tone-info">${escapeHtml(aiBoundary.modeLabel)}</span>
+          ${
+            localWorkspaceSession
+              ? '<span class="mini-pill tone-success">本机已保存</span>'
+              : ""
+          }
+        </div>
         <div class="detail-actions rail-action-row">
+          ${note ? '<button class="solid detail-inline-button" data-rail-command="edit-current" type="button">继续编辑</button>' : ""}
+          <button class="ghost detail-inline-button" data-rail-nav="repository" type="button">打开笔记库</button>
           ${
             state.recoveryDrafts.length
-              ? `<button class="ghost detail-inline-button" data-rail-command="restore-recovery" type="button">恢复全部草稿</button>`
+              ? '<button class="ghost detail-inline-button" data-rail-command="restore-recovery" type="button">恢复草稿</button>'
               : ""
           }
         </div>
       </article>
-      ${
-        state.recoveryDrafts.length
-          ? `
-            <article class="session-rail-item">
-              <span class="session-rail-title">恢复提醒</span>
-              <strong>${escapeHtml(state.recoveryDrafts.length)} 份待恢复草稿</strong>
-              <p class="session-rail-copy">这些内容来自上一次未完成的前端会话，本次可选择恢复或放弃。</p>
-              <p class="session-rail-copy">${escapeHtml(state.recoveryDrafts.slice(0, 3).map((entry) => entry.title || entry.noteId).join(" · "))}</p>
-            </article>
-          `
-          : ""
-      }
-      ${
-        lastExecution
-          ? `
-            <article class="session-rail-item">
-              <span class="session-rail-title">最近执行</span>
-              <strong>${escapeHtml(lastExecution.actionId)}</strong>
-              <p class="session-rail-copy">${escapeHtml(lastExecution.statusLabel)} · ${escapeHtml(lastExecution.atLabel)}</p>
-              <p class="session-rail-copy">${escapeHtml(lastExecution.commandLine || "通过桌面桥接执行")}</p>
-            </article>
-          `
-          : ""
-      }
-      ${
-        localWorkspaceSession
-          ? `
-            <article class="session-rail-item">
-              <span class="session-rail-title">本机工作区会话</span>
-              <strong>${escapeHtml(`已自动保存 · ${localWorkspaceSession.noteCount} 篇文档`)}</strong>
-              <p class="session-rail-copy">${escapeHtml(`最后保存于 ${formatDateTime(localWorkspaceSession.savedAtMs)}，刷新页面后会优先恢复这份本机工作区。`)}</p>
-              <p class="session-rail-copy">${escapeHtml(`上次停留在 ${formatNavViewLabel(localWorkspaceSession.activeNavView || "overview")} · ${localWorkspaceSession.workspaceShell?.notes?.[localWorkspaceSession.selectedWorkspaceNoteId]?.title || "未命名文档"}`)}</p>
-              ${
-                localWorkspaceSession.selectedActionId
-                  ? `<p class="session-rail-copy">${escapeHtml(`已选动作：${localWorkspaceSession.selectedActionId}`)}</p>`
-                  : ""
-              }
-              ${
-                localWorkspaceSession.aiHeadline
-                  ? `<p class="session-rail-copy">${escapeHtml(`最近 AI 结论：${localWorkspaceSession.aiHeadline}`)}</p>`
-                  : ""
-              }
-              <div class="detail-actions rail-action-row">
-                <button class="ghost detail-inline-button" data-rail-command="clear-local-workspace-session" type="button">清除恢复入口</button>
-              </div>
-            </article>
-          `
-          : ""
-      }
     </div>
   `;
 
@@ -7574,6 +7471,7 @@ function renderEmptyDashboard(message) {
 }
 
 function render() {
+  renderSidebarMeta();
   renderViewModeCard();
   renderViewDetailGrid();
   renderNavViewVisibility();

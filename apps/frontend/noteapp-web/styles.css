@@ -74,14 +74,14 @@ pre {
 }
 
 .app-sidebar {
-  width: 300px;
+  width: 256px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px 16px;
+  gap: 0;
+  padding: 0;
   border-right: 1px solid var(--line);
-  background: rgba(22, 33, 62, 0.92);
+  background: #16213e;
   backdrop-filter: blur(14px);
   overflow: hidden;
 }
@@ -162,9 +162,12 @@ textarea::placeholder {
 .sidebar-brand-panel {
   display: grid;
   gap: 18px;
-  background:
-    linear-gradient(180deg, rgba(233, 69, 96, 0.08), transparent 46%),
-    rgba(18, 19, 22, 0.92);
+  padding: 24px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .sidebar-brand {
@@ -244,6 +247,7 @@ textarea::placeholder {
 .sidebar-nav {
   display: grid;
   gap: 12px;
+  padding: 12px 0;
 }
 
 .sidebar-nav-group {
@@ -269,6 +273,10 @@ textarea::placeholder {
   padding: 10px 12px;
   background: transparent;
   color: var(--muted);
+  border-left-width: 4px;
+  border-left-style: solid;
+  border-left-color: transparent;
+  border-radius: 0;
 }
 
 .sidebar-nav-item-icon {
@@ -297,7 +305,8 @@ textarea::placeholder {
   background: rgba(31, 43, 74, 0.88);
   color: var(--accent-strong);
   border-color: rgba(233, 69, 96, 0.28);
-  box-shadow: inset 3px 0 0 rgba(233, 69, 96, 0.85);
+  border-left-color: rgba(233, 69, 96, 0.85);
+  box-shadow: none;
 }
 
 .sidebar-nav-item.is-active .sidebar-nav-item-icon {
@@ -316,19 +325,73 @@ textarea::placeholder {
 }
 
 .sidebar-tree-card {
-  min-height: 260px;
-}
-
-.sidebar-session-card {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  padding: 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.sidebar-session-card {
+  flex: 0 0 auto;
+  overflow: visible;
+  padding: 16px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .sidebar-footer {
   display: grid;
   gap: 10px;
-  background: rgba(22, 33, 62, 0.56);
+  padding: 16px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.sidebar-account-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+  padding: 8px 12px 0;
+}
+
+.sidebar-account-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid rgba(233, 69, 96, 0.28);
+  background: rgba(233, 69, 96, 0.14);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+}
+
+.sidebar-account-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.sidebar-account-copy strong {
+  font-size: 0.84rem;
+  color: var(--ink);
+}
+
+.sidebar-account-copy span {
+  color: var(--muted);
+  font-size: 0.76rem;
 }
 
 .sidebar-footer-label,
@@ -719,6 +782,38 @@ pre {
 .ai-pane {
   display: grid;
   gap: 16px;
+}
+
+.sidebar-status-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.sidebar-status-card {
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(18, 19, 22, 0.72);
+  display: grid;
+  gap: 10px;
+}
+
+.sidebar-status-card-accent {
+  background:
+    linear-gradient(135deg, rgba(233, 69, 96, 0.08), transparent 52%),
+    rgba(18, 19, 22, 0.78);
+}
+
+.sidebar-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sidebar-status-card strong {
+  font-family: var(--display);
+  font-size: 1rem;
 }
 
 .session-rail-grid {
