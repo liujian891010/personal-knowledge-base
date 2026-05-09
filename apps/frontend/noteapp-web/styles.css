@@ -532,6 +532,10 @@ pre {
   color: var(--warning);
 }
 
+.tone-success-inline {
+  color: var(--success);
+}
+
 .tree-node-signals,
 .editor-signal-row {
   display: flex;
@@ -630,6 +634,33 @@ pre {
 .editor-draft-panel {
   display: grid;
   gap: 14px;
+}
+
+.editor-sync-checklist {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.editor-sync-item {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, 0.03);
+  display: grid;
+  gap: 8px;
+}
+
+.editor-sync-item strong {
+  font-family: var(--display);
+}
+
+.editor-sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
 }
 
 .editor-field {
@@ -1023,6 +1054,7 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .editor-sync-checklist,
   .ai-draft-grid {
     grid-template-columns: 1fr;
   }

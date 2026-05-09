@@ -540,6 +540,11 @@ function setSelectedAction(action, source = "手动选择") {
   elements.actionExecutionStatus.textContent =
     "点击“执行当前动作”后，会通过本地桌面 bridge 转发该契约。";
   elements.executeSelectedButton.disabled = !state.bridgeStatus?.available;
+  pushSessionHistory({
+    type: "sync_action_selected",
+    level: action.enabled === false ? "warning" : "info",
+    detail: `${action.action_id} · ${formatActionSourceLabel(source)}`,
+  });
 }
 
 function createActionChip(action, source) {
@@ -707,6 +712,7 @@ function formatSessionEventLabel(type) {
   return {
     app_session_loaded: "应用会话已加载",
     bridge_snapshot_refreshed: "桥接快照已刷新",
+    sync_action_selected: "同步动作已选中",
     sync_action_executed: "同步动作已执行",
     quick_capture_created: "快速记录已创建",
     sync_payload_loaded: "同步载荷已更新",
@@ -1455,6 +1461,44 @@ function summaryHasBlockingSyncWork() {
   );
 }
 
+function collectWorkspaceSyncActions(note) {
+  if (!note || !state.syncCenter) {
+    return [];
+  }
+
+  const actions = [];
+  const seen = new Set();
+  const syncContext = note.syncContext || {};
+  const watchActionIds = Array.isArray(syncContext.watchActionIds) ? syncContext.watchActionIds : [];
+  const watchCardKinds = Array.isArray(syncContext.watchCardKinds) ? syncContext.watchCardKinds : [];
+  const pushAction = (action, source, force = false) => {
+    if (!action?.action_id || seen.has(action.action_id)) {
+      return;
+    }
+    if (!force && watchActionIds.length && !watchActionIds.includes(action.action_id)) {
+      return;
+    }
+    seen.add(action.action_id);
+    actions.push({ action, source });
+  };
+
+  pushAction(state.syncCenter.panel?.primary_action, "panel.primary_action", true);
+  for (const action of state.syncCenter.panel?.secondary_actions || []) {
+    pushAction(action, "panel.secondary_actions");
+  }
+
+  for (const card of state.syncCenter.cards || []) {
+    if (watchCardKinds.length && !watchCardKinds.includes(card.kind)) {
+      continue;
+    }
+    for (const action of card.actions || []) {
+      pushAction(action, `card:${card.card_id}`);
+    }
+  }
+
+  return actions;
+}
+
 function countWorkspaceNotes(workspaceShell) {
   return workspaceShell.sections.reduce(
     (total, section) => total + (Array.isArray(section.items) ? section.items.length : 0),
@@ -1640,6 +1684,9 @@ function renderWorkspaceEditor() {
   const editorDraft = getActiveEditorDraft();
   const draftDirty = isEditorDraftDirty(note, editorDraft);
   const draftWordCount = editorDraft ? countDraftCharacters(editorDraft.body) : 0;
+  const draftInsight = buildEditorDraftInsight(note, editorDraft);
+  const workspaceSyncActions = collectWorkspaceSyncActions(note);
+  const canEnterSyncFlow = !draftInsight || !draftInsight.dirty;
   elements.workspaceEditor.innerHTML = `
     <div class="editor-toolbar">
       <div>
@@ -1677,6 +1724,31 @@ function renderWorkspaceEditor() {
           )
           .join("")}
       </div>
+    </section>
+    <section class="editor-sync-box">
+      <h3>草稿进入同步</h3>
+      <div class="editor-sync-checklist">
+        <div class="editor-sync-item">
+          <span>草稿保存</span>
+          <strong class="${canEnterSyncFlow ? "tone-success-inline" : "tone-warning-inline"}">${canEnterSyncFlow ? "可进入同步" : "请先保存草稿"}</strong>
+        </div>
+        <div class="editor-sync-item">
+          <span>桌面桥接</span>
+          <strong class="${state.bridgeStatus?.available ? "tone-success-inline" : "tone-warning-inline"}">${state.bridgeStatus?.available ? "可执行动作" : "当前不可执行"}</strong>
+        </div>
+        <div class="editor-sync-item">
+          <span>同步阻塞</span>
+          <strong class="${summaryHasBlockingSyncWork() ? "tone-warning-inline" : "tone-success-inline"}">${summaryHasBlockingSyncWork() ? "仍有阻塞项" : "当前可继续"}</strong>
+        </div>
+      </div>
+      <p class="summary-copy">
+        ${
+          canEnterSyncFlow
+            ? "保存后的草稿可以直接从这里选择下一步同步动作。"
+            : "当前正文仍有未保存修改，建议先保存，再进入 Pull / 检测变更 / 提交变更流程。"
+        }
+      </p>
+      <div class="editor-sync-actions" id="editor-sync-actions"></div>
     </section>
     ${
       editorDraft
@@ -1716,6 +1788,20 @@ function renderWorkspaceEditor() {
   const bodyInput = elements.workspaceEditor.querySelector("#editor-body-input");
   const dirtyIndicator = elements.workspaceEditor.querySelector("#editor-dirty-indicator");
   const wordCount = elements.workspaceEditor.querySelector("#editor-word-count");
+  const editorSyncActions = elements.workspaceEditor.querySelector("#editor-sync-actions");
+  if (editorSyncActions) {
+    if (!canEnterSyncFlow) {
+      const saveButton = document.createElement("button");
+      saveButton.type = "button";
+      saveButton.className = "solid editor-action-button";
+      saveButton.textContent = "先保存草稿";
+      saveButton.addEventListener("click", () => saveEditingSelectedNote());
+      editorSyncActions.appendChild(saveButton);
+    }
+    for (const { action, source } of workspaceSyncActions) {
+      editorSyncActions.appendChild(createActionChip(action, source));
+    }
+  }
   if (titleInput && bodyInput && editorDraft) {
     const updateDraftMeta = () => {
       const currentNote = getSelectedWorkspaceNote();
