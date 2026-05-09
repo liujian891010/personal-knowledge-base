@@ -805,6 +805,12 @@ pre {
   background: rgba(8, 12, 22, 0.62);
 }
 
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .detail-metric strong {
   display: block;
   margin-top: 8px;
@@ -814,6 +820,17 @@ pre {
 .token-card {
   display: grid;
   gap: 8px;
+  text-align: left;
+}
+
+.entity-filter-button,
+.detail-inline-button {
+  cursor: pointer;
+}
+
+.entity-filter-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(96, 165, 250, 0.28);
 }
 
 .token-card span,

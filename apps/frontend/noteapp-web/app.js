@@ -314,6 +314,11 @@ function normalizeSearchQuery(value = "") {
   return String(value).trim().toLocaleLowerCase("zh-CN");
 }
 
+function resetSearchQuery() {
+  state.searchQuery = "";
+  elements.searchInput.value = "";
+}
+
 function matchesSearchQuery(query, ...values) {
   if (!query) {
     return true;
@@ -778,6 +783,37 @@ function buildSettingsSnapshot() {
   };
 }
 
+function collectConflictActions() {
+  if (!state.syncCenter) {
+    return [];
+  }
+
+  const actions = [];
+  const seen = new Set();
+  const pushAction = (action, source) => {
+    if (!action?.action_id || seen.has(action.action_id)) {
+      return;
+    }
+    seen.add(action.action_id);
+    actions.push({ action, source });
+  };
+
+  pushAction(state.syncCenter.panel?.primary_action, "panel.primary_action");
+  for (const action of state.syncCenter.panel?.secondary_actions || []) {
+    pushAction(action, "panel.secondary_actions");
+  }
+  for (const card of state.syncCenter.cards || []) {
+    if (card.kind !== "conflicts" && card.kind !== "activity" && !card.card_id.includes("conflict")) {
+      continue;
+    }
+    for (const action of card.actions || []) {
+      pushAction(action, `card:${card.card_id}`);
+    }
+  }
+
+  return actions;
+}
+
 function renderNavigation() {
   for (const button of elements.navButtons) {
     button.classList.toggle("is-active", button.dataset.navView === state.activeNavView);
@@ -884,8 +920,17 @@ function renderViewDetailGrid() {
             <strong>${escapeHtml(state.sourceLabel)}</strong>
           </div>
         </div>
+        <div class="detail-actions">
+          <button class="ghost detail-inline-button" data-view-command="clear-search" type="button">清空搜索</button>
+        </div>
       </article>
     `;
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-view-command='clear-search']")) {
+      button.addEventListener("click", () => {
+        resetSearchQuery();
+        render();
+      });
+    }
     return;
   }
 
@@ -910,11 +955,11 @@ function renderViewDetailGrid() {
           ${graph.topEntities
             .map(
               (entity) => `
-                <div class="token-card">
+                <button class="token-card entity-filter-button" data-entity-filter="${escapeHtml(entity.entity)}" type="button">
                   <strong>${escapeHtml(entity.entity)}</strong>
                   <span>${escapeHtml(entity.noteCount)} 篇文档引用</span>
                   <p>${escapeHtml(entity.notes.join(" · "))}</p>
-                </div>
+                </button>
               `,
             )
             .join("")}
@@ -943,6 +988,14 @@ function renderViewDetailGrid() {
         </div>
       </article>
     `;
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-entity-filter]")) {
+      button.addEventListener("click", () => {
+        const value = button.dataset.entityFilter || "";
+        state.searchQuery = value;
+        elements.searchInput.value = value;
+        render();
+      });
+    }
     return;
   }
 
@@ -990,8 +1043,13 @@ function renderViewDetailGrid() {
               : '<div class="empty-state"><p>当前样例没有返回具体冲突文件，说明冲突面板已比阻塞态更靠前。</p></div>'
           }
         </div>
+        <div class="detail-actions" id="conflict-detail-actions"></div>
       </article>
     `;
+    const conflictActionsHost = elements.viewDetailGrid.querySelector("#conflict-detail-actions");
+    for (const { action, source } of collectConflictActions()) {
+      conflictActionsHost?.appendChild(createActionChip(action, source));
+    }
     return;
   }
 
@@ -1047,8 +1105,30 @@ function renderViewDetailGrid() {
         <div class="token-grid">
           ${settings.diagnostics.slice(0, 4).map((item) => `<span class="mini-pill tone-${resolveTone(item.level)}">${escapeHtml(item.code)}</span>`).join("")}
         </div>
+        <div class="detail-actions">
+          <button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">刷新桥接状态</button>
+          <button class="solid detail-inline-button" data-view-command="refresh-session" type="button">刷新实时会话</button>
+        </div>
       </article>
     `;
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-view-command]")) {
+      button.addEventListener("click", async () => {
+        if (button.dataset.viewCommand === "refresh-bridge") {
+          await requestBridgeStatus();
+          render();
+          return;
+        }
+        if (button.dataset.viewCommand === "refresh-session") {
+          try {
+            await refreshFullAppSession();
+          } catch (error) {
+            state.lastBridgeError = normalizeBridgeError(error);
+            elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
+            renderBridgeError(state.lastBridgeError);
+          }
+        }
+      });
+    }
   }
 }
 
