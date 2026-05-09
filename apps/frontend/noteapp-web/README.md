@@ -10,6 +10,7 @@ Current scope:
 4. Previews action contracts as shell commands instead of re-implementing desktop execution logic.
 5. Can auto-load a custom payload path through `?payload=...`.
 6. Ships with bundled sample payloads under `fixtures/`.
+7. Includes a prototype workspace shell with file tree, editor, and AI side panel chrome above the sync dock.
 
 Local usage:
 
