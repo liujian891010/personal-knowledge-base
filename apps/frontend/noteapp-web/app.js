@@ -1667,6 +1667,7 @@ function renderViewDetailGrid() {
       : [];
     const recentSessionEntries = state.sessionHistory.slice(0, 4);
     const localWorkspaceSession = summarizeLocalWorkspaceSession();
+    const workspaceSourceSummary = buildWorkspaceSourceSummary();
 
     elements.viewDetailGrid.hidden = false;
     elements.viewDetailGrid.innerHTML = `
@@ -1706,6 +1707,44 @@ function renderViewDetailGrid() {
         <div class="detail-actions">
           <button class="solid detail-inline-button" data-overview-nav="conflicts" type="button">查看同步详情</button>
           <button class="ghost detail-inline-button" data-overview-command="refresh-session" type="button">刷新实时会话</button>
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">工作区入口</p>
+        <h3>立即开始</h3>
+        <div class="detail-metric-grid">
+          <div class="detail-metric">
+            <span class="metric-label">当前工作区</span>
+            <strong>${escapeHtml(formatWorkspaceSourceLabel(state.workspaceSourceLabel))}</strong>
+          </div>
+          <div class="detail-metric">
+            <span class="metric-label">同步看板</span>
+            <strong>${escapeHtml(formatSyncSourceLabel(state.sourceLabel))}</strong>
+          </div>
+        </div>
+        <div class="view-stack">
+          <div class="detail-row detail-row-block">
+            <strong>${escapeHtml(workspaceSourceSummary.headline)}</strong>
+            <span>${escapeHtml(workspaceSourceSummary.detail)}</span>
+          </div>
+          <div class="detail-row detail-row-block">
+            <strong>${escapeHtml(state.bridgeStatus?.available ? "桌面实时会话可直接进入" : "当前更适合先整理本机草稿")}</strong>
+            <span>${escapeHtml(state.bridgeStatus?.available ? "如果准备继续真实同步流程，可以直接拉取桌面实时会话。" : "桌面桥接还没接通时，继续本机草稿或演示会话会更顺畅。")}</span>
+          </div>
+        </div>
+        <div class="detail-actions">
+          ${
+            localWorkspaceSession && state.workspaceSourceLabel !== "浏览器本地草稿"
+              ? '<button class="solid detail-inline-button" data-overview-command="continue-local-workspace-session" type="button">继续本机草稿</button>'
+              : ""
+          }
+          ${
+            state.bridgeStatus?.available
+              ? '<button class="ghost detail-inline-button" data-overview-command="refresh-session" type="button">进入桌面实时会话</button>'
+              : '<button class="ghost detail-inline-button" data-overview-command="check-bridge" type="button">检查桌面桥接</button>'
+          }
+          <button class="ghost detail-inline-button" data-overview-command="load-sample-session" type="button">切到演示会话</button>
+          <button class="ghost detail-inline-button" data-overview-command="open-settings" type="button">更多入口</button>
         </div>
       </article>
       <article class="view-detail-card">
@@ -1968,6 +2007,28 @@ function renderViewDetailGrid() {
             state.lastBridgeError = normalizeBridgeError(error);
             elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
             renderBridgeError(state.lastBridgeError);
+          }
+          return;
+        }
+        if (button.dataset.overviewCommand === "check-bridge") {
+          await requestBridgeStatus();
+          render();
+          return;
+        }
+        if (button.dataset.overviewCommand === "load-sample-session") {
+          try {
+            await loadSampleAppSession();
+          } catch (error) {
+            renderEmptyDashboard(error instanceof Error ? error.message : String(error));
+          }
+          return;
+        }
+        if (button.dataset.overviewCommand === "continue-local-workspace-session") {
+          const restoredSession = restoreLocalWorkspaceSession({
+            statusMessage: "已切回本机工作区草稿，可直接继续刚才的整理上下文。",
+          });
+          if (!restoredSession) {
+            elements.workspaceStatus.textContent = "当前没有可恢复的本机工作区会话。";
           }
           return;
         }
