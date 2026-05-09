@@ -11,6 +11,7 @@ Current scope:
 5. Can auto-load a custom payload path through `?payload=...`.
 6. Ships with bundled sample payloads under `fixtures/`.
 7. Includes a prototype workspace shell with file tree, editor, and AI side panel chrome above the sync dock.
+8. Can auto-load a custom workspace shell contract through `?workspace=...`.
 
 Local usage:
 

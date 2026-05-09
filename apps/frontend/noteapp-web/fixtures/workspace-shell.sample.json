@@ -1,0 +1,139 @@
+{
+  "sections": [
+    {
+      "id": "notes",
+      "label": "Notes",
+      "items": [
+        {
+          "id": "desktop-bridge",
+          "title": "Desktop Bridge Rollout",
+          "path": "Notes/Engineering/Desktop Bridge Rollout.md",
+          "status": "Modified"
+        },
+        {
+          "id": "sync-recovery",
+          "title": "Sync Recovery Checklist",
+          "path": "Notes/Engineering/Sync Recovery Checklist.md",
+          "status": "Review"
+        },
+        {
+          "id": "release-cadence",
+          "title": "Release Cadence",
+          "path": "Notes/Product/Release Cadence.md",
+          "status": "Stable"
+        }
+      ]
+    },
+    {
+      "id": "ai-wiki",
+      "label": ".ai/wiki",
+      "items": [
+        {
+          "id": "desktop-shell",
+          "title": "Desktop Shell Spec",
+          "path": ".ai/wiki/shell/Desktop Shell Spec.md",
+          "status": "AI draft"
+        },
+        {
+          "id": "bridge-diagnostics",
+          "title": "Bridge Diagnostics",
+          "path": ".ai/wiki/ops/Bridge Diagnostics.md",
+          "status": "Needs accept"
+        }
+      ]
+    }
+  ],
+  "notes": {
+    "desktop-bridge": {
+      "title": "Desktop Bridge Rollout",
+      "path": "Notes/Engineering/Desktop Bridge Rollout.md",
+      "statusTone": "warning",
+      "statusLabel": "Modified locally",
+      "lastSaved": "Saved 6 minutes ago",
+      "tags": ["sync", "desktop", "bridge", "noteapp-web"],
+      "body": "# Desktop Bridge Rollout\n\n## Current slice\n- Export sync shell snapshots through the desktop CLI.\n- Forward executable actions through a local dev bridge instead of re-implementing them in the browser.\n- Keep browser-side diagnostics visible so missing local config is obvious.\n\n## Next decisions\n1. Stabilize the bridge contract with lightweight tests.\n2. Expand the web shell from sync-only to full workspace chrome.\n3. Move from prototype panes to real file-tree and editor contracts.",
+      "ai": {
+        "queueDepth": 2,
+        "warnings": 1,
+        "relatedEntities": ["Desktop CLI", "Sync Center", "Bridge Local Config"],
+        "suggestions": [
+          "Promote the bridge status payload to a shared frontend contract.",
+          "Expose selected note context to the AI panel for follow-up workflows."
+        ],
+        "lint": ["Bridge status should surface config precedence and failure codes."]
+      }
+    },
+    "sync-recovery": {
+      "title": "Sync Recovery Checklist",
+      "path": "Notes/Engineering/Sync Recovery Checklist.md",
+      "statusTone": "danger",
+      "statusLabel": "Needs conflict audit",
+      "lastSaved": "Saved yesterday",
+      "tags": ["sync", "recovery", "conflicts"],
+      "body": "# Sync Recovery Checklist\n\n## Before retry\n- Confirm staging files were cleaned after the failed attempt.\n- Verify unresolved conflict copies are still visible in the vault.\n- Rebuild the next snapshot from a fresh working tree scan.\n\n## Operator note\nDo not resume a commit from stale plaintext snapshots. The next round must rebuild from the latest source versions.",
+      "ai": {
+        "queueDepth": 1,
+        "warnings": 3,
+        "relatedEntities": ["commit_intent_journal", ".noteapp/staging", "conflict_copies"],
+        "suggestions": [
+          "Add a visible recovery badge in the sync dock when staging cleanup is required.",
+          "Link conflict artifacts directly from the future file-tree contract."
+        ],
+        "lint": [
+          "Missing rollback note for blob staging cleanup.",
+          "Needs example operator timeline for drift-abort handling."
+        ]
+      }
+    },
+    "release-cadence": {
+      "title": "Release Cadence",
+      "path": "Notes/Product/Release Cadence.md",
+      "statusTone": "success",
+      "statusLabel": "Ready",
+      "lastSaved": "Saved this morning",
+      "tags": ["product", "delivery", "weekly"],
+      "body": "# Release Cadence\n\n## Shipping rule\n- Push after each meaningful phase.\n- Keep the static shell deployable at every step.\n- Avoid mixing experimental UI work with bridge boundary fixes in the same commit unless they are tightly coupled.\n\n## Weekly ritual\nMonday: sync and diagnostics\nWednesday: desktop shell boundary work\nFriday: workspace UX refinement",
+      "ai": {
+        "queueDepth": 0,
+        "warnings": 0,
+        "relatedEntities": ["Weekly Review", "Milestone Board", "Release Notes"],
+        "suggestions": ["Summarize the last three pushed commits into a changelog draft."],
+        "lint": []
+      }
+    },
+    "desktop-shell": {
+      "title": "Desktop Shell Spec",
+      "path": ".ai/wiki/shell/Desktop Shell Spec.md",
+      "statusTone": "info",
+      "statusLabel": "AI draft",
+      "lastSaved": "Compiled 18 minutes ago",
+      "tags": ["ai", "shell", "spec"],
+      "body": "# Desktop Shell Spec\n\n## Intent\nCapture the shell-level contracts the desktop client exposes to the static web layer.\n\n## Coverage\n- sync-shell-snapshot\n- sync-center summary and cards\n- activity feed\n- executable action forwarding\n\n## Gap\nThe current web shell still needs a first-class file tree and editor contract.",
+      "ai": {
+        "queueDepth": 4,
+        "warnings": 2,
+        "relatedEntities": ["sync-shell-snapshot", "activity_feed", "execute-sync-action-and-snapshot"],
+        "suggestions": [
+          "Accept the AI draft once the editor and tree panes are backed by real contracts."
+        ],
+        "lint": ["Spec references future UI panes without sample contract payloads."]
+      }
+    },
+    "bridge-diagnostics": {
+      "title": "Bridge Diagnostics",
+      "path": ".ai/wiki/ops/Bridge Diagnostics.md",
+      "statusTone": "warning",
+      "statusLabel": "Needs accept",
+      "lastSaved": "Compiled 2 hours ago",
+      "tags": ["ai", "ops", "diagnostics"],
+      "body": "# Bridge Diagnostics\n\n## Captured signals\n- config source precedence\n- missing required bridge settings\n- desktop CLI spawn failures\n- invalid JSON returned by the desktop boundary\n\n## Pending\nMap diagnostics into a shared frontend model and keep the browser copy minimal.",
+      "ai": {
+        "queueDepth": 1,
+        "warnings": 1,
+        "relatedEntities": ["configSource", "sourceByField", "desktop_cli_invalid_json"],
+        "suggestions": ["Add one screenshot-ready status panel for operator demos."],
+        "lint": ["Needs explicit note that bearer tokens remain local-only."]
+      }
+    }
+  }
+}
