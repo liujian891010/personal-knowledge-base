@@ -1,14 +1,14 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { delimiter } from "node:path";
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, "..");
 const repoRoot = resolve(appRoot, "..", "..", "..");
 const defaultSnapshotPath = join(appRoot, "fixtures", "live-sync-shell.json");
 const localBridgeConfigPath = join(appRoot, "bridge.local.json");
+const BRIDGE_MODE = "desktop-cli-local";
 
 export function printBridgeUsage() {
   console.log(`Usage:
@@ -48,33 +48,162 @@ export function readArgMap(argv) {
   return map;
 }
 
+function createDiagnostic(level, code, message, details = null) {
+  return {
+    level,
+    code,
+    message,
+    details,
+  };
+}
+
 function loadLocalBridgeConfig() {
   if (!existsSync(localBridgeConfigPath)) {
-    return {};
+    return {
+      config: {},
+      diagnostics: [],
+    };
   }
-  const payload = JSON.parse(readFileSync(localBridgeConfigPath, "utf-8"));
-  return payload && typeof payload === "object" ? payload : {};
+  try {
+    const payload = JSON.parse(readFileSync(localBridgeConfigPath, "utf-8"));
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return {
+        config: {},
+        diagnostics: [
+          createDiagnostic(
+            "warning",
+            "bridge_local_config_invalid_shape",
+            "bridge.local.json must contain a top-level JSON object.",
+            {
+              path: localBridgeConfigPath,
+            },
+          ),
+        ],
+      };
+    }
+    return {
+      config: payload,
+      diagnostics: [
+        createDiagnostic("info", "bridge_local_config_loaded", "Loaded bridge.local.json.", {
+          path: localBridgeConfigPath,
+        }),
+      ],
+    };
+  } catch (error) {
+    return {
+      config: {},
+      diagnostics: [
+        createDiagnostic(
+          "danger",
+          "bridge_local_config_invalid_json",
+          "bridge.local.json could not be parsed.",
+          {
+            path: localBridgeConfigPath,
+            reason: error instanceof Error ? error.message : String(error),
+          },
+        ),
+      ],
+    };
+  }
+}
+
+function resolveConfigValue(argValue, envValue, localValue, fallback = null) {
+  return argValue || envValue || localValue || fallback;
+}
+
+function resolveConfigSource(argValue, envValue, localValue, fallbackLabel = null) {
+  if (argValue) {
+    return "cli_arg";
+  }
+  if (envValue) {
+    return "env";
+  }
+  if (localValue) {
+    return localBridgeConfigPath;
+  }
+  return fallbackLabel;
+}
+
+function resolveConfigSourceSummary(sourceByField) {
+  const distinctSources = [...new Set(Object.values(sourceByField).filter(Boolean))];
+  if (distinctSources.length === 0) {
+    return "unconfigured";
+  }
+  if (distinctSources.length === 1) {
+    return distinctSources[0];
+  }
+  return distinctSources.join(" + ");
 }
 
 export function resolveBridgeConfig({ args = new Map(), env = process.env } = {}) {
   const localConfig = loadLocalBridgeConfig();
-  return {
-    vaultRoot: args.get("--vault-root") || env.PKB_VAULT_ROOT || localConfig.vaultRoot || null,
-    baseUrl: args.get("--base-url") || env.PKB_BASE_URL || localConfig.baseUrl || null,
-    vaultId: args.get("--vault-id") || env.PKB_VAULT_ID || localConfig.vaultId || null,
-    deviceId: args.get("--device-id") || env.PKB_DEVICE_ID || localConfig.deviceId || null,
-    bearerToken: args.get("--bearer-token") || env.PKB_BEARER_TOKEN || localConfig.bearerToken || null,
-    activityLimit:
-      args.get("--activity-limit") || env.PKB_SYNC_ACTIVITY_LIMIT || localConfig.activityLimit || "20",
-    nowMs: args.get("--now-ms") || env.PKB_SYNC_NOW_MS || localConfig.nowMs || null,
-    outputJson: resolve(
-      args.get("--output-json") ||
-        env.PKB_SYNC_SNAPSHOT_OUTPUT ||
-        localConfig.outputJson ||
-        defaultSnapshotPath,
+  const sourceByField = {
+    vaultRoot: resolveConfigSource(
+      args.get("--vault-root"),
+      env.PKB_VAULT_ROOT,
+      localConfig.config.vaultRoot,
     ),
-    pythonBin: env.PYTHON_BIN || localConfig.pythonBin || "python",
-    configSource: existsSync(localBridgeConfigPath) ? localBridgeConfigPath : "env",
+    baseUrl: resolveConfigSource(
+      args.get("--base-url"),
+      env.PKB_BASE_URL,
+      localConfig.config.baseUrl,
+    ),
+    vaultId: resolveConfigSource(args.get("--vault-id"), env.PKB_VAULT_ID, localConfig.config.vaultId),
+    deviceId: resolveConfigSource(
+      args.get("--device-id"),
+      env.PKB_DEVICE_ID,
+      localConfig.config.deviceId,
+    ),
+    bearerToken: resolveConfigSource(
+      args.get("--bearer-token"),
+      env.PKB_BEARER_TOKEN,
+      localConfig.config.bearerToken,
+    ),
+    activityLimit: resolveConfigSource(
+      args.get("--activity-limit"),
+      env.PKB_SYNC_ACTIVITY_LIMIT,
+      localConfig.config.activityLimit,
+      "default:20",
+    ),
+    nowMs: resolveConfigSource(args.get("--now-ms"), env.PKB_SYNC_NOW_MS, localConfig.config.nowMs),
+    outputJson: resolveConfigSource(
+      args.get("--output-json"),
+      env.PKB_SYNC_SNAPSHOT_OUTPUT,
+      localConfig.config.outputJson,
+      defaultSnapshotPath,
+    ),
+    pythonBin: resolveConfigSource(undefined, env.PYTHON_BIN, localConfig.config.pythonBin, "default:python"),
+  };
+  return {
+    vaultRoot: resolveConfigValue(args.get("--vault-root"), env.PKB_VAULT_ROOT, localConfig.config.vaultRoot),
+    baseUrl: resolveConfigValue(args.get("--base-url"), env.PKB_BASE_URL, localConfig.config.baseUrl),
+    vaultId: resolveConfigValue(args.get("--vault-id"), env.PKB_VAULT_ID, localConfig.config.vaultId),
+    deviceId: resolveConfigValue(args.get("--device-id"), env.PKB_DEVICE_ID, localConfig.config.deviceId),
+    bearerToken: resolveConfigValue(
+      args.get("--bearer-token"),
+      env.PKB_BEARER_TOKEN,
+      localConfig.config.bearerToken,
+    ),
+    activityLimit: resolveConfigValue(
+      args.get("--activity-limit"),
+      env.PKB_SYNC_ACTIVITY_LIMIT,
+      localConfig.config.activityLimit,
+      "20",
+    ),
+    nowMs: resolveConfigValue(args.get("--now-ms"), env.PKB_SYNC_NOW_MS, localConfig.config.nowMs),
+    outputJson: resolve(
+      resolveConfigValue(
+        args.get("--output-json"),
+        env.PKB_SYNC_SNAPSHOT_OUTPUT,
+        localConfig.config.outputJson,
+        defaultSnapshotPath,
+      ),
+    ),
+    pythonBin: resolveConfigValue(undefined, env.PYTHON_BIN, localConfig.config.pythonBin, "python"),
+    bridgeMode: BRIDGE_MODE,
+    configSource: resolveConfigSourceSummary(sourceByField),
+    sourceByField,
+    diagnostics: localConfig.diagnostics,
   };
 }
 
@@ -113,6 +242,20 @@ export function buildDesktopCliPrefix(config) {
   return cliArgs;
 }
 
+function createBridgeCommandError(code, message, details = {}) {
+  const error = new Error(message);
+  error.code = code;
+  error.details = details;
+  return error;
+}
+
+function buildOutputPreview(output) {
+  if (typeof output !== "string") {
+    return "";
+  }
+  return output.trim().slice(0, 400);
+}
+
 export function runDesktopCliJson(commandArgs, { config, env = process.env, stdio = "pipe" }) {
   const result = spawnSync(config.pythonBin, [...buildDesktopCliPrefix(config), ...commandArgs], {
     cwd: repoRoot,
@@ -125,19 +268,41 @@ export function runDesktopCliJson(commandArgs, { config, env = process.env, stdi
   });
 
   if (result.error) {
-    throw result.error;
+    throw createBridgeCommandError(
+      "desktop_cli_spawn_failed",
+      `Unable to start desktop CLI with ${config.pythonBin}.`,
+      {
+        pythonBin: config.pythonBin,
+        reason: result.error.message,
+      },
+    );
   }
 
   if (result.status !== 0) {
     const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
-    throw new Error(stderr || `desktop CLI exited with status ${result.status ?? 1}`);
+    throw createBridgeCommandError(
+      "desktop_cli_failed",
+      stderr || `desktop CLI exited with status ${result.status ?? 1}.`,
+      {
+        status: result.status ?? 1,
+        stderr,
+        stdoutPreview: buildOutputPreview(result.stdout),
+      },
+    );
   }
 
   if (stdio === "inherit") {
     return null;
   }
 
-  return JSON.parse(result.stdout);
+  try {
+    return JSON.parse(result.stdout);
+  } catch (error) {
+    throw createBridgeCommandError("desktop_cli_invalid_json", "Desktop CLI returned invalid JSON.", {
+      reason: error instanceof Error ? error.message : String(error),
+      stdoutPreview: buildOutputPreview(result.stdout),
+    });
+  }
 }
 
 export function buildSnapshotCommandArgs(config, overrides = {}) {

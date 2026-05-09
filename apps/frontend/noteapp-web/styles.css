@@ -269,6 +269,11 @@ pre {
   min-height: 120px;
 }
 
+.compact-output {
+  min-height: 84px;
+  font-size: 0.82rem;
+}
+
 .dashboard {
   display: grid;
   gap: 18px;

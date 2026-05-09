@@ -44,6 +44,14 @@ Path:
 apps/frontend/noteapp-web/bridge.local.json
 ```
 
+You can start from the tracked example file:
+
+```text
+apps/frontend/noteapp-web/bridge.local.example.json
+```
+
+The dev server also returns structured bridge errors from `/api/bridge/refresh-snapshot` and `/api/bridge/execute-action`, and `GET /api/bridge/status` now exposes config source and diagnostics so the shell can explain missing settings or CLI failures.
+
 Build static output:
 
 ```powershell
