@@ -1,3 +1,10 @@
+import {
+  executeBridgeAction,
+  fetchBridgeStatus,
+  refreshBridgeSnapshot,
+  startBridgeStatusPolling,
+} from "./bridge-client.js";
+
 const SAMPLE_PATH = "./fixtures/sync-shell-snapshot.sample.json";
 const LIVE_SNAPSHOT_PATH = "./fixtures/live-sync-shell.json";
 const DEFAULT_ACTION_COMMAND = "pkb-desktop-sync";
@@ -8,6 +15,7 @@ const state = {
   snapshotMetadata: null,
   selectedAction: null,
   bridgeStatus: null,
+  bridgeCheckedAtMs: null,
   lastBridgeError: null,
   lastExecution: null,
   sourceLabel: "Not loaded",
@@ -27,6 +35,7 @@ const elements = {
   loadSampleButton: document.getElementById("load-sample-button"),
   loadLiveButton: document.getElementById("load-live-button"),
   refreshLocalButton: document.getElementById("refresh-local-button"),
+  reloadBridgeStatusButton: document.getElementById("reload-bridge-status-button"),
   applyInputButton: document.getElementById("apply-input-button"),
   clearInputButton: document.getElementById("clear-input-button"),
   fileInput: document.getElementById("file-input"),
@@ -127,6 +136,23 @@ function normalizeBridgeError(error) {
   };
 }
 
+function buildOfflineBridgeStatus(error = null) {
+  return {
+    mode: "dev-server-unreachable",
+    available: false,
+    missing: ["dev_server_bridge"],
+    config: null,
+    diagnostics: [
+      {
+        level: "danger",
+        code: "dev_server_bridge_unreachable",
+        message: "Could not reach the local dev server bridge.",
+        details: error ? { reason: error.message } : null,
+      },
+    ],
+  };
+}
+
 function renderBridgeError(error) {
   if (!error) {
     elements.bridgeErrorOutput.textContent = "No bridge errors.";
@@ -142,6 +168,7 @@ function renderBridgeDiagnostics(status) {
   }
   elements.bridgeDiagnosticsOutput.textContent = JSON.stringify(
     {
+      checkedAt: state.bridgeCheckedAtMs ? formatDateTime(state.bridgeCheckedAtMs) : "not yet",
       mode: status.mode || "unknown",
       available: Boolean(status.available),
       missing: status.missing || [],
@@ -159,6 +186,7 @@ function renderBridgeStatus() {
     elements.bridgeStatus.textContent = "Checking local desktop bridge...";
     elements.refreshLocalButton.disabled = true;
     elements.executeSelectedButton.disabled = true;
+    elements.reloadBridgeStatusButton.disabled = true;
     renderBridgeDiagnostics(null);
     renderBridgeError(state.lastBridgeError);
     return;
@@ -171,6 +199,7 @@ function renderBridgeStatus() {
       `(${sourceLabel})`;
     elements.refreshLocalButton.disabled = false;
     elements.executeSelectedButton.disabled = !state.selectedAction;
+    elements.reloadBridgeStatusButton.disabled = false;
     renderBridgeDiagnostics(status);
     renderBridgeError(state.lastBridgeError);
     return;
@@ -179,6 +208,7 @@ function renderBridgeStatus() {
   elements.bridgeStatus.textContent = `Local desktop bridge unavailable: ${status.missing.join(", ")}`;
   elements.refreshLocalButton.disabled = true;
   elements.executeSelectedButton.disabled = true;
+  elements.reloadBridgeStatusButton.disabled = false;
   renderBridgeDiagnostics(status);
   renderBridgeError(state.lastBridgeError);
 }
@@ -452,26 +482,11 @@ function render() {
 
 async function requestBridgeStatus() {
   try {
-    const response = await fetch("/api/bridge/status", { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(`bridge status failed: ${response.status}`);
-    }
-    state.bridgeStatus = await response.json();
-  } catch {
-    state.bridgeStatus = {
-      mode: "dev-server-unreachable",
-      available: false,
-      missing: ["dev_server_bridge"],
-      config: null,
-      diagnostics: [
-        {
-          level: "danger",
-          code: "dev_server_bridge_unreachable",
-          message: "Could not reach the local dev server bridge.",
-          details: null,
-        },
-      ],
-    };
+    state.bridgeStatus = await fetchBridgeStatus();
+    state.bridgeCheckedAtMs = Date.now();
+  } catch (error) {
+    state.bridgeStatus = buildOfflineBridgeStatus(error instanceof Error ? error : null);
+    state.bridgeCheckedAtMs = Date.now();
   }
   renderBridgeStatus();
 }
@@ -526,45 +541,8 @@ async function loadLiveSnapshot() {
   await loadPayloadFromPath(LIVE_SNAPSHOT_PATH, "Exported live sync shell snapshot");
 }
 
-async function postBridgeJson(path, payload = {}) {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-  let json = null;
-  try {
-    json = await response.json();
-  } catch {
-    json = null;
-  }
-  if (!response.ok) {
-    throw normalizeBridgeError(
-      json?.error || {
-        code: "bridge_http_error",
-        message: `Bridge request failed with HTTP ${response.status}.`,
-        details: {
-          status: response.status,
-        },
-      },
-    );
-  }
-  if (!json) {
-    throw normalizeBridgeError({
-      code: "bridge_empty_response",
-      message: "Bridge returned an empty response body.",
-      details: {
-        path,
-      },
-    });
-  }
-  return json;
-}
-
 async function refreshFromDesktop() {
-  const json = await postBridgeJson("/api/bridge/refresh-snapshot", {});
+  const json = await refreshBridgeSnapshot({});
   state.lastBridgeError = null;
   state.lastExecution = null;
   elements.payloadInput.value = JSON.stringify(json.snapshot, null, 2);
@@ -577,9 +555,7 @@ async function executeSelectedAction() {
   }
 
   const actionId = state.selectedAction.action_id;
-  const json = await postBridgeJson("/api/bridge/execute-action", {
-    actionId,
-  });
+  const json = await executeBridgeAction(actionId);
 
   state.lastBridgeError = null;
   state.lastExecution = json.execution;
@@ -655,6 +631,17 @@ elements.refreshLocalButton.addEventListener("click", async () => {
   }
 });
 
+elements.reloadBridgeStatusButton.addEventListener("click", async () => {
+  try {
+    await requestBridgeStatus();
+    state.lastBridgeError = null;
+    renderBridgeStatus();
+  } catch (error) {
+    state.lastBridgeError = normalizeBridgeError(error);
+    renderBridgeStatus();
+  }
+});
+
 elements.applyInputButton.addEventListener("click", () => {
   try {
     applyTextareaPayload();
@@ -701,7 +688,23 @@ elements.executeSelectedButton.addEventListener("click", async () => {
 });
 
 render();
-requestBridgeStatus();
+startBridgeStatusPolling({
+  intervalMs: 15000,
+  onStatus(status) {
+    state.bridgeStatus = status;
+    state.bridgeCheckedAtMs = Date.now();
+    renderBridgeStatus();
+  },
+  onError(error) {
+    state.bridgeStatus = buildOfflineBridgeStatus(
+      error && typeof error === "object" && typeof error.message === "string"
+        ? new Error(error.message)
+        : null,
+    );
+    state.bridgeCheckedAtMs = Date.now();
+    renderBridgeStatus();
+  },
+});
 loadInitialPayload().catch((error) => {
   renderEmptyDashboard(error instanceof Error ? error.message : String(error));
 });

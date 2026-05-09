@@ -52,6 +52,8 @@ apps/frontend/noteapp-web/bridge.local.example.json
 
 The dev server also returns structured bridge errors from `/api/bridge/refresh-snapshot` and `/api/bridge/execute-action`, and `GET /api/bridge/status` now exposes config source and diagnostics so the shell can explain missing settings or CLI failures.
 
+The browser shell polls bridge status every 15 seconds and refreshes it again when the tab becomes visible, so desktop-side config changes show up without restarting the page.
+
 Build static output:
 
 ```powershell
