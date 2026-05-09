@@ -1508,6 +1508,7 @@ function renderViewDetailGrid() {
       ? summary.commit_gate.blocking_reasons.map(formatBlockingReason)
       : [];
     const recentSessionEntries = state.sessionHistory.slice(0, 4);
+    const localWorkspaceSession = summarizeLocalWorkspaceSession();
 
     elements.viewDetailGrid.hidden = false;
     elements.viewDetailGrid.innerHTML = `
@@ -1625,6 +1626,34 @@ function renderViewDetailGrid() {
             state.recoveryDrafts.length
               ? `<button class="ghost detail-inline-button" data-overview-command="discard-all-recovery" type="button">清空恢复区</button>`
               : ""
+          }
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">会话连续性</p>
+        <h3>本机工作区会话</h3>
+        <div class="view-stack">
+          ${
+            localWorkspaceSession
+              ? `
+                <article class="detail-row detail-row-block overview-row">
+                  <div class="overview-row-main">
+                    <div class="overview-row-copy">
+                      <strong>已保存本机工作区</strong>
+                      <span>${escapeHtml(`${localWorkspaceSession.sectionCount} 个分区 · ${localWorkspaceSession.noteCount} 篇文档`)}</span>
+                      <span>${escapeHtml(`最后保存于 ${formatDateTime(localWorkspaceSession.savedAtMs)}`)}</span>
+                    </div>
+                    <div class="overview-row-meta">
+                      <span class="mini-pill tone-success">可自动恢复</span>
+                    </div>
+                  </div>
+                  <div class="detail-actions overview-row-actions">
+                    <button class="ghost detail-inline-button" data-overview-command="open-settings" type="button">管理会话</button>
+                    <button class="ghost detail-inline-button" data-overview-command="clear-local-workspace-session" type="button">清除恢复入口</button>
+                  </div>
+                </article>
+              `
+              : '<div class="empty-state"><p>当前没有保存中的本机工作区会话，刷新后会直接进入演示会话或本地桥接会话。</p></div>'
           }
         </div>
       </article>
@@ -1782,6 +1811,17 @@ function renderViewDetailGrid() {
             elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
             renderBridgeError(state.lastBridgeError);
           }
+          return;
+        }
+        if (button.dataset.overviewCommand === "open-settings") {
+          state.activeNavView = "settings";
+          render();
+          return;
+        }
+        if (button.dataset.overviewCommand === "clear-local-workspace-session") {
+          clearLocalWorkspaceSession();
+          elements.workspaceStatus.textContent = "已清除本机工作区会话的自动恢复入口。";
+          render();
         }
       });
     }
@@ -3929,6 +3969,7 @@ function renderWorkspaceRail() {
   const noteBody = editorDraft ? editorDraft.body : note?.body || "";
   const noteSummary = summarizeRichText(noteBody, 96);
   const readingMinutes = estimateReadingMinutes(noteBody);
+  const localWorkspaceSession = summarizeLocalWorkspaceSession();
 
   if (!note) {
     elements.workspaceRail.innerHTML = `
@@ -4056,6 +4097,20 @@ function renderWorkspaceRail() {
           `
           : ""
       }
+      ${
+        localWorkspaceSession
+          ? `
+            <article class="session-rail-item">
+              <span class="session-rail-title">本机工作区会话</span>
+              <strong>${escapeHtml(`已自动保存 · ${localWorkspaceSession.noteCount} 篇文档`)}</strong>
+              <p class="session-rail-copy">${escapeHtml(`最后保存于 ${formatDateTime(localWorkspaceSession.savedAtMs)}，刷新页面后会优先恢复这份本机工作区。`)}</p>
+              <div class="detail-actions rail-action-row">
+                <button class="ghost detail-inline-button" data-rail-command="clear-local-workspace-session" type="button">清除恢复入口</button>
+              </div>
+            </article>
+          `
+          : ""
+      }
     </div>
   `;
 
@@ -4073,6 +4128,12 @@ function renderWorkspaceRail() {
       }
       if (button.dataset.railCommand === "restore-recovery") {
         restoreAllRecoveryDrafts();
+        return;
+      }
+      if (button.dataset.railCommand === "clear-local-workspace-session") {
+        clearLocalWorkspaceSession();
+        elements.workspaceStatus.textContent = "已清除本机工作区会话的自动恢复入口。";
+        render();
       }
     });
   }
