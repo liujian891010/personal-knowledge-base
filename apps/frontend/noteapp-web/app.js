@@ -21,6 +21,13 @@ const SAMPLE_PATH = "./fixtures/sync-shell-snapshot.sample.json";
 const LIVE_SNAPSHOT_PATH = "./fixtures/live-sync-shell.json";
 const WORKSPACE_SAMPLE_PATH = "./fixtures/workspace-shell.sample.json";
 const DEFAULT_ACTION_COMMAND = "pkb-desktop-sync";
+const LOCAL_UI_SETTINGS_STORAGE_KEY = "noteapp.local-ui-settings";
+const DEFAULT_LOCAL_UI_SETTINGS = {
+  aiRawFileLimitMb: 2,
+  aiRawTotalLimitMb: 500,
+  aiRawCleanupPolicy: "prompt",
+  includeAiRawInExport: false,
+};
 const draftAutosaveTimers = new Map();
 const WORKSPACE_SAMPLE = {
   sections: [
@@ -255,6 +262,7 @@ const state = {
   editorDrafts: {},
   draftRecoveryMeta: {},
   recoveryDrafts: [],
+  localUiSettings: DEFAULT_LOCAL_UI_SETTINGS,
   runtimeSessionId: createRuntimeSessionId(),
 };
 
@@ -342,6 +350,51 @@ function writeDraftRecoveryStore(store) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function parseLocalUiSettings(raw) {
+  if (!raw) {
+    return { ...DEFAULT_LOCAL_UI_SETTINGS };
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    const fileLimit = Number(parsed?.aiRawFileLimitMb);
+    const totalLimit = Number(parsed?.aiRawTotalLimitMb);
+    const cleanupPolicies = new Set(["manual", "prompt", "prune-oldest"]);
+    return {
+      aiRawFileLimitMb: Number.isFinite(fileLimit) && fileLimit > 0 ? Math.min(fileLimit, 100) : DEFAULT_LOCAL_UI_SETTINGS.aiRawFileLimitMb,
+      aiRawTotalLimitMb:
+        Number.isFinite(totalLimit) && totalLimit > 0 ? Math.min(totalLimit, 5000) : DEFAULT_LOCAL_UI_SETTINGS.aiRawTotalLimitMb,
+      aiRawCleanupPolicy: cleanupPolicies.has(parsed?.aiRawCleanupPolicy)
+        ? parsed.aiRawCleanupPolicy
+        : DEFAULT_LOCAL_UI_SETTINGS.aiRawCleanupPolicy,
+      includeAiRawInExport: Boolean(parsed?.includeAiRawInExport),
+    };
+  } catch {
+    return { ...DEFAULT_LOCAL_UI_SETTINGS };
+  }
+}
+
+function persistLocalUiSettings(nextSettings) {
+  state.localUiSettings = {
+    ...DEFAULT_LOCAL_UI_SETTINGS,
+    ...nextSettings,
+  };
+  try {
+    window.localStorage.setItem(LOCAL_UI_SETTINGS_STORAGE_KEY, JSON.stringify(state.localUiSettings));
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+function loadLocalUiSettings() {
+  try {
+    state.localUiSettings = parseLocalUiSettings(window.localStorage.getItem(LOCAL_UI_SETTINGS_STORAGE_KEY));
+  } catch {
+    state.localUiSettings = { ...DEFAULT_LOCAL_UI_SETTINGS };
   }
 }
 
@@ -987,7 +1040,18 @@ function buildSettingsSnapshot() {
     dirtyDraftCount: collectDirtyEditorDrafts().length,
     recoveryCount: state.recoveryDrafts.length,
     lastExecution: buildLastExecutionSummary(),
+    localUiSettings: state.localUiSettings,
   };
+}
+
+function formatAiRawCleanupPolicy(policy) {
+  if (policy === "manual") {
+    return "仅手动清理";
+  }
+  if (policy === "prune-oldest") {
+    return "超限后优先清理最旧内容";
+  }
+  return "超限时先提醒";
 }
 
 function collectConflictActions() {
@@ -1953,6 +2017,70 @@ function renderViewDetailGrid() {
         </div>
       </article>
       <article class="view-detail-card">
+        <p class="card-section-label">AI 中间产物</p>
+        <h3>`.ai/raw` 本地策略</h3>
+        <div class="editor-sync-checklist">
+          <div class="editor-sync-item">
+            <span>单文件上限</span>
+            <strong>${escapeHtml(`${settings.localUiSettings.aiRawFileLimitMb} MB`)}</strong>
+          </div>
+          <div class="editor-sync-item">
+            <span>目录总量上限</span>
+            <strong>${escapeHtml(`${settings.localUiSettings.aiRawTotalLimitMb} MB`)}</strong>
+          </div>
+          <div class="editor-sync-item">
+            <span>清理策略</span>
+            <strong>${escapeHtml(formatAiRawCleanupPolicy(settings.localUiSettings.aiRawCleanupPolicy))}</strong>
+          </div>
+        </div>
+        <p class="summary-copy">这些设置只保存在当前浏览器本地，用于管理 `.ai/raw` 体积、清理和导出附带行为，不会把 `.ai/raw` 纳入常规同步。</p>
+        <div class="editor-draft-panel">
+          <label class="editor-field">
+            <span class="metric-label">单个抽取文本文件上限（MB）</span>
+            <input
+              id="settings-ai-raw-file-limit"
+              class="editor-title-input"
+              type="number"
+              min="1"
+              max="100"
+              step="1"
+              value="${escapeHtml(settings.localUiSettings.aiRawFileLimitMb)}"
+            />
+          </label>
+          <label class="editor-field">
+            <span class="metric-label">`.ai/raw` 目录总量上限（MB）</span>
+            <input
+              id="settings-ai-raw-total-limit"
+              class="editor-title-input"
+              type="number"
+              min="50"
+              max="5000"
+              step="50"
+              value="${escapeHtml(settings.localUiSettings.aiRawTotalLimitMb)}"
+            />
+          </label>
+          <label class="editor-field">
+            <span class="metric-label">超限时处理方式</span>
+            <select id="settings-ai-raw-cleanup-policy" class="editor-title-input">
+              <option value="prompt" ${settings.localUiSettings.aiRawCleanupPolicy === "prompt" ? "selected" : ""}>超限时先提醒</option>
+              <option value="prune-oldest" ${settings.localUiSettings.aiRawCleanupPolicy === "prune-oldest" ? "selected" : ""}>超限后清理最旧内容</option>
+              <option value="manual" ${settings.localUiSettings.aiRawCleanupPolicy === "manual" ? "selected" : ""}>仅手动清理</option>
+            </select>
+          </label>
+          <label class="editor-field">
+            <span class="metric-label">完整 Vault 导出时是否附带 `.ai/raw`</span>
+            <select id="settings-ai-raw-export-mode" class="editor-title-input">
+              <option value="exclude" ${settings.localUiSettings.includeAiRawInExport ? "" : "selected"}>默认不附带</option>
+              <option value="include" ${settings.localUiSettings.includeAiRawInExport ? "selected" : ""}>按本机偏好附带</option>
+            </select>
+          </label>
+        </div>
+        <div class="detail-actions">
+          <button class="solid detail-inline-button" data-settings-command="save-ai-raw-settings" type="button">保存到本机</button>
+          <button class="ghost detail-inline-button" data-settings-command="reset-ai-raw-settings" type="button">恢复默认</button>
+        </div>
+      </article>
+      <article class="view-detail-card">
         <p class="card-section-label">恢复与执行</p>
         <h3>最近操作</h3>
         <div class="view-stack">
@@ -2013,6 +2141,29 @@ function renderViewDetailGrid() {
         }
         if (command === "quick-capture") {
           createQuickCaptureNote();
+          return;
+        }
+        if (command === "save-ai-raw-settings") {
+          const fileLimitInput = elements.viewDetailGrid.querySelector("#settings-ai-raw-file-limit");
+          const totalLimitInput = elements.viewDetailGrid.querySelector("#settings-ai-raw-total-limit");
+          const cleanupPolicyInput = elements.viewDetailGrid.querySelector("#settings-ai-raw-cleanup-policy");
+          const exportModeInput = elements.viewDetailGrid.querySelector("#settings-ai-raw-export-mode");
+          const didPersist = persistLocalUiSettings({
+            aiRawFileLimitMb: Number(fileLimitInput?.value || DEFAULT_LOCAL_UI_SETTINGS.aiRawFileLimitMb),
+            aiRawTotalLimitMb: Number(totalLimitInput?.value || DEFAULT_LOCAL_UI_SETTINGS.aiRawTotalLimitMb),
+            aiRawCleanupPolicy: cleanupPolicyInput?.value || DEFAULT_LOCAL_UI_SETTINGS.aiRawCleanupPolicy,
+            includeAiRawInExport: exportModeInput?.value === "include",
+          });
+          elements.workspaceStatus.textContent = didPersist
+            ? "已保存 `.ai/raw` 本地策略；它只影响本机，不会改变常规同步边界。"
+            : "保存 `.ai/raw` 本地策略失败，请检查浏览器本地存储是否可用。";
+          render();
+          return;
+        }
+        if (command === "reset-ai-raw-settings") {
+          persistLocalUiSettings(DEFAULT_LOCAL_UI_SETTINGS);
+          elements.workspaceStatus.textContent = "已恢复 `.ai/raw` 本地默认策略。";
+          render();
           return;
         }
         if (command === "restore-all-recovery") {
@@ -4587,6 +4738,7 @@ window.addEventListener("beforeunload", (event) => {
   event.returnValue = "";
 });
 
+loadLocalUiSettings();
 refreshRecoveryDrafts();
 render();
 startBridgeStatusPolling({
