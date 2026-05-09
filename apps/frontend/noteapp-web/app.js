@@ -239,6 +239,7 @@ const state = {
   searchQuery: "",
   activeNavView: "overview",
   appSession: null,
+  sessionHistory: [],
 };
 
 const elements = {
@@ -701,6 +702,29 @@ function formatBridgeMode(mode) {
   }[mode] || mode || "未知模式";
 }
 
+function formatSessionEventLabel(type) {
+  return {
+    app_session_loaded: "应用会话已加载",
+    bridge_snapshot_refreshed: "桥接快照已刷新",
+    sync_action_executed: "同步动作已执行",
+    quick_capture_created: "快速记录已创建",
+    sync_payload_loaded: "同步载荷已更新",
+    workspace_contract_loaded: "工作区契约已更新",
+  }[type] || type;
+}
+
+function pushSessionHistory(entry) {
+  state.sessionHistory = [
+    {
+      id: `${entry.type}-${Date.now()}-${state.sessionHistory.length}`,
+      atMs: Date.now(),
+      level: resolveTone(entry.level || "info"),
+      ...entry,
+    },
+    ...state.sessionHistory,
+  ].slice(0, 12);
+}
+
 function createSignal(level, label) {
   return {
     level: resolveTone(level),
@@ -1151,6 +1175,28 @@ function renderViewDetailGrid() {
         <div class="detail-actions">
           <button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">刷新桥接状态</button>
           <button class="solid detail-inline-button" data-view-command="refresh-session" type="button">刷新实时会话</button>
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">会话轨迹</p>
+        <h3>最近操作</h3>
+        <div class="view-stack">
+          ${
+            state.sessionHistory.length
+              ? state.sessionHistory
+                  .slice(0, 6)
+                  .map(
+                    (entry) => `
+                      <div class="detail-row detail-row-block">
+                        <strong>${escapeHtml(formatSessionEventLabel(entry.type))}</strong>
+                        <span>${escapeHtml(entry.detail || "无附加说明")}</span>
+                        <span>${escapeHtml(formatDateTime(entry.atMs))}</span>
+                      </div>
+                    `,
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前还没有记录任何前端会话操作。</p></div>'
+          }
         </div>
       </article>
     `;
@@ -1971,6 +2017,11 @@ function applyAppSession(payload, sourceLabel) {
   state.lastBridgeError = null;
   elements.actionExecutionStatus.textContent =
     `应用会话来源：${formatSessionSourceLabel(session.source)} · ${formatDateTime(session.loadedAtMs)}`;
+  pushSessionHistory({
+    type: "app_session_loaded",
+    level: session.bridgeStatus?.available ? "success" : "warning",
+    detail: `${formatSessionSourceLabel(session.source)} · ${formatPayloadKindLabel(state.appSession.payloadKind)} · ${state.appSession.workspaceSummary.noteCount} 篇文档`,
+  });
 }
 
 async function refreshFromDesktop() {
@@ -1979,6 +2030,11 @@ async function refreshFromDesktop() {
   state.lastExecution = null;
   elements.payloadInput.value = JSON.stringify(json.snapshot, null, 2);
   applyPayload(json.snapshot, "通过本地桌面桥接刷新同步快照");
+  pushSessionHistory({
+    type: "bridge_snapshot_refreshed",
+    level: "info",
+    detail: "已通过本地桌面桥接拉取最新同步快照。",
+  });
 }
 
 async function loadSampleAppSession() {
@@ -2005,6 +2061,11 @@ async function executeSelectedAction() {
   applyPayload(json.snapshot, `通过本地桌面桥接执行动作：${actionId}`);
   elements.actionExecutionStatus.textContent =
     `动作 ${json.execution.action.action_id} 已执行，状态为 ${json.execution.status}。`;
+  pushSessionHistory({
+    type: "sync_action_executed",
+    level: json.execution.status === "failed" ? "danger" : "success",
+    detail: `${json.execution.action.action_id} · ${formatStatusLabel(json.execution.status)}`,
+  });
 }
 
 async function loadInitialPayload() {
@@ -2167,6 +2228,11 @@ function createQuickCaptureNote() {
   resetSearchQuery();
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
   elements.workspaceStatus.textContent = `已创建本地草稿：${title}`;
+  pushSessionHistory({
+    type: "quick_capture_created",
+    level: "info",
+    detail: `${title} · Inbox`,
+  });
   renderWorkspaceChrome();
 }
 
