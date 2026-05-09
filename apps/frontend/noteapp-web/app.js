@@ -238,6 +238,7 @@ const state = {
   sourceLabel: "未加载",
   searchQuery: "",
   activeNavView: "overview",
+  appSession: null,
 };
 
 const elements = {
@@ -384,7 +385,8 @@ function validateAppSession(payload) {
     typeof payload === "object" &&
     payload.syncPayload &&
     payload.workspaceShell &&
-    typeof payload.source === "string"
+    typeof payload.source === "string" &&
+    typeof payload.loadedAtMs === "number"
   ) {
     return payload;
   }
@@ -662,6 +664,26 @@ function formatSessionSourceLabel(source) {
   }[source] || source;
 }
 
+function buildAppSessionState(session) {
+  const workspaceShell = validateWorkspaceShell(session.workspaceShell);
+  const payloadKind =
+    session.meta?.payloadKind ||
+    detectPayloadKind(session.syncPayload);
+  const workspaceSummary = session.meta?.workspace || {
+    sectionCount: Array.isArray(workspaceShell.sections) ? workspaceShell.sections.length : 0,
+    noteCount: Object.keys(workspaceShell.notes || {}).length,
+  };
+
+  return {
+    source: session.source,
+    loadedAtMs: session.loadedAtMs,
+    bridgeStatus: session.bridgeStatus || null,
+    sessionId: session.meta?.sessionId || `${session.source}-${session.loadedAtMs}`,
+    payloadKind,
+    workspaceSummary,
+  };
+}
+
 function formatNavViewLabel(view) {
   return {
     overview: "总览",
@@ -773,6 +795,7 @@ function buildConflictSnapshot() {
 function buildSettingsSnapshot() {
   const status = state.bridgeStatus;
   return {
+    appSession: state.appSession,
     bridgeAvailable: Boolean(status?.available),
     bridgeMode: formatBridgeMode(status?.mode),
     bridgeSource: status?.config?.configSource ? formatBridgeConfigSource(status.config.configSource) : "未配置",
@@ -1090,12 +1113,32 @@ function renderViewDetailGrid() {
         <h3>前端数据边界</h3>
         <div class="view-stack">
           <div class="detail-row">
+            <span>会话 ID</span>
+            <strong>${escapeHtml(settings.appSession?.sessionId || "未进入应用会话")}</strong>
+          </div>
+          <div class="detail-row">
+            <span>会话来源</span>
+            <strong>${escapeHtml(settings.appSession ? formatSessionSourceLabel(settings.appSession.source) : "无")}</strong>
+          </div>
+          <div class="detail-row">
+            <span>载荷类型</span>
+            <strong>${escapeHtml(settings.appSession ? formatPayloadKindLabel(settings.appSession.payloadKind) : "无")}</strong>
+          </div>
+          <div class="detail-row">
+            <span>加载时间</span>
+            <strong>${escapeHtml(settings.appSession ? formatDateTime(settings.appSession.loadedAtMs) : "无")}</strong>
+          </div>
+          <div class="detail-row">
             <span>同步来源</span>
             <strong>${escapeHtml(state.sourceLabel)}</strong>
           </div>
           <div class="detail-row">
             <span>工作区来源</span>
             <strong>${escapeHtml(state.workspaceSourceLabel)}</strong>
+          </div>
+          <div class="detail-row">
+            <span>工作区摘要</span>
+            <strong>${escapeHtml(settings.appSession ? `${settings.appSession.workspaceSummary.sectionCount} 个分区 / ${settings.appSession.workspaceSummary.noteCount} 篇文档` : "无")}</strong>
           </div>
           <div class="detail-row">
             <span>缺失配置</span>
@@ -1565,6 +1608,14 @@ function renderWorkspaceChrome() {
 }
 
 function buildPayloadDetail() {
+  if (state.appSession) {
+    return [
+      formatPayloadKindLabel(state.appSession.payloadKind),
+      `${state.appSession.workspaceSummary.noteCount} 篇文档`,
+      formatDateTime(state.appSession.loadedAtMs),
+    ].join(" | ");
+  }
+
   if (!state.snapshotMetadata) {
     return state.sourceLabel;
   }
@@ -1783,11 +1834,13 @@ function render() {
     return;
   }
 
-  elements.payloadKind.textContent = state.snapshotMetadata
-    ? formatPayloadKindLabel("sync-shell-snapshot")
-    : state.syncCenter
-      ? formatPayloadKindLabel("sync-center")
-      : formatPayloadKindLabel("sync-activity");
+  elements.payloadKind.textContent = state.appSession
+    ? `${formatSessionSourceLabel(state.appSession.source)}会话`
+    : state.snapshotMetadata
+      ? formatPayloadKindLabel("sync-shell-snapshot")
+      : state.syncCenter
+        ? formatPayloadKindLabel("sync-center")
+        : formatPayloadKindLabel("sync-activity");
   elements.payloadDetail.textContent = buildPayloadDetail();
 
   if (state.syncCenter) {
@@ -1824,6 +1877,7 @@ async function requestBridgeStatus() {
 function applyPayload(payload, sourceLabel) {
   const kind = detectPayloadKind(payload);
   state.sourceLabel = sourceLabel;
+  state.appSession = null;
 
   if (kind === "sync-shell-snapshot") {
     state.snapshotMetadata = {
@@ -1895,6 +1949,7 @@ function applyWorkspaceShell(payload, sourceLabel) {
   const workspaceShell = validateWorkspaceShell(payload);
   state.workspaceShell = workspaceShell;
   state.workspaceSourceLabel = sourceLabel;
+  state.appSession = null;
   if (!workspaceShell.notes[state.selectedWorkspaceNoteId]) {
     state.selectedWorkspaceNoteId = Object.keys(workspaceShell.notes)[0] || "desktop-bridge";
   }
@@ -1905,8 +1960,14 @@ function applyWorkspaceShell(payload, sourceLabel) {
 
 function applyAppSession(payload, sourceLabel) {
   const session = validateAppSession(payload);
+  state.appSession = buildAppSessionState(session);
   applyWorkspaceShell(session.workspaceShell, `${sourceLabel} / workspace`);
   applyPayload(session.syncPayload, `${sourceLabel} / sync`);
+  state.appSession = buildAppSessionState(session);
+  if (session.bridgeStatus) {
+    state.bridgeStatus = session.bridgeStatus;
+    state.bridgeCheckedAtMs = session.loadedAtMs;
+  }
   state.lastBridgeError = null;
   elements.actionExecutionStatus.textContent =
     `应用会话来源：${formatSessionSourceLabel(session.source)} · ${formatDateTime(session.loadedAtMs)}`;
@@ -2031,6 +2092,7 @@ function ensureEditableWorkspaceShell() {
     state.workspaceShell = cloneJson(WORKSPACE_SAMPLE);
     state.workspaceSourceLabel = "浏览器本地草稿";
   }
+  state.appSession = null;
   return state.workspaceShell;
 }
 
@@ -2102,8 +2164,7 @@ function createQuickCaptureNote() {
 
   state.selectedWorkspaceNoteId = draftId;
   state.workspaceSourceLabel = "浏览器本地草稿";
-  state.searchQuery = "";
-  elements.searchInput.value = "";
+  resetSearchQuery();
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
   elements.workspaceStatus.textContent = `已创建本地草稿：${title}`;
   renderWorkspaceChrome();
@@ -2225,6 +2286,7 @@ elements.clearInputButton.addEventListener("click", () => {
   state.syncCenter = null;
   state.activityFeed = null;
   state.snapshotMetadata = null;
+  state.appSession = null;
   state.selectedAction = null;
   state.lastBridgeError = null;
   state.lastExecution = null;

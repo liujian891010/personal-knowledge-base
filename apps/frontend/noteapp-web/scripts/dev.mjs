@@ -130,14 +130,68 @@ function readJsonFile(path) {
   return JSON.parse(readFileSync(path, "utf-8"));
 }
 
-function buildSampleAppSession() {
+function detectSyncPayloadKind(payload) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    payload.sync_center &&
+    payload.activity_feed &&
+    typeof payload.generated_at_ms === "number"
+  ) {
+    return "sync-shell-snapshot";
+  }
+  if (
+    payload &&
+    typeof payload === "object" &&
+    Array.isArray(payload.cards) &&
+    payload.panel &&
+    payload.summary
+  ) {
+    return "sync-center";
+  }
+  if (
+    payload &&
+    typeof payload === "object" &&
+    Array.isArray(payload.records) &&
+    typeof payload.total_count === "number"
+  ) {
+    return "sync-activity";
+  }
+  return "unknown";
+}
+
+function summarizeWorkspaceShell(workspaceShell) {
+  const sections = Array.isArray(workspaceShell?.sections) ? workspaceShell.sections : [];
+  const notes = workspaceShell?.notes && typeof workspaceShell.notes === "object" ? workspaceShell.notes : {};
   return {
+    sectionCount: sections.length,
+    noteCount: Object.keys(notes).length,
+  };
+}
+
+function buildAppSessionPayload({ source, bridgeStatus, syncPayload, workspaceShell }) {
+  const loadedAtMs = Date.now();
+  return {
+    source,
+    loadedAtMs,
+    bridgeStatus,
+    syncPayload,
+    workspaceShell,
+    meta: {
+      sessionId: `${source}-${loadedAtMs}`,
+      payloadKind: detectSyncPayloadKind(syncPayload),
+      workspace: summarizeWorkspaceShell(workspaceShell),
+    },
+  };
+}
+
+function buildSampleAppSession() {
+  return buildAppSessionPayload({
     source: "sample",
-    loadedAtMs: Date.now(),
     bridgeStatus: buildBridgeStatusPayload(),
     syncPayload: readJsonFile(sampleSyncSnapshotPath),
     workspaceShell: readJsonFile(sampleWorkspaceShellPath),
-  };
+  });
 }
 
 function requireBridgeConfig() {
@@ -220,13 +274,16 @@ const server = createServer(async (request, response) => {
     try {
       const body = await readJsonBody(request);
       const snapshot = executeRefreshSnapshot(body.nowMs, body.activityLimit);
-      writeJson(response, 200, {
-        source: "desktop-bridge",
-        loadedAtMs: Date.now(),
-        bridgeStatus: buildBridgeStatusPayload(),
-        syncPayload: snapshot,
-        workspaceShell: readJsonFile(sampleWorkspaceShellPath),
-      });
+      writeJson(
+        response,
+        200,
+        buildAppSessionPayload({
+          source: "desktop-bridge",
+          bridgeStatus: buildBridgeStatusPayload(),
+          syncPayload: snapshot,
+          workspaceShell: readJsonFile(sampleWorkspaceShellPath),
+        }),
+      );
     } catch (error) {
       writeBridgeError(response, error);
     }

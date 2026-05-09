@@ -14,6 +14,7 @@ Current scope:
 8. Can auto-load a custom workspace shell contract through `?workspace=...`.
 9. Derives workspace note-level sync signals from the loaded sync payload so the tree, editor, and AI panel react to current sync state.
 10. Exposes sample and live app-session endpoints so the browser shell can load workspace chrome and sync state together.
+11. `app-session` now carries structured session metadata such as `sessionId`, payload kind, workspace counts, and bridge status so the UI can render a real session boundary instead of only ad-hoc source labels.
 
 Local usage:
 
@@ -49,6 +50,18 @@ When `PKB_VAULT_ROOT` / `PKB_BASE_URL` / `PKB_VAULT_ID` / `PKB_DEVICE_ID` are se
 3. `GET /api/bridge/status`
 
 The shell uses that bridge for `Refresh Local Snapshot` and `Run Selected Action`. Internally the action path now delegates to the desktop CLI's `execute-sync-action-and-snapshot` boundary instead of stitching two commands together in the browser shell.
+
+The app-session endpoints now return:
+
+1. `source`
+2. `loadedAtMs`
+3. `bridgeStatus`
+4. `syncPayload`
+5. `workspaceShell`
+6. `meta.sessionId`
+7. `meta.payloadKind`
+8. `meta.workspace.sectionCount`
+9. `meta.workspace.noteCount`
 
 If you do not want to export environment variables every time, you can create a local gitignored config file:
 
