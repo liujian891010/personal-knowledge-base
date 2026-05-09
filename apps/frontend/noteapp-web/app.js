@@ -1294,6 +1294,9 @@ function formatSessionEventLabel(type) {
     workspace_ai_applied: "AI 建议已写入草稿",
     ai_answer_generated: "AI 回答已生成",
     ai_compile_generated: "AI 知识页已生成",
+    ai_wiki_reviewed: "AI 知识页已校对",
+    ai_wiki_reopened: "AI 知识页已退回整理",
+    ai_wiki_review_blocked: "AI 知识页校对已拦截",
     workspace_followup_created: "跟进笔记已创建",
     workspace_note_moved: "工作区文档已归档",
     workspace_session_restored: "本地工作区已恢复",
@@ -1454,6 +1457,8 @@ function buildRepositorySnapshot() {
     (entry) => entry.note.statusTone === "warning" || entry.note.statusTone === "danger",
   );
   const aiWikiEntries = visibleEntries.filter((entry) => entry.sectionId === "ai-wiki");
+  const aiWikiReviewEntries = aiWikiEntries.filter((entry) => !entry.note.tags?.includes("reviewed"));
+  const aiWikiReviewedEntries = aiWikiEntries.filter((entry) => entry.note.tags?.includes("reviewed"));
   const sectionCards = (workspaceShell.sections || []).map((section) => {
     const sectionEntries = allEntries.filter((entry) => entry.sectionId === section.id);
     const sectionVisibleEntries = visibleEntries.filter((entry) => entry.sectionId === section.id);
@@ -1475,6 +1480,8 @@ function buildRepositorySnapshot() {
     draftEntries,
     riskEntries,
     aiWikiEntries,
+    aiWikiReviewEntries,
+    aiWikiReviewedEntries,
     sectionCards,
   };
 }
@@ -2363,8 +2370,8 @@ function renderViewDetailGrid() {
         <h3>待校对队列</h3>
         <div class="view-stack">
           ${
-            repository.aiWikiEntries.length
-              ? repository.aiWikiEntries
+            repository.aiWikiReviewEntries.length
+              ? repository.aiWikiReviewEntries
                   .slice(0, 4)
                   .map((entry) =>
                     buildOverviewNoteRow(entry, {
@@ -2375,11 +2382,35 @@ function renderViewDetailGrid() {
                       buttons: [
                         `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
                         `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">编辑</button>`,
+                        `<button class="ghost detail-inline-button" data-note-review-ai-wiki="${escapeHtml(entry.id)}" type="button">标记已校对</button>`,
                       ],
                     }),
                   )
                   .join("")
               : '<div class="empty-state"><p>当前可见范围里没有 AI 知识页，可先在右侧 AI 面板中生成。</p></div>'
+          }
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">AI 知识页</p>
+        <h3>已校对队列</h3>
+        <div class="view-stack">
+          ${
+            repository.aiWikiReviewedEntries.length
+              ? repository.aiWikiReviewedEntries
+                  .slice(0, 4)
+                  .map((entry) =>
+                    buildOverviewNoteRow(entry, {
+                      summary: "这篇知识页已经完成一轮人工校对，可继续沉淀或在修改后重新进入待校对。",
+                      pills: [entry.note.statusLabel || entry.status, entry.note.ai?.sourceScopeLabel || null, entry.note.lastSaved || null],
+                      buttons: [
+                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                        `<button class="ghost detail-inline-button" data-note-reopen-ai-wiki="${escapeHtml(entry.id)}" type="button">退回整理</button>`,
+                      ],
+                    }),
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前还没有完成校对的 AI 知识页。</p></div>'
           }
         </div>
       </article>
@@ -2433,6 +2464,16 @@ function renderViewDetailGrid() {
     for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-select-action]")) {
       button.addEventListener("click", () => {
         selectRecommendedSyncActionForNote(button.dataset.noteSelectAction || state.selectedWorkspaceNoteId);
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-review-ai-wiki]")) {
+      button.addEventListener("click", () => {
+        updateAiWikiReviewState(button.dataset.noteReviewAiWiki || state.selectedWorkspaceNoteId, true);
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-reopen-ai-wiki]")) {
+      button.addEventListener("click", () => {
+        updateAiWikiReviewState(button.dataset.noteReopenAiWiki || state.selectedWorkspaceNoteId, false);
       });
     }
     for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-move]")) {
@@ -3468,6 +3509,59 @@ function findWorkspaceSectionByNoteId(workspaceShell, noteId) {
 function formatSectionLabel(sectionId) {
   const workspaceShell = getCurrentWorkspaceShell();
   return workspaceShell.sections.find((section) => section.id === sectionId)?.label || sectionId;
+}
+
+function isAiWikiNote(noteId, workspaceShell = getCurrentWorkspaceShell()) {
+  return findWorkspaceSectionByNoteId(workspaceShell, noteId)?.id === "ai-wiki";
+}
+
+function updateAiWikiReviewState(noteId, reviewed) {
+  const workspaceShell = ensureEditableWorkspaceShell();
+  const note = workspaceShell.notes?.[noteId];
+  const item = findWorkspaceItemById(workspaceShell, noteId);
+  if (!note || !item || !isAiWikiNote(noteId, workspaceShell)) {
+    return false;
+  }
+
+  const draft = getEditorDraftByNoteId(noteId);
+  if (draft && isEditorDraftDirty(note, draft)) {
+    elements.workspaceStatus.textContent = `《${draft.title || note.title}》仍有未保存修改，请先保存后再更新校对状态。`;
+    pushSessionHistory({
+      type: "ai_wiki_review_blocked",
+      level: "warning",
+      detail: `${note.title} · 先保存知识页草稿`,
+    });
+    render();
+    return false;
+  }
+
+  note.statusTone = reviewed ? "success" : "warning";
+  note.statusLabel = reviewed ? "AI 知识页已校对" : "AI 知识页待校对";
+  note.lastSaved = reviewed ? "刚刚校对" : "刚刚退回整理";
+  item.status = note.statusLabel;
+  if (!Array.isArray(note.tags)) {
+    note.tags = [];
+  }
+  note.tags = note.tags.filter((tag) => tag !== "reviewed");
+  note.tags = note.tags.filter((tag) => reviewed || tag !== "draft");
+  if (reviewed) {
+    note.tags.push("reviewed");
+  } else if (!note.tags.includes("draft")) {
+    note.tags.push("draft");
+  }
+
+  state.workspaceSourceLabel = "浏览器本地草稿";
+  persistLocalWorkspaceSession();
+  elements.workspaceStatus.textContent = reviewed
+    ? `已标记知识页为已校对：${note.title}`
+    : `已把知识页退回继续整理：${note.title}`;
+  pushSessionHistory({
+    type: reviewed ? "ai_wiki_reviewed" : "ai_wiki_reopened",
+    level: reviewed ? "success" : "info",
+    detail: `${note.title} · ${reviewed ? "已校对" : "退回整理"}`,
+  });
+  render();
+  return true;
 }
 
 function resolveWorkspaceNotePathForSection(sectionId, title) {
@@ -4924,10 +5018,12 @@ function renderWorkspaceEditor() {
   const noteSummary = summarizeRichText(noteBody);
   const noteOutline = buildMarkdownOutline(noteBody);
   const readingMinutes = estimateReadingMinutes(noteBody);
-  const currentSection = findWorkspaceSectionByNoteId(getCurrentWorkspaceShell(), state.selectedWorkspaceNoteId);
-  const moveTargets = (getCurrentWorkspaceShell().sections || []).filter(
-    (section) => section.id !== currentSection?.id && ["inbox", "notes", "ai-wiki"].includes(section.id),
-  );
+    const currentSection = findWorkspaceSectionByNoteId(getCurrentWorkspaceShell(), state.selectedWorkspaceNoteId);
+    const moveTargets = (getCurrentWorkspaceShell().sections || []).filter(
+      (section) => section.id !== currentSection?.id && ["inbox", "notes", "ai-wiki"].includes(section.id),
+    );
+  const aiWikiSourceCount = Array.isArray(note.ai?.sourceNoteIds) ? note.ai.sourceNoteIds.length : 0;
+  const isAiWikiCurrentNote = currentSection?.id === "ai-wiki";
   const editorFocusCards = buildEditorFocusCards({
     note,
     syncContext,
@@ -4993,6 +5089,37 @@ function renderWorkspaceEditor() {
         }
       </div>
     </section>
+    ${
+      isAiWikiCurrentNote
+        ? `
+          <section class="editor-sync-box">
+            <h3>知识页校对</h3>
+            <div class="editor-sync-checklist">
+              <div class="editor-sync-item">
+                <span>校对状态</span>
+                <strong class="tone-${note.tags.includes("reviewed") ? "success" : "warning"}-inline">${escapeHtml(note.statusLabel)}</strong>
+              </div>
+              <div class="editor-sync-item">
+                <span>来源文档</span>
+                <strong>${escapeHtml(aiWikiSourceCount || 0)}</strong>
+              </div>
+              <div class="editor-sync-item">
+                <span>当前建议</span>
+                <strong>${escapeHtml(note.tags.includes("reviewed") ? "可继续沉淀知识库" : "建议先人工校对")}</strong>
+              </div>
+            </div>
+            <p class="summary-copy">${escapeHtml(note.tags.includes("reviewed") ? "这篇知识页已经完成一轮人工校对；如果继续修改正文，保存后会重新回到待校对状态。" : "这篇知识页仍处于待校对状态，建议先核对结构、来源文档和关键实体。")}</p>
+            <div class="detail-actions">
+              ${
+                note.tags.includes("reviewed")
+                  ? '<button class="ghost detail-inline-button" data-editor-command="reopen-ai-wiki" type="button">退回继续整理</button>'
+                  : '<button class="solid detail-inline-button" data-editor-command="review-ai-wiki" type="button">标记已校对</button>'
+              }
+            </div>
+          </section>
+        `
+        : ""
+    }
     <section class="editor-brief-card">
       <div class="editor-brief-copy">
         <p class="card-section-label">内容概览</p>
@@ -5256,6 +5383,14 @@ function renderWorkspaceEditor() {
       }
       if (command === "save") {
         saveEditingSelectedNote();
+        return;
+      }
+      if (command === "review-ai-wiki") {
+        updateAiWikiReviewState(state.selectedWorkspaceNoteId, true);
+        return;
+      }
+      if (command === "reopen-ai-wiki") {
+        updateAiWikiReviewState(state.selectedWorkspaceNoteId, false);
       }
     });
   }
@@ -6475,18 +6610,19 @@ function saveEditingSelectedNote() {
   note.title = trimmedTitle;
   note.body = trimmedBody || note.body;
   note.lastSaved = "刚刚保存";
-  note.statusTone = "info";
-  note.statusLabel = "本地草稿已更新";
+  note.statusTone = isAiWikiNote(activeDraft.noteId, workspaceShell) ? "warning" : "info";
+  note.statusLabel = isAiWikiNote(activeDraft.noteId, workspaceShell) ? "AI 知识页待校对" : "本地草稿已更新";
   if (!Array.isArray(note.tags)) {
     note.tags = [];
   }
+  note.tags = note.tags.filter((tag) => tag !== "reviewed");
   if (!note.tags.includes("draft")) {
     note.tags = [...note.tags, "draft"];
   }
 
   if (item) {
     item.title = trimmedTitle;
-    item.status = "本地草稿已更新";
+    item.status = note.statusLabel;
   }
 
   state.workspaceSourceLabel = "浏览器本地草稿";
@@ -6498,7 +6634,7 @@ function saveEditingSelectedNote() {
   pushSessionHistory({
     type: "workspace_note_saved",
     level: "success",
-    detail: `${trimmedTitle} · 本地草稿已更新`,
+    detail: `${trimmedTitle} · ${note.statusLabel}`,
   });
   render();
 }
