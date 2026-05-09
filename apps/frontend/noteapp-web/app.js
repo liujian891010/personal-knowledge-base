@@ -7,6 +7,7 @@ import {
   requestAiWikiCompile,
   refreshAppSession,
   refreshBridgeSnapshot,
+  startAiBoundaryStatusPolling,
   startBridgeStatusPolling,
 } from "./bridge-client.js";
 import {
@@ -7496,7 +7497,23 @@ startBridgeStatusPolling({
     renderBridgeStatus();
   },
 });
-requestAiBoundaryStatus().catch(() => {});
+startAiBoundaryStatusPolling({
+  intervalMs: 20000,
+  onStatus(status) {
+    state.aiBoundaryStatus = status;
+    state.aiBoundaryCheckedAtMs = Date.now();
+    renderWorkspaceAiPanel();
+  },
+  onError(error) {
+    state.aiBoundaryStatus = {
+      available: false,
+      mode: "local-fallback",
+      message: error && typeof error.message === "string" ? error.message : "",
+    };
+    state.aiBoundaryCheckedAtMs = Date.now();
+    renderWorkspaceAiPanel();
+  },
+});
 loadInitialSession().catch(async (error) => {
   try {
     state.workspaceShell = null;

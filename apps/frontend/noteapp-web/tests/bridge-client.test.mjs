@@ -9,6 +9,7 @@ import {
   requestAiWikiCompile,
   refreshAppSession,
   refreshBridgeSnapshot,
+  startAiBoundaryStatusPolling,
   startBridgeStatusPolling,
 } from "../bridge-client.js";
 
@@ -261,6 +262,61 @@ export async function runBridgeClientTests() {
   stopPolling();
   assert.equal(intervalCalls[1], "clear:7");
   completed.push("startBridgeStatusPolling polls immediately and on visibility change");
+  resetGlobals();
+
+  const aiStatuses = [];
+  const aiIntervalCalls = [];
+  let aiVisibilityHandler = null;
+
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return {
+        available: true,
+        mode: "dev-server-local",
+      };
+    },
+  });
+  globalThis.window = {
+    setInterval(handler, intervalMs) {
+      aiIntervalCalls.push(intervalMs);
+      this.lastHandler = handler;
+      return 9;
+    },
+    clearInterval(id) {
+      aiIntervalCalls.push(`clear:${id}`);
+    },
+  };
+  globalThis.document = {
+    visibilityState: "hidden",
+    addEventListener(eventName, handler) {
+      if (eventName === "visibilitychange") {
+        aiVisibilityHandler = handler;
+      }
+    },
+    removeEventListener() {},
+  };
+
+  const stopAiPolling = startAiBoundaryStatusPolling({
+    intervalMs: 4321,
+    onStatus(status) {
+      aiStatuses.push(status);
+    },
+  });
+
+  await flushTasks();
+  assert.equal(aiStatuses.length, 1);
+  assert.equal(aiIntervalCalls[0], 4321);
+
+  globalThis.document.visibilityState = "visible";
+  aiVisibilityHandler?.();
+  await flushTasks();
+  assert.equal(aiStatuses.length, 2);
+
+  stopAiPolling();
+  assert.equal(aiIntervalCalls[1], "clear:9");
+  completed.push("startAiBoundaryStatusPolling polls immediately and on visibility change");
   resetGlobals();
 
   return completed;
