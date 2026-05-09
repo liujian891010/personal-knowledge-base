@@ -44,6 +44,7 @@ const DEFAULT_AI_COMPILE_STATE = {
   targetTitle: "",
   lastCompiledNoteId: null,
   lastCompiledAtMs: null,
+  lastSource: null,
 };
 const draftAutosaveTimers = new Map();
 const WORKSPACE_SAMPLE = {
@@ -453,6 +454,7 @@ function parseAiCopilotState(raw) {
             ? raw.lastAnswer.entities.filter((item) => typeof item === "string").slice(0, 8)
             : [],
           generatedAtMs: typeof raw.lastAnswer.generatedAtMs === "number" ? raw.lastAnswer.generatedAtMs : Date.now(),
+          source: typeof raw.lastAnswer.source === "string" ? raw.lastAnswer.source : null,
         }
       : null;
 
@@ -494,6 +496,7 @@ function parseAiCompileState(raw) {
     targetTitle: typeof raw.targetTitle === "string" ? raw.targetTitle : "",
     lastCompiledNoteId: typeof raw.lastCompiledNoteId === "string" ? raw.lastCompiledNoteId : null,
     lastCompiledAtMs: typeof raw.lastCompiledAtMs === "number" ? raw.lastCompiledAtMs : null,
+    lastSource: typeof raw.lastSource === "string" ? raw.lastSource : null,
   };
 }
 
@@ -545,9 +548,11 @@ function summarizeLocalWorkspaceSession() {
     aiQuestion: session.aiCopilot?.lastAnswer?.question || session.aiCopilot?.question || "",
     aiHeadline: session.aiCopilot?.lastAnswer?.headline || "",
     aiGeneratedAtMs: session.aiCopilot?.lastAnswer?.generatedAtMs || null,
+    aiAnswerSource: session.aiCopilot?.lastAnswer?.source || null,
     aiCompileTitle: session.aiCompile?.targetTitle || "",
     aiCompiledNoteId: session.aiCompile?.lastCompiledNoteId || null,
     aiCompiledAtMs: session.aiCompile?.lastCompiledAtMs || null,
+    aiCompileSource: session.aiCompile?.lastSource || null,
   };
 }
 
@@ -1145,6 +1150,13 @@ function formatBridgeDiagnosticCode(code) {
     client_error: "本地请求异常",
     bridge_error: "桥接执行异常",
   }[code] || code;
+}
+
+function formatAiBoundarySource(source) {
+  return {
+    api: "AI 接口",
+    "local-fallback": "本地回退",
+  }[source] || "未标记";
 }
 
 function formatSessionSourceLabel(source) {
@@ -4415,17 +4427,23 @@ function buildAiWikiCompileRequestPayload({ note, syncContext, aiBriefing }) {
 
 async function generateAiCopilotAnswer({ note, noteBody, syncContext, draftInsight, aiBriefing }) {
   try {
-    return await requestAiCopilotAnswer(
-      buildAiCopilotAnswerRequestPayload({
-        note,
-        syncContext,
-        draftInsight,
-        aiBriefing,
-      }),
-    );
+    return {
+      ...(await requestAiCopilotAnswer(
+        buildAiCopilotAnswerRequestPayload({
+          note,
+          syncContext,
+          draftInsight,
+          aiBriefing,
+        }),
+      )),
+      source: "api",
+    };
   } catch (error) {
     elements.workspaceStatus.textContent = "AI 调用边界暂不可用，已退回本地回答生成。";
-    return buildAiCopilotAnswer({ note, noteBody, syncContext, draftInsight, aiBriefing });
+    return {
+      ...buildAiCopilotAnswer({ note, noteBody, syncContext, draftInsight, aiBriefing }),
+      source: "local-fallback",
+    };
   }
 }
 
@@ -5582,6 +5600,8 @@ function renderWorkspaceAiPanel() {
     state.aiCompile.lastCompiledNoteId && getCurrentWorkspaceShell().notes[state.aiCompile.lastCompiledNoteId]
       ? getCurrentWorkspaceShell().notes[state.aiCompile.lastCompiledNoteId]
       : null;
+  const aiLastBoundarySource = aiLastAnswer?.source ? formatAiBoundarySource(aiLastAnswer.source) : null;
+  const aiCompileBoundarySource = state.aiCompile.lastSource ? formatAiBoundarySource(state.aiCompile.lastSource) : null;
   const isAiWikiCurrentNote = isAiWikiNote(note.id);
   const aiWikiSourceCount = Array.isArray(note.ai?.sourceNoteIds) ? note.ai.sourceNoteIds.length : 0;
   const aiWikiReviewed = note.tags?.includes("reviewed");
@@ -5666,6 +5686,11 @@ function renderWorkspaceAiPanel() {
                 <button class="solid detail-inline-button" data-ai-command="apply-answer-to-draft" type="button">写入问答结论</button>
                 <button class="ghost detail-inline-button" data-ai-command="create-followup" type="button">生成跟进笔记</button>
               </div>
+              ${
+                aiLastBoundarySource
+                  ? `<p class="ai-copy">${escapeHtml(`本轮回答来源：${aiLastBoundarySource}`)}</p>`
+                  : ""
+              }
               <div class="editor-tags">
                 ${aiLastAnswer.sources
                   .map(
@@ -5706,7 +5731,7 @@ function renderWorkspaceAiPanel() {
       </div>
       ${
         aiCompiledNote
-          ? `<p class="ai-copy">${escapeHtml(`最近生成：${aiCompiledNote.title} · ${aiCompiledNote.lastSaved}`)}</p>`
+          ? `<p class="ai-copy">${escapeHtml(`最近生成：${aiCompiledNote.title} · ${aiCompiledNote.lastSaved}${aiCompileBoundarySource ? ` · ${aiCompileBoundarySource}` : ""}`)}</p>`
           : '<p class="ai-copy">生成后会自动落到 `.ai/wiki` 分区，并直接进入编辑状态。</p>'
       }
     </section>
@@ -5976,11 +6001,11 @@ function renderWorkspaceAiPanel() {
         });
         state.aiCopilot.lastAnswer = answer;
         persistLocalWorkspaceSession();
-        elements.workspaceStatus.textContent = `已生成 AI 回答：${answer.scopeLabel}`;
+        elements.workspaceStatus.textContent = `已生成 AI 回答：${answer.scopeLabel} · ${formatAiBoundarySource(answer.source)}`;
         pushSessionHistory({
           type: "ai_answer_generated",
           level: "info",
-          detail: `${note.title} · ${answer.scopeLabel}`,
+          detail: `${note.title} · ${answer.scopeLabel} · ${formatAiBoundarySource(answer.source)}`,
         });
         render();
         return;
@@ -6924,13 +6949,16 @@ async function compileCurrentScopeToAiWiki() {
   });
   let compiledDraft = null;
   try {
-    compiledDraft = await requestAiWikiCompile(
-      buildAiWikiCompileRequestPayload({
-        note: currentNote,
-        syncContext,
-        aiBriefing,
-      }),
-    );
+    compiledDraft = {
+      ...(await requestAiWikiCompile(
+        buildAiWikiCompileRequestPayload({
+          note: currentNote,
+          syncContext,
+          aiBriefing,
+        }),
+      )),
+      source: "api",
+    };
   } catch (error) {
     elements.workspaceStatus.textContent = "AI 编译接口暂不可用，已退回本地知识页生成。";
     const fallbackDraft = buildAiCompileDraftBody({
@@ -6951,6 +6979,7 @@ async function compileCurrentScopeToAiWiki() {
       ],
       lint: fallbackDraft.topEntities.length ? [] : ["当前实体提取较弱，建议补充正文后重新编译。"],
       generatedAtMs: Date.now(),
+      source: "local-fallback",
     };
   }
   const workspaceShell = ensureEditableWorkspaceShell();
@@ -7011,6 +7040,7 @@ async function compileCurrentScopeToAiWiki() {
     targetTitle: desiredTitle,
     lastCompiledNoteId: compiledId,
     lastCompiledAtMs: Date.now(),
+    lastSource: compiledDraft.source || "api",
   };
   setEditorDraftForNote(compiledId, {
     noteId: compiledId,
@@ -7018,11 +7048,11 @@ async function compileCurrentScopeToAiWiki() {
     body: workspaceShell.notes[compiledId].body,
   });
   persistLocalWorkspaceSession();
-  elements.workspaceStatus.textContent = `已生成 AI 知识页：${desiredTitle}`;
+  elements.workspaceStatus.textContent = `已生成 AI 知识页：${desiredTitle} · ${formatAiBoundarySource(compiledDraft.source || "api")}`;
   pushSessionHistory({
     type: "ai_compile_generated",
     level: "success",
-    detail: `${desiredTitle} · ${compiledDraft.sourceScopeLabel || "当前文档"}`,
+    detail: `${desiredTitle} · ${compiledDraft.sourceScopeLabel || "当前文档"} · ${formatAiBoundarySource(compiledDraft.source || "api")}`,
   });
   render();
 }
