@@ -7,6 +7,7 @@ import {
 
 const SAMPLE_PATH = "./fixtures/sync-shell-snapshot.sample.json";
 const LIVE_SNAPSHOT_PATH = "./fixtures/live-sync-shell.json";
+const WORKSPACE_SAMPLE_PATH = "./fixtures/workspace-shell.sample.json";
 const DEFAULT_ACTION_COMMAND = "pkb-desktop-sync";
 const WORKSPACE_SAMPLE = {
   sections: [
@@ -201,6 +202,7 @@ const state = {
   syncCenter: null,
   activityFeed: null,
   snapshotMetadata: null,
+  workspaceShell: null,
   selectedWorkspaceNoteId: "desktop-bridge",
   selectedAction: null,
   bridgeStatus: null,
@@ -463,13 +465,13 @@ function resolveTone(level) {
 }
 
 function getSelectedWorkspaceNote() {
-  return (
-    WORKSPACE_SAMPLE.notes[state.selectedWorkspaceNoteId] || WORKSPACE_SAMPLE.notes["desktop-bridge"]
-  );
+  const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
+  return workspaceShell.notes[state.selectedWorkspaceNoteId] || workspaceShell.notes["desktop-bridge"];
 }
 
 function renderWorkspaceTree() {
-  elements.workspaceTree.innerHTML = WORKSPACE_SAMPLE.sections
+  const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
+  elements.workspaceTree.innerHTML = workspaceShell.sections
     .map(
       (section) => `
         <section class="tree-section">
@@ -846,6 +848,34 @@ async function loadLiveSnapshot() {
   await loadPayloadFromPath(LIVE_SNAPSHOT_PATH, "Exported live sync shell snapshot");
 }
 
+async function loadWorkspaceShellFromPath(path, sourceLabel) {
+  const response = await fetch(path, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Unable to load workspace shell ${path}: ${response.status}`);
+  }
+
+  state.workspaceShell = await response.json();
+  if (!state.workspaceShell.notes[state.selectedWorkspaceNoteId]) {
+    state.selectedWorkspaceNoteId = Object.keys(state.workspaceShell.notes)[0] || "desktop-bridge";
+  }
+  renderWorkspaceChrome();
+  elements.actionExecutionStatus.textContent = `Workspace shell source: ${sourceLabel}.`;
+}
+
+function resolveInitialWorkspacePath() {
+  const search = new URLSearchParams(window.location.search);
+  return search.get("workspace");
+}
+
+async function loadInitialWorkspaceShell() {
+  const explicitPath = resolveInitialWorkspacePath();
+  if (explicitPath) {
+    await loadWorkspaceShellFromPath(explicitPath, explicitPath);
+    return;
+  }
+  await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "bundled workspace shell sample");
+}
+
 async function refreshFromDesktop() {
   const json = await refreshBridgeSnapshot({});
   state.lastBridgeError = null;
@@ -1009,6 +1039,10 @@ startBridgeStatusPolling({
     state.bridgeCheckedAtMs = Date.now();
     renderBridgeStatus();
   },
+});
+loadInitialWorkspaceShell().catch(() => {
+  state.workspaceShell = null;
+  renderWorkspaceChrome();
 });
 loadInitialPayload().catch((error) => {
   renderEmptyDashboard(error instanceof Error ? error.message : String(error));
