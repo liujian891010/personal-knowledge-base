@@ -834,6 +834,7 @@ function formatSessionEventLabel(type) {
     workspace_draft_discarded: "恢复草稿已放弃",
     workspace_ai_applied: "AI 建议已写入草稿",
     workspace_followup_created: "跟进笔记已创建",
+    workspace_note_moved: "工作区文档已归档",
   }[type] || type;
 }
 
@@ -2374,6 +2375,83 @@ function findWorkspaceSectionByNoteId(workspaceShell, noteId) {
   return null;
 }
 
+function formatSectionLabel(sectionId) {
+  const workspaceShell = getCurrentWorkspaceShell();
+  return workspaceShell.sections.find((section) => section.id === sectionId)?.label || sectionId;
+}
+
+function resolveWorkspaceNotePathForSection(sectionId, title) {
+  const safeTitle = (String(title || "未命名笔记").trim() || "未命名笔记").replace(/[\\/:*?"<>|]/g, "-");
+  if (sectionId === "inbox") {
+    return `Inbox/${safeTitle}.md`;
+  }
+  if (sectionId === "ai-wiki") {
+    return `.ai/wiki/${safeTitle}.md`;
+  }
+  return `Notes/${safeTitle}.md`;
+}
+
+function ensureWorkspaceSectionById(workspaceShell, sectionId) {
+  const existing = workspaceShell.sections.find((section) => section.id === sectionId);
+  if (existing) {
+    return existing;
+  }
+  const label = sectionId === "inbox" ? "收件箱" : sectionId === "ai-wiki" ? ".ai/wiki" : "笔记";
+  const created = {
+    id: sectionId,
+    label,
+    items: [],
+  };
+  workspaceShell.sections.push(created);
+  return created;
+}
+
+function moveWorkspaceNoteToSection(noteId, targetSectionId) {
+  const workspaceShell = ensureEditableWorkspaceShell();
+  const note = workspaceShell.notes?.[noteId];
+  const currentSection = findWorkspaceSectionByNoteId(workspaceShell, noteId);
+  if (!note || !currentSection || currentSection.id === targetSectionId) {
+    return false;
+  }
+
+  const targetSection = ensureWorkspaceSectionById(workspaceShell, targetSectionId);
+  const itemIndex = currentSection.items.findIndex((item) => item.id === noteId);
+  if (itemIndex < 0) {
+    return false;
+  }
+
+  const [item] = currentSection.items.splice(itemIndex, 1);
+  const nextPath = resolveWorkspaceNotePathForSection(targetSectionId, item.title || note.title);
+  item.path = nextPath;
+  item.status = targetSectionId === "inbox" ? "本地草稿" : "已整理待保存";
+  note.path = nextPath;
+  note.statusTone = "info";
+  note.statusLabel = targetSectionId === "inbox" ? "本地草稿" : "已整理待保存";
+  note.lastSaved = "刚刚整理";
+  if (!Array.isArray(note.tags)) {
+    note.tags = [];
+  }
+  note.tags = note.tags.filter((tag) => tag !== "inbox");
+  if (targetSectionId === "inbox" && !note.tags.includes("inbox")) {
+    note.tags.unshift("inbox");
+  }
+  if (targetSectionId === "ai-wiki" && !note.tags.includes("ai")) {
+    note.tags.unshift("ai");
+  }
+  targetSection.items.unshift(item);
+
+  state.workspaceSourceLabel = "浏览器本地草稿";
+  elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  elements.workspaceStatus.textContent = `已将《${item.title || note.title}》整理到 ${targetSection.label}`;
+  pushSessionHistory({
+    type: "workspace_note_moved",
+    level: "success",
+    detail: `${item.title || note.title} · ${currentSection.label} -> ${targetSection.label}`,
+  });
+  render();
+  return true;
+}
+
 function getSelectedWorkspaceNote() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
   const visibleIds = getVisibleWorkspaceNoteIds(workspaceShell);
@@ -3490,6 +3568,10 @@ function renderWorkspaceEditor() {
   const noteSummary = summarizeRichText(noteBody);
   const noteOutline = buildMarkdownOutline(noteBody);
   const readingMinutes = estimateReadingMinutes(noteBody);
+  const currentSection = findWorkspaceSectionByNoteId(getCurrentWorkspaceShell(), state.selectedWorkspaceNoteId);
+  const moveTargets = (getCurrentWorkspaceShell().sections || []).filter(
+    (section) => section.id !== currentSection?.id && ["inbox", "notes", "ai-wiki"].includes(section.id),
+  );
   const editorFocusCards = buildEditorFocusCards({
     note,
     syncContext,
@@ -3525,6 +3607,36 @@ function renderWorkspaceEditor() {
     <ul class="editor-tags">
       ${note.tags.map((tag) => `<li>${escapeHtml(tag)}</li>`).join("")}
     </ul>
+    <section class="editor-sync-box">
+      <h3>本地归档</h3>
+      <p class="summary-copy">${escapeHtml(`当前文档位于 ${currentSection?.label || "未知分区"}，可以先在本地整理分区，再决定是否进入同步周期。`)}</p>
+      <div class="editor-sync-checklist">
+        <div class="editor-sync-item">
+          <span>当前分区</span>
+          <strong>${escapeHtml(currentSection?.label || "未知分区")}</strong>
+        </div>
+        <div class="editor-sync-item">
+          <span>当前路径</span>
+          <strong>${escapeHtml(note.path)}</strong>
+        </div>
+        <div class="editor-sync-item">
+          <span>整理状态</span>
+          <strong>${escapeHtml(note.statusLabel)}</strong>
+        </div>
+      </div>
+      <div class="detail-actions">
+        ${
+          moveTargets.length
+            ? moveTargets
+                .map(
+                  (section) =>
+                    `<button class="ghost detail-inline-button" data-editor-move="${escapeHtml(section.id)}" type="button">整理到 ${escapeHtml(section.label)}</button>`,
+                )
+                .join("")
+            : '<span class="mini-pill tone-info">当前没有其他可用分区</span>'
+        }
+      </div>
+    </section>
     <section class="editor-brief-card">
       <div class="editor-brief-copy">
         <p class="card-section-label">内容概览</p>
@@ -3789,6 +3901,11 @@ function renderWorkspaceEditor() {
       if (command === "save") {
         saveEditingSelectedNote();
       }
+    });
+  }
+  for (const button of elements.workspaceEditor.querySelectorAll("[data-editor-move]")) {
+    button.addEventListener("click", () => {
+      moveWorkspaceNoteToSection(state.selectedWorkspaceNoteId, button.dataset.editorMove || "");
     });
   }
   refreshActionChipSelection();
