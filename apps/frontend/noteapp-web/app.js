@@ -970,6 +970,8 @@ function buildConflictSnapshot() {
 
 function buildSettingsSnapshot() {
   const status = state.bridgeStatus;
+  const workspaceShell = getCurrentWorkspaceShell();
+  const selectedNote = getSelectedWorkspaceNote();
   return {
     appSession: state.appSession,
     bridgeAvailable: Boolean(status?.available),
@@ -979,6 +981,12 @@ function buildSettingsSnapshot() {
     vaultId: status?.config?.vaultId || "未连接",
     missing: Array.isArray(status?.missing) ? status.missing : [],
     diagnostics: Array.isArray(status?.diagnostics) ? status.diagnostics : [],
+    selectedNote,
+    visibleNoteCount: getVisibleWorkspaceNoteIds(workspaceShell).length,
+    totalNoteCount: countWorkspaceNotes(workspaceShell),
+    dirtyDraftCount: collectDirtyEditorDrafts().length,
+    recoveryCount: state.recoveryDrafts.length,
+    lastExecution: buildLastExecutionSummary(),
   };
 }
 
@@ -1850,18 +1858,61 @@ function renderViewDetailGrid() {
             <strong>${escapeHtml(settings.vaultRoot)}</strong>
           </div>
         </div>
+        <div class="token-grid">
+          ${
+            settings.missing.length
+              ? settings.missing
+                  .map((item) => `<span class="mini-pill tone-warning">${escapeHtml(item)}</span>`)
+                  .join("")
+              : '<span class="mini-pill tone-success">桥接配置已齐全</span>'
+          }
+          ${
+            settings.diagnostics.slice(0, 4).length
+              ? settings.diagnostics
+                  .slice(0, 4)
+                  .map((item) => `<span class="mini-pill tone-${resolveTone(item.level)}">${escapeHtml(item.code)}</span>`)
+                  .join("")
+              : ""
+          }
+        </div>
+        <div class="detail-actions">
+          <button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">刷新桥接状态</button>
+          <button class="solid detail-inline-button" data-view-command="refresh-session" type="button">刷新实时会话</button>
+        </div>
       </article>
       <article class="view-detail-card">
-        <p class="card-section-label">当前会话</p>
-        <h3>前端数据边界</h3>
+        <p class="card-section-label">当前工作区</p>
+        <h3>本地工作台状态</h3>
+        <div class="detail-metric-grid">
+          <div class="detail-metric">
+            <span class="metric-label">可见文档</span>
+            <strong>${escapeHtml(`${settings.visibleNoteCount}/${settings.totalNoteCount}`)}</strong>
+          </div>
+          <div class="detail-metric">
+            <span class="metric-label">恢复队列</span>
+            <strong>${escapeHtml(settings.recoveryCount)}</strong>
+          </div>
+        </div>
         <div class="view-stack">
+          <div class="detail-row">
+            <span>当前焦点</span>
+            <strong>${escapeHtml(settings.selectedNote?.title || "当前没有命中文档")}</strong>
+          </div>
+          <div class="detail-row">
+            <span>工作区来源</span>
+            <strong>${escapeHtml(state.workspaceSourceLabel)}</strong>
+          </div>
+          <div class="detail-row">
+            <span>同步来源</span>
+            <strong>${escapeHtml(state.sourceLabel)}</strong>
+          </div>
+          <div class="detail-row">
+            <span>未保存草稿</span>
+            <strong>${escapeHtml(settings.dirtyDraftCount)}</strong>
+          </div>
           <div class="detail-row">
             <span>会话 ID</span>
             <strong>${escapeHtml(settings.appSession?.sessionId || "未进入应用会话")}</strong>
-          </div>
-          <div class="detail-row">
-            <span>会话来源</span>
-            <strong>${escapeHtml(settings.appSession ? formatSessionSourceLabel(settings.appSession.source) : "无")}</strong>
           </div>
           <div class="detail-row">
             <span>载荷类型</span>
@@ -1872,53 +1923,107 @@ function renderViewDetailGrid() {
             <strong>${escapeHtml(settings.appSession ? formatDateTime(settings.appSession.loadedAtMs) : "无")}</strong>
           </div>
           <div class="detail-row">
-            <span>同步来源</span>
-            <strong>${escapeHtml(state.sourceLabel)}</strong>
-          </div>
-          <div class="detail-row">
-            <span>工作区来源</span>
-            <strong>${escapeHtml(state.workspaceSourceLabel)}</strong>
-          </div>
-          <div class="detail-row">
             <span>工作区摘要</span>
             <strong>${escapeHtml(settings.appSession ? `${settings.appSession.workspaceSummary.sectionCount} 个分区 / ${settings.appSession.workspaceSummary.noteCount} 篇文档` : "无")}</strong>
           </div>
-          <div class="detail-row">
-            <span>缺失配置</span>
-            <strong>${escapeHtml(settings.missing.length ? settings.missing.join(", ") : "无")}</strong>
-          </div>
-        </div>
-        <div class="token-grid">
-          ${settings.diagnostics.slice(0, 4).map((item) => `<span class="mini-pill tone-${resolveTone(item.level)}">${escapeHtml(item.code)}</span>`).join("")}
         </div>
         <div class="detail-actions">
-          <button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">刷新桥接状态</button>
-          <button class="solid detail-inline-button" data-view-command="refresh-session" type="button">刷新实时会话</button>
+          <button class="ghost detail-inline-button" data-settings-nav="overview" type="button">回到总览</button>
+          <button class="ghost detail-inline-button" data-settings-nav="repository" type="button">打开仓库浏览</button>
+          <button class="ghost detail-inline-button" data-settings-nav="conflicts" type="button">查看冲突处理</button>
         </div>
       </article>
       <article class="view-detail-card">
-        <p class="card-section-label">会话轨迹</p>
+        <p class="card-section-label">常用接入</p>
+        <h3>本地操作入口</h3>
+        <div class="view-stack">
+          <div class="detail-row detail-row-block">
+            <strong>当前建议</strong>
+            <span>${escapeHtml(settings.bridgeAvailable ? "桥接可用，优先刷新实时会话并在工作区中继续推进。" : "桥接暂不可用，可先加载样例会话或整理本地草稿。")}</span>
+          </div>
+          <div class="detail-row detail-row-block">
+            <strong>工作区样例</strong>
+            <span>用于快速确认当前壳层 UI、树形结构、编辑区与 AI 面板是否都能联动。</span>
+          </div>
+        </div>
+        <div class="detail-actions">
+          <button class="ghost detail-inline-button" data-settings-command="load-sample-session" type="button">加载样例会话</button>
+          <button class="ghost detail-inline-button" data-settings-command="load-workspace-sample" type="button">加载工作区样例</button>
+          <button class="solid detail-inline-button" data-settings-command="quick-capture" type="button">新建快速记录</button>
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">恢复与执行</p>
         <h3>最近操作</h3>
         <div class="view-stack">
           ${
-            state.sessionHistory.length
-              ? state.sessionHistory
-                  .slice(0, 6)
-                  .map(
-                    (entry) => `
-                      <div class="detail-row detail-row-block">
-                        <strong>${escapeHtml(formatSessionEventLabel(entry.type))}</strong>
-                        <span>${escapeHtml(entry.detail || "无附加说明")}</span>
-                        <span>${escapeHtml(formatDateTime(entry.atMs))}</span>
-                      </div>
-                    `,
-                  )
-                  .join("")
-              : '<div class="empty-state"><p>当前还没有记录任何前端会话操作。</p></div>'
+            settings.lastExecution
+              ? `
+                <div class="detail-row detail-row-block">
+                  <strong>${escapeHtml(settings.lastExecution.actionId)}</strong>
+                  <span>${escapeHtml(`${settings.lastExecution.statusLabel} · ${settings.lastExecution.atLabel}`)}</span>
+                  <span>${escapeHtml(settings.lastExecution.commandLine || "通过桌面桥接执行")}</span>
+                </div>
+              `
+              : '<div class="detail-row detail-row-block"><strong>最近还没有桥接执行记录</strong><span>可以先在工作区选中文档，再通过推荐动作进入同步流程。</span></div>'
+          }
+          <div class="detail-row detail-row-block">
+            <strong>${escapeHtml(settings.recoveryCount ? `有 ${settings.recoveryCount} 份本地恢复草稿` : "当前没有待恢复草稿")}</strong>
+            <span>${escapeHtml(settings.recoveryCount ? "这些内容仅保留在浏览器本地，可以恢复后再决定是否保存正式草稿。" : "本地恢复区处于干净状态。")}</span>
+          </div>
+        </div>
+        <div class="detail-actions">
+          ${
+            settings.recoveryCount
+              ? `<button class="solid detail-inline-button" data-settings-command="restore-all-recovery" type="button">恢复全部草稿</button>`
+              : ""
+          }
+          ${
+            settings.recoveryCount
+              ? `<button class="ghost detail-inline-button" data-settings-command="discard-all-recovery" type="button">放弃恢复区</button>`
+              : ""
           }
         </div>
       </article>
     `;
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-settings-nav]")) {
+      button.addEventListener("click", () => {
+        state.activeNavView = button.dataset.settingsNav || "overview";
+        render();
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-settings-command]")) {
+      button.addEventListener("click", async () => {
+        const command = button.dataset.settingsCommand;
+        if (command === "load-sample-session") {
+          try {
+            await loadSampleAppSession();
+          } catch (error) {
+            renderEmptyDashboard(error instanceof Error ? error.message : String(error));
+          }
+          return;
+        }
+        if (command === "load-workspace-sample") {
+          try {
+            await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "内置工作区样例");
+          } catch (error) {
+            elements.workspaceStatus.textContent = error instanceof Error ? error.message : String(error);
+          }
+          return;
+        }
+        if (command === "quick-capture") {
+          createQuickCaptureNote();
+          return;
+        }
+        if (command === "restore-all-recovery") {
+          restoreAllRecoveryDrafts();
+          return;
+        }
+        if (command === "discard-all-recovery") {
+          discardAllRecoveryDrafts();
+        }
+      });
+    }
     for (const button of elements.viewDetailGrid.querySelectorAll("[data-view-command]")) {
       button.addEventListener("click", async () => {
         if (button.dataset.viewCommand === "refresh-bridge") {
