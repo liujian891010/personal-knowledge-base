@@ -528,6 +528,10 @@ pre {
   font-size: 0.82rem;
 }
 
+.tone-warning-inline {
+  color: var(--warning);
+}
+
 .tree-node-signals,
 .editor-signal-row {
   display: flex;
@@ -685,6 +689,29 @@ pre {
   font-family: var(--display);
   font-size: 1.3rem;
   color: var(--ink);
+}
+
+.ai-draft-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ai-draft-item {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.ai-draft-item strong {
+  display: block;
+  margin-top: 8px;
+  font-family: var(--display);
+}
+
+.ai-inline-actions {
+  margin-top: 4px;
 }
 
 .ai-section {
@@ -993,6 +1020,10 @@ pre {
 
 @media (max-width: 1300px) {
   .workspace-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-draft-grid {
     grid-template-columns: 1fr;
   }
 }
