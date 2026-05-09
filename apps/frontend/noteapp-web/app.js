@@ -473,6 +473,31 @@ function persistLocalWorkspaceSession() {
   }
 }
 
+function restoreLocalWorkspaceSession(options = {}) {
+  const session = readLocalWorkspaceSession();
+  if (!session) {
+    return null;
+  }
+
+  state.selectedWorkspaceNoteId = session.selectedWorkspaceNoteId;
+  applyWorkspaceShell(session.workspaceShell, session.workspaceSourceLabel);
+
+  if (options.pushHistory !== false) {
+    pushSessionHistory({
+      type: "workspace_session_restored",
+      level: "success",
+      detail: `${session.workspaceSourceLabel} · ${formatDateTime(session.savedAtMs)}`,
+    });
+  }
+
+  if (options.statusMessage !== false) {
+    elements.workspaceStatus.textContent =
+      options.statusMessage || `已恢复本地工作区：${formatDateTime(session.savedAtMs)} 的浏览器草稿会话`;
+  }
+
+  return session;
+}
+
 function normalizeSearchQuery(value = "") {
   return String(value).trim().toLocaleLowerCase("zh-CN");
 }
@@ -1000,6 +1025,93 @@ function formatSessionSourceLabel(source) {
   }[source] || source;
 }
 
+function formatWorkspaceSourceLabel(source) {
+  if (!source || source === "未加载") {
+    return "未加载工作区";
+  }
+  if (source === "浏览器本地草稿") {
+    return "本机工作区";
+  }
+  if (source.startsWith("桌面桥接应用会话")) {
+    return "桌面实时会话";
+  }
+  if (source.startsWith("内置应用会话")) {
+    return "演示会话";
+  }
+  if (source === "演示工作区") {
+    return "演示工作区";
+  }
+  if (source.startsWith("导入工作区文件")) {
+    return "导入工作区文件";
+  }
+  if (source === "文本框工作区 JSON") {
+    return "手动粘贴工作区";
+  }
+  return source;
+}
+
+function formatSyncSourceLabel(source) {
+  if (!source || source === "未加载") {
+    return "未加载同步看板";
+  }
+  if (source === "演示同步快照") {
+    return "演示同步看板";
+  }
+  if (source === "本地导出的实时同步快照") {
+    return "本地实时同步快照";
+  }
+  if (source.startsWith("通过本地桌面桥接刷新同步快照")) {
+    return "桌面实时同步快照";
+  }
+  if (source.startsWith("通过本地桌面桥接执行动作")) {
+    return "动作执行后的同步结果";
+  }
+  if (source === "文本框同步 JSON") {
+    return "手动粘贴同步数据";
+  }
+  if (source.startsWith("导入文件：")) {
+    return "导入同步文件";
+  }
+  if (source.startsWith("从 ")) {
+    return "指定路径同步数据";
+  }
+  return source;
+}
+
+function buildWorkspaceSourceSummary() {
+  const workspaceSource = state.workspaceSourceLabel;
+  const syncSource = formatSyncSourceLabel(state.sourceLabel);
+
+  if (workspaceSource === "浏览器本地草稿") {
+    return {
+      headline: "当前继续的是本机草稿工作区",
+      detail: `这份工作区只保存在当前浏览器，刷新页面后会优先恢复。同步看板当前显示为${syncSource}。`,
+    };
+  }
+  if (workspaceSource.startsWith("桌面桥接应用会话")) {
+    return {
+      headline: "当前工作区来自桌面实时会话",
+      detail: "文档树和同步动作都以桌面桥接返回的数据为准，适合继续真实同步流程。",
+    };
+  }
+  if (workspaceSource.startsWith("内置应用会话") || workspaceSource === "演示工作区") {
+    return {
+      headline: "当前处于演示数据环境",
+      detail: "可以先熟悉工作台结构，随后切换到本机草稿或桌面实时会话继续工作。",
+    };
+  }
+  if (workspaceSource.startsWith("导入工作区文件") || workspaceSource === "文本框工作区 JSON") {
+    return {
+      headline: "当前工作区来自手动导入",
+      detail: `当前文档树来自外部导入内容；同步看板显示为${syncSource}。如需继续真实工作，可切回本机草稿或桌面实时会话。`,
+    };
+  }
+  return {
+    headline: `当前工作区来自${formatWorkspaceSourceLabel(workspaceSource)}`,
+    detail: `同步看板当前显示为${syncSource}。`,
+  };
+}
+
 function buildAppSessionState(session) {
   const workspaceShell = validateWorkspaceShell(session.workspaceShell);
   const payloadKind =
@@ -1354,6 +1466,7 @@ function buildSettingsSnapshot() {
   const workspaceShell = getCurrentWorkspaceShell();
   const selectedNote = getSelectedWorkspaceNote();
   const localWorkspaceSession = summarizeLocalWorkspaceSession();
+  const workspaceSourceSummary = buildWorkspaceSourceSummary();
   return {
     appSession: state.appSession,
     bridgeAvailable: Boolean(status?.available),
@@ -1372,6 +1485,11 @@ function buildSettingsSnapshot() {
     localUiSettings: state.localUiSettings,
     expertMode: Boolean(state.localUiSettings.expertMode),
     localWorkspaceSession,
+    workspaceSourceDisplay: formatWorkspaceSourceLabel(state.workspaceSourceLabel),
+    workspaceSourceSummary,
+    syncSourceDisplay: formatSyncSourceLabel(state.sourceLabel),
+    canRestoreLocalSession:
+      Boolean(localWorkspaceSession) && state.workspaceSourceLabel !== "浏览器本地草稿",
   };
 }
 
@@ -1503,7 +1621,7 @@ function renderViewModeCard() {
       tone: "info",
       title: "本地设置视图",
       detail: "这里集中管理本地桥接、工作区来源和调试入口，把低频接入动作与主工作台隔离开。",
-      pills: [`工作区：${state.workspaceSourceLabel}`, `同步：${state.sourceLabel}`],
+      pills: [`工作区：${formatWorkspaceSourceLabel(state.workspaceSourceLabel)}`, `同步：${formatSyncSourceLabel(state.sourceLabel)}`],
     },
   };
   const config = viewConfigs[state.activeNavView];
@@ -1934,11 +2052,11 @@ function renderViewDetailGrid() {
           </div>
           <div class="detail-row">
             <span>工作区来源</span>
-            <strong>${escapeHtml(state.workspaceSourceLabel)}</strong>
+            <strong>${escapeHtml(formatWorkspaceSourceLabel(state.workspaceSourceLabel))}</strong>
           </div>
           <div class="detail-row">
-            <span>同步来源</span>
-            <strong>${escapeHtml(state.sourceLabel)}</strong>
+            <span>同步看板</span>
+            <strong>${escapeHtml(formatSyncSourceLabel(state.sourceLabel))}</strong>
           </div>
         </div>
         <div class="detail-actions">
@@ -2471,16 +2589,20 @@ function renderViewDetailGrid() {
           </div>
         </div>
         <div class="view-stack">
+          <div class="detail-row detail-row-block">
+            <strong>${settings.bridgeAvailable ? "桌面桥接已接通" : "桌面桥接暂未接通"}</strong>
+            <span>${escapeHtml(settings.bridgeAvailable ? "现在可以直接拉取桌面实时会话，并在当前工作台继续真实同步流程。" : "你仍可先整理本机草稿或切到演示会话，等桌面桥接就绪后再回来接入实时数据。")}</span>
+          </div>
           <div class="detail-row">
             <span>配置来源</span>
             <strong>${escapeHtml(settings.bridgeSource)}</strong>
           </div>
           <div class="detail-row">
-            <span>Vault ID</span>
+            <span>${settings.expertMode ? "Vault ID" : "仓库标识"}</span>
             <strong>${escapeHtml(settings.vaultId)}</strong>
           </div>
           <div class="detail-row">
-            <span>Vault Root</span>
+            <span>${settings.expertMode ? "Vault Root" : "本地目录"}</span>
             <strong>${escapeHtml(settings.vaultRoot)}</strong>
           </div>
         </div>
@@ -2507,56 +2629,89 @@ function renderViewDetailGrid() {
         </div>
       </article>
       <article class="view-detail-card">
-        <p class="card-section-label">当前工作区</p>
-        <h3>本地工作台状态</h3>
+        <p class="card-section-label">工作区入口</p>
+        <h3>切换继续方式</h3>
         <div class="detail-metric-grid">
           <div class="detail-metric">
-            <span class="metric-label">可见文档</span>
-            <strong>${escapeHtml(`${settings.visibleNoteCount}/${settings.totalNoteCount}`)}</strong>
+            <span class="metric-label">当前入口</span>
+            <strong>${escapeHtml(settings.workspaceSourceDisplay)}</strong>
           </div>
           <div class="detail-metric">
-            <span class="metric-label">恢复队列</span>
-            <strong>${escapeHtml(settings.recoveryCount)}</strong>
+            <span class="metric-label">当前规模</span>
+            <strong>${escapeHtml(`${settings.totalNoteCount} 篇 / ${settings.visibleNoteCount} 可见`)}</strong>
           </div>
         </div>
         <div class="view-stack">
+          <div class="detail-row detail-row-block">
+            <strong>${escapeHtml(settings.workspaceSourceSummary.headline)}</strong>
+            <span>${escapeHtml(settings.workspaceSourceSummary.detail)}</span>
+          </div>
           <div class="detail-row">
             <span>当前焦点</span>
             <strong>${escapeHtml(settings.selectedNote?.title || "当前没有命中文档")}</strong>
           </div>
           <div class="detail-row">
-            <span>工作区来源</span>
-            <strong>${escapeHtml(state.workspaceSourceLabel)}</strong>
-          </div>
-          <div class="detail-row">
-            <span>同步来源</span>
-            <strong>${escapeHtml(state.sourceLabel)}</strong>
+            <span>同步看板</span>
+            <strong>${escapeHtml(settings.syncSourceDisplay)}</strong>
           </div>
           <div class="detail-row">
             <span>未保存草稿</span>
             <strong>${escapeHtml(settings.dirtyDraftCount)}</strong>
           </div>
           <div class="detail-row">
-            <span>会话 ID</span>
-            <strong>${escapeHtml(settings.appSession?.sessionId || "未进入应用会话")}</strong>
+            <span>待恢复草稿</span>
+            <strong>${escapeHtml(settings.recoveryCount)}</strong>
           </div>
-          <div class="detail-row">
-            <span>载荷类型</span>
-            <strong>${escapeHtml(settings.appSession ? formatPayloadKindLabel(settings.appSession.payloadKind) : "无")}</strong>
-          </div>
-          <div class="detail-row">
-            <span>加载时间</span>
-            <strong>${escapeHtml(settings.appSession ? formatDateTime(settings.appSession.loadedAtMs) : "无")}</strong>
-          </div>
-          <div class="detail-row">
-            <span>工作区摘要</span>
-            <strong>${escapeHtml(settings.appSession ? `${settings.appSession.workspaceSummary.sectionCount} 个分区 / ${settings.appSession.workspaceSummary.noteCount} 篇文档` : "无")}</strong>
-          </div>
+          ${
+            settings.appSession
+              ? `
+                <div class="detail-row">
+                  <span>最近载入</span>
+                  <strong>${escapeHtml(formatDateTime(settings.appSession.loadedAtMs))}</strong>
+                </div>
+              `
+              : ""
+          }
+          ${
+            settings.expertMode
+              ? `
+                <div class="detail-row">
+                  <span>工作区原始来源</span>
+                  <strong>${escapeHtml(state.workspaceSourceLabel)}</strong>
+                </div>
+                <div class="detail-row">
+                  <span>同步原始来源</span>
+                  <strong>${escapeHtml(state.sourceLabel)}</strong>
+                </div>
+                <div class="detail-row">
+                  <span>会话 ID</span>
+                  <strong>${escapeHtml(settings.appSession?.sessionId || "未进入应用会话")}</strong>
+                </div>
+                <div class="detail-row">
+                  <span>载荷类型</span>
+                  <strong>${escapeHtml(settings.appSession ? formatPayloadKindLabel(settings.appSession.payloadKind) : "无")}</strong>
+                </div>
+                <div class="detail-row">
+                  <span>工作区摘要</span>
+                  <strong>${escapeHtml(settings.appSession ? `${settings.appSession.workspaceSummary.sectionCount} 个分区 / ${settings.appSession.workspaceSummary.noteCount} 篇文档` : "无")}</strong>
+                </div>
+              `
+              : ""
+          }
         </div>
         <div class="detail-actions">
-          <button class="ghost detail-inline-button" data-settings-nav="overview" type="button">回到总览</button>
-          <button class="ghost detail-inline-button" data-settings-nav="repository" type="button">打开仓库浏览</button>
-          <button class="ghost detail-inline-button" data-settings-nav="conflicts" type="button">查看冲突处理</button>
+          ${
+            settings.canRestoreLocalSession
+              ? '<button class="solid detail-inline-button" data-settings-command="continue-local-workspace-session" type="button">继续本机草稿</button>'
+              : ""
+          }
+          ${
+            settings.bridgeAvailable
+              ? '<button class="ghost detail-inline-button" data-settings-command="load-bridge-session" type="button">切到桌面实时会话</button>'
+              : '<button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">检查桌面桥接</button>'
+          }
+          <button class="ghost detail-inline-button" data-settings-command="load-sample-session" type="button">切到演示会话</button>
+          <button class="ghost detail-inline-button" data-settings-command="load-workspace-sample" type="button">打开演示工作区</button>
         </div>
       </article>
       <article class="view-detail-card">
@@ -2584,6 +2739,11 @@ function renderViewDetailGrid() {
         </div>
         <div class="detail-actions">
           ${
+            settings.canRestoreLocalSession
+              ? '<button class="solid detail-inline-button" data-settings-command="continue-local-workspace-session" type="button">恢复到编辑区</button>'
+              : ""
+          }
+          ${
             settings.localWorkspaceSession
               ? '<button class="ghost detail-inline-button" data-settings-command="clear-local-workspace-session" type="button">清除本机工作区会话</button>'
               : ""
@@ -2591,21 +2751,22 @@ function renderViewDetailGrid() {
         </div>
       </article>
       <article class="view-detail-card">
-        <p class="card-section-label">常用接入</p>
-        <h3>本地操作入口</h3>
+        <p class="card-section-label">工作台捷径</p>
+        <h3>快速整理入口</h3>
         <div class="view-stack">
           <div class="detail-row detail-row-block">
             <strong>当前建议</strong>
-            <span>${escapeHtml(settings.bridgeAvailable ? "桥接可用，优先刷新实时会话并在工作区中继续推进。" : "桥接暂不可用，可先加载演示会话或整理本地草稿。")}</span>
+            <span>${escapeHtml(settings.bridgeAvailable ? "如果准备处理真实同步问题，优先切到桌面实时会话；如果只是整理内容，继续本机草稿即可。" : "当前更适合先整理本机草稿、补充快速记录，或在演示会话里熟悉界面结构。")}</span>
           </div>
           <div class="detail-row detail-row-block">
-            <strong>演示工作区</strong>
-            <span>用于快速确认当前工作台、树形结构、编辑区与 AI 面板是否都能联动。</span>
+            <strong>快速记录</strong>
+            <span>适合先记下今天要补的结论、待处理冲突或 AI 跟进项，随后再归类到正式分区。</span>
           </div>
         </div>
         <div class="detail-actions">
-          <button class="ghost detail-inline-button" data-settings-command="load-sample-session" type="button">加载演示会话</button>
-          <button class="ghost detail-inline-button" data-settings-command="load-workspace-sample" type="button">加载演示工作区</button>
+          <button class="ghost detail-inline-button" data-settings-nav="overview" type="button">回到总览</button>
+          <button class="ghost detail-inline-button" data-settings-nav="repository" type="button">打开仓库浏览</button>
+          <button class="ghost detail-inline-button" data-settings-nav="conflicts" type="button">查看冲突处理</button>
           <button class="solid detail-inline-button" data-settings-command="quick-capture" type="button">新建快速记录</button>
         </div>
       </article>
@@ -2734,6 +2895,25 @@ function renderViewDetailGrid() {
         }
         if (command === "quick-capture") {
           createQuickCaptureNote();
+          return;
+        }
+        if (command === "continue-local-workspace-session") {
+          const restoredSession = restoreLocalWorkspaceSession({
+            statusMessage: "已切回本机工作区草稿，可继续整理刚才的编辑上下文。",
+          });
+          if (!restoredSession) {
+            elements.workspaceStatus.textContent = "当前没有可恢复的本机工作区会话。";
+          }
+          return;
+        }
+        if (command === "load-bridge-session") {
+          try {
+            await refreshFullAppSession();
+          } catch (error) {
+            state.lastBridgeError = normalizeBridgeError(error);
+            elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
+            renderBridgeError(state.lastBridgeError);
+          }
           return;
         }
         if (command === "toggle-expert-mode") {
@@ -4089,7 +4269,7 @@ function renderWorkspaceRail() {
           </div>
           <div class="rail-metric">
             <span class="metric-label">工作区来源</span>
-            <strong>${escapeHtml(state.workspaceSourceLabel)}</strong>
+            <strong>${escapeHtml(formatWorkspaceSourceLabel(state.workspaceSourceLabel))}</strong>
           </div>
         </div>
         <p class="session-rail-copy">${escapeHtml(dirtyDrafts.length ? dirtyDrafts.map((draft) => draft.title).join(" · ") : "当前没有挂起的未保存修改。")}</p>
@@ -4841,7 +5021,7 @@ function renderWorkspaceAiPanel() {
 }
 
 function renderWorkspaceChrome() {
-  elements.workspaceStatus.textContent = `工作区契约来源：${state.workspaceSourceLabel}`;
+  elements.workspaceStatus.textContent = `当前工作区：${formatWorkspaceSourceLabel(state.workspaceSourceLabel)}`;
   syncSelectedWorkspaceNoteToSearch(state.workspaceShell || WORKSPACE_SAMPLE);
   renderWorkspaceTree();
   renderWorkspaceRail();
@@ -4852,18 +5032,21 @@ function renderWorkspaceChrome() {
 function buildPayloadDetail() {
   if (state.appSession) {
     return [
-      formatPayloadKindLabel(state.appSession.payloadKind),
+      formatWorkspaceSourceLabel(state.workspaceSourceLabel),
       `${state.appSession.workspaceSummary.noteCount} 篇文档`,
       formatDateTime(state.appSession.loadedAtMs),
     ].join(" | ");
   }
 
   if (!state.snapshotMetadata) {
-    return state.sourceLabel;
+    return formatSyncSourceLabel(state.sourceLabel);
   }
 
   const { generated_at_ms, vault_id, device_id, vault_root } = state.snapshotMetadata;
-  return `${state.sourceLabel} | ${vault_id} | ${device_id} | ${vault_root} | ${formatDateTime(generated_at_ms)}`;
+  if (!state.localUiSettings.expertMode) {
+    return `${formatSyncSourceLabel(state.sourceLabel)} | ${formatDateTime(generated_at_ms)}`;
+  }
+  return `${formatSyncSourceLabel(state.sourceLabel)} | ${vault_id} | ${device_id} | ${vault_root} | ${formatDateTime(generated_at_ms)}`;
 }
 
 function renderPanel(syncCenter) {
@@ -5273,7 +5456,7 @@ function applyWorkspaceShell(payload, sourceLabel) {
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
   persistLocalWorkspaceSession();
   render();
-  elements.actionExecutionStatus.textContent = `工作区契约来源：${sourceLabel}`;
+  elements.actionExecutionStatus.textContent = `当前工作区已切换为：${formatWorkspaceSourceLabel(sourceLabel)}`;
 }
 
 function applyAppSession(payload, sourceLabel) {
@@ -5378,15 +5561,7 @@ async function loadInitialSession() {
   }
 
   if (localWorkspaceSession) {
-    state.selectedWorkspaceNoteId = localWorkspaceSession.selectedWorkspaceNoteId;
-    applyWorkspaceShell(localWorkspaceSession.workspaceShell, localWorkspaceSession.workspaceSourceLabel);
-    elements.workspaceStatus.textContent =
-      `已恢复本地工作区：${formatDateTime(localWorkspaceSession.savedAtMs)} 的浏览器草稿会话`;
-    pushSessionHistory({
-      type: "workspace_session_restored",
-      level: "success",
-      detail: `${localWorkspaceSession.workspaceSourceLabel} · ${formatDateTime(localWorkspaceSession.savedAtMs)}`,
-    });
+    restoreLocalWorkspaceSession();
     try {
       await loadInitialPayload();
     } catch {
