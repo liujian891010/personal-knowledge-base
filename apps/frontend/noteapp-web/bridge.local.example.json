@@ -1,0 +1,8 @@
+{
+  "vaultRoot": "C:/vaults/pkb",
+  "baseUrl": "https://sync.example.com",
+  "vaultId": "vault-001",
+  "deviceId": "desktop-shanghai",
+  "activityLimit": 20,
+  "pythonBin": "python"
+}

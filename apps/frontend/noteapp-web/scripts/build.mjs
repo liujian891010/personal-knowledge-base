@@ -12,7 +12,7 @@ if (existsSync(dist)) {
 
 mkdirSync(dist, { recursive: true });
 
-for (const entry of ["index.html", "styles.css", "app.js", "fixtures"]) {
+for (const entry of ["index.html", "styles.css", "app.js", "fixtures", "bridge.local.example.json"]) {
   cpSync(join(root, entry), join(dist, entry), { recursive: true });
 }
 

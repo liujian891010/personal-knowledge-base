@@ -24,6 +24,14 @@ const contentTypes = {
   ".json": "application/json; charset=utf-8",
 };
 
+function createBridgeError(code, message, details = {}, statusCode = 400) {
+  const error = new Error(message);
+  error.code = code;
+  error.details = details;
+  error.statusCode = statusCode;
+  return error;
+}
+
 function writeJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
@@ -48,7 +56,9 @@ function readJsonBody(request) {
     request.on("data", (chunk) => {
       raw += chunk;
       if (raw.length > 1024 * 1024) {
-        rejectBody(new Error("request body too large"));
+        rejectBody(
+          createBridgeError("request_body_too_large", "Request body exceeded 1MB.", {}, 413),
+        );
       }
     });
     request.on("end", () => {
@@ -59,16 +69,37 @@ function readJsonBody(request) {
       try {
         resolveBody(JSON.parse(raw));
       } catch (error) {
-        rejectBody(error);
+        rejectBody(
+          createBridgeError(
+            "invalid_json_body",
+            "Request body must be valid JSON.",
+            {
+              reason: error instanceof Error ? error.message : String(error),
+            },
+            400,
+          ),
+        );
       }
     });
-    request.on("error", rejectBody);
+    request.on("error", (error) => {
+      rejectBody(
+        createBridgeError(
+          "request_stream_failed",
+          "Request body stream failed.",
+          {
+            reason: error instanceof Error ? error.message : String(error),
+          },
+          400,
+        ),
+      );
+    });
   });
 }
 
 function buildBridgeStatusPayload() {
   const missing = listMissingBridgeSettings(bridgeConfig);
   return {
+    mode: bridgeConfig.bridgeMode,
     available: missing.length === 0,
     missing,
     config: {
@@ -79,14 +110,24 @@ function buildBridgeStatusPayload() {
       outputJson: bridgeConfig.outputJson,
       activityLimit: bridgeConfig.activityLimit,
       configSource: bridgeConfig.configSource,
+      sourceByField: bridgeConfig.sourceByField,
     },
+    diagnostics: bridgeConfig.diagnostics,
   };
 }
 
 function requireBridgeConfig() {
   const status = buildBridgeStatusPayload();
   if (!status.available) {
-    throw new Error(`desktop bridge is not configured: ${status.missing.join(", ")}`);
+    throw createBridgeError(
+      "bridge_not_configured",
+      `Desktop bridge is not configured: ${status.missing.join(", ")}`,
+      {
+        missing: status.missing,
+        configSource: status.config.configSource,
+      },
+      400,
+    );
   }
   return status;
 }
@@ -118,6 +159,26 @@ function executeSyncAction(actionId, nowMs, activityLimit) {
   );
 }
 
+function writeBridgeError(response, error) {
+  const normalized = {
+    code:
+      error && typeof error === "object" && "code" in error && typeof error.code === "string"
+        ? error.code
+        : "bridge_request_failed",
+    message:
+      error instanceof Error ? error.message : typeof error === "string" ? error : "Bridge request failed.",
+    details:
+      error && typeof error === "object" && "details" in error && error.details
+        ? error.details
+        : null,
+  };
+  const statusCode =
+    error && typeof error === "object" && "statusCode" in error && Number.isInteger(error.statusCode)
+      ? error.statusCode
+      : 400;
+  writeJson(response, statusCode, { error: normalized });
+}
+
 const server = createServer(async (request, response) => {
   const url = new URL(request.url || "/", `http://${host}:${port}`);
 
@@ -132,9 +193,7 @@ const server = createServer(async (request, response) => {
       const snapshot = executeRefreshSnapshot(body.nowMs, body.activityLimit);
       writeJson(response, 200, { snapshot });
     } catch (error) {
-      writeJson(response, 400, {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      writeBridgeError(response, error);
     }
     return;
   }
@@ -143,14 +202,12 @@ const server = createServer(async (request, response) => {
     try {
       const body = await readJsonBody(request);
       if (typeof body.actionId !== "string" || !body.actionId) {
-        throw new Error("actionId is required");
+        throw createBridgeError("action_id_required", "actionId is required.", {}, 400);
       }
       const result = executeSyncAction(body.actionId, body.nowMs, body.activityLimit);
       writeJson(response, 200, result);
     } catch (error) {
-      writeJson(response, 400, {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      writeBridgeError(response, error);
     }
     return;
   }
