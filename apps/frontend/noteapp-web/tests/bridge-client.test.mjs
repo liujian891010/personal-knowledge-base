@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   executeBridgeAction,
+  fetchAiBoundaryStatus,
   fetchSampleAppSession,
   fetchBridgeStatus,
   requestAiCopilotAnswer,
@@ -45,6 +46,25 @@ export async function runBridgeClientTests() {
   assert.equal(calls[0].url, "/api/bridge/status");
   assert.deepEqual(calls[0].options, { cache: "no-store" });
   completed.push("fetchBridgeStatus requests the status endpoint without cache");
+  resetGlobals();
+
+  const aiStatusCalls = [];
+  globalThis.fetch = async (url, options) => {
+    aiStatusCalls.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { available: true, mode: "dev-server-local" };
+      },
+    };
+  };
+
+  const aiStatus = await fetchAiBoundaryStatus();
+  assert.equal(aiStatus.available, true);
+  assert.equal(aiStatusCalls[0].url, "/api/ai/status");
+  assert.deepEqual(aiStatusCalls[0].options, { cache: "no-store" });
+  completed.push("fetchAiBoundaryStatus requests the AI boundary status endpoint without cache");
   resetGlobals();
 
   let request = null;
