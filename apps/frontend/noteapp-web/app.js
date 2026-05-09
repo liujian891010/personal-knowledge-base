@@ -1173,6 +1173,23 @@ function formatAiBoundaryModeLabel(mode) {
   }[mode] || mode || "待检查";
 }
 
+function buildAiBoundarySummary() {
+  const status = state.aiBoundaryStatus;
+  const answerSource = state.aiCopilot.lastAnswer?.source || null;
+  const compileSource = state.aiCompile.lastSource || null;
+  return {
+    available: status?.available === true,
+    headline: status ? (status.available ? "AI 接口在线" : "当前已退回本地") : "AI 边界待检查",
+    modeLabel: formatAiBoundaryModeLabel(status?.mode),
+    tone: status ? (status.available ? "success" : "warning") : "info",
+    checkedAtLabel: state.aiBoundaryCheckedAtMs ? formatDateTime(state.aiBoundaryCheckedAtMs) : "尚未检查",
+    capabilities: Array.isArray(status?.capabilities) ? status.capabilities : [],
+    answerSourceLabel: answerSource ? formatAiBoundarySource(answerSource) : "尚未生成",
+    compileSourceLabel: compileSource ? formatAiBoundarySource(compileSource) : "尚未生成",
+    message: status?.message || "",
+  };
+}
+
 function formatSessionSourceLabel(source) {
   return {
     sample: "演示会话",
@@ -1633,6 +1650,7 @@ function buildSettingsSnapshot() {
   const selectedNote = getSelectedWorkspaceNote();
   const localWorkspaceSession = summarizeLocalWorkspaceSession();
   const workspaceSourceSummary = buildWorkspaceSourceSummary();
+  const aiBoundary = buildAiBoundarySummary();
   return {
     appSession: state.appSession,
     bridgeAvailable: Boolean(status?.available),
@@ -1654,6 +1672,7 @@ function buildSettingsSnapshot() {
     workspaceSourceDisplay: formatWorkspaceSourceLabel(state.workspaceSourceLabel),
     workspaceSourceSummary,
     syncSourceDisplay: formatSyncSourceLabel(state.sourceLabel),
+    aiBoundary,
     canRestoreLocalSession:
       Boolean(localWorkspaceSession) && state.workspaceSourceLabel !== "浏览器本地草稿",
   };
@@ -1787,7 +1806,11 @@ function renderViewModeCard() {
       tone: "info",
       title: "本地设置视图",
       detail: "这里集中管理本地桥接、工作区来源和调试入口，把低频接入动作与主工作台隔离开。",
-      pills: [`工作区：${formatWorkspaceSourceLabel(state.workspaceSourceLabel)}`, `同步：${formatSyncSourceLabel(state.sourceLabel)}`],
+      pills: [
+        `工作区：${formatWorkspaceSourceLabel(state.workspaceSourceLabel)}`,
+        `同步：${formatSyncSourceLabel(state.sourceLabel)}`,
+        `AI：${buildAiBoundarySummary().headline}`,
+      ],
     },
   };
   const config = viewConfigs[state.activeNavView];
@@ -1830,6 +1853,7 @@ function renderViewDetailGrid() {
     const recentSessionEntries = state.sessionHistory.slice(0, 4);
     const localWorkspaceSession = summarizeLocalWorkspaceSession();
     const workspaceSourceSummary = buildWorkspaceSourceSummary();
+    const aiBoundary = buildAiBoundarySummary();
 
     elements.viewDetailGrid.hidden = false;
     elements.viewDetailGrid.innerHTML = `
@@ -2105,6 +2129,33 @@ function renderViewDetailGrid() {
               : ""
           }
           <button class="ghost detail-inline-button" data-overview-nav="repository" type="button">打开仓库浏览</button>
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">AI 调用边界</p>
+        <h3>${escapeHtml(aiBoundary.headline)}</h3>
+        <div class="detail-metric-grid">
+          <div class="detail-metric">
+            <span class="metric-label">当前模式</span>
+            <strong>${escapeHtml(aiBoundary.modeLabel)}</strong>
+          </div>
+          <div class="detail-metric">
+            <span class="metric-label">最近检查</span>
+            <strong>${escapeHtml(aiBoundary.checkedAtLabel)}</strong>
+          </div>
+        </div>
+        <div class="view-stack">
+          <div class="detail-row detail-row-block">
+            <strong>${escapeHtml(`问答来源：${aiBoundary.answerSourceLabel}`)}</strong>
+            <span>${escapeHtml(`知识页编译：${aiBoundary.compileSourceLabel}`)}</span>
+          </div>
+          <div class="detail-row detail-row-block">
+            <strong>${escapeHtml(aiBoundary.capabilities.length ? `已挂载 ${aiBoundary.capabilities.length} 个能力` : "当前尚未返回能力清单")}</strong>
+            <span>${escapeHtml(aiBoundary.capabilities.length ? aiBoundary.capabilities.join(" / ") : aiBoundary.message || "可继续在右侧 AI 面板触发调用并观察边界状态。")}</span>
+          </div>
+        </div>
+        <div class="detail-actions">
+          <button class="ghost detail-inline-button" data-overview-command="open-settings" type="button">打开设置</button>
         </div>
       </article>
       <article class="view-detail-card">
@@ -2992,6 +3043,38 @@ function renderViewDetailGrid() {
         <div class="detail-actions">
           <button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">检查桌面连接</button>
           <button class="solid detail-inline-button" data-view-command="refresh-session" type="button">刷新实时会话</button>
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">AI 调用边界</p>
+        <h3>${escapeHtml(settings.aiBoundary.headline)}</h3>
+        <div class="detail-metric-grid">
+          <div class="detail-metric">
+            <span class="metric-label">当前模式</span>
+            <strong>${escapeHtml(settings.aiBoundary.modeLabel)}</strong>
+          </div>
+          <div class="detail-metric">
+            <span class="metric-label">最近检查</span>
+            <strong>${escapeHtml(settings.aiBoundary.checkedAtLabel)}</strong>
+          </div>
+        </div>
+        <div class="view-stack">
+          <div class="detail-row detail-row-block">
+            <strong>${settings.aiBoundary.available ? "AI 边界已接通" : "AI 边界暂未接通"}</strong>
+            <span>${escapeHtml(settings.aiBoundary.available ? "当前 AI 问答和知识页编译会优先经过显式接口边界，可直接观察真实调用状态。" : "当前会自动退回本地生成，不会阻断整理、校对和草稿沉淀流程。")}</span>
+          </div>
+          <div class="detail-row">
+            <span>问答来源</span>
+            <strong>${escapeHtml(settings.aiBoundary.answerSourceLabel)}</strong>
+          </div>
+          <div class="detail-row">
+            <span>知识页编译</span>
+            <strong>${escapeHtml(settings.aiBoundary.compileSourceLabel)}</strong>
+          </div>
+          <div class="detail-row detail-row-block">
+            <strong>${escapeHtml(settings.aiBoundary.capabilities.length ? "当前能力清单" : "当前未返回能力清单")}</strong>
+            <span>${escapeHtml(settings.aiBoundary.capabilities.length ? settings.aiBoundary.capabilities.join(" / ") : settings.aiBoundary.message || "可继续在右侧 AI 面板触发调用，观察边界状态变化。")}</span>
+          </div>
         </div>
       </article>
       <article class="view-detail-card">
