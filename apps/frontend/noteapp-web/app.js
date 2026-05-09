@@ -8,11 +8,200 @@ import {
 const SAMPLE_PATH = "./fixtures/sync-shell-snapshot.sample.json";
 const LIVE_SNAPSHOT_PATH = "./fixtures/live-sync-shell.json";
 const DEFAULT_ACTION_COMMAND = "pkb-desktop-sync";
+const WORKSPACE_SAMPLE = {
+  sections: [
+    {
+      id: "notes",
+      label: "Notes",
+      items: [
+        {
+          id: "desktop-bridge",
+          title: "Desktop Bridge Rollout",
+          path: "Notes/Engineering/Desktop Bridge Rollout.md",
+          status: "Modified",
+        },
+        {
+          id: "sync-recovery",
+          title: "Sync Recovery Checklist",
+          path: "Notes/Engineering/Sync Recovery Checklist.md",
+          status: "Review",
+        },
+        {
+          id: "release-cadence",
+          title: "Release Cadence",
+          path: "Notes/Product/Release Cadence.md",
+          status: "Stable",
+        },
+      ],
+    },
+    {
+      id: "ai-wiki",
+      label: ".ai/wiki",
+      items: [
+        {
+          id: "desktop-shell",
+          title: "Desktop Shell Spec",
+          path: ".ai/wiki/shell/Desktop Shell Spec.md",
+          status: "AI draft",
+        },
+        {
+          id: "bridge-diagnostics",
+          title: "Bridge Diagnostics",
+          path: ".ai/wiki/ops/Bridge Diagnostics.md",
+          status: "Needs accept",
+        },
+      ],
+    },
+  ],
+  notes: {
+    "desktop-bridge": {
+      title: "Desktop Bridge Rollout",
+      path: "Notes/Engineering/Desktop Bridge Rollout.md",
+      statusTone: "warning",
+      statusLabel: "Modified locally",
+      lastSaved: "Saved 6 minutes ago",
+      tags: ["sync", "desktop", "bridge", "noteapp-web"],
+      body: `# Desktop Bridge Rollout
+
+## Current slice
+- Export sync shell snapshots through the desktop CLI.
+- Forward executable actions through a local dev bridge instead of re-implementing them in the browser.
+- Keep browser-side diagnostics visible so missing local config is obvious.
+
+## Next decisions
+1. Stabilize the bridge contract with lightweight tests.
+2. Expand the web shell from sync-only to full workspace chrome.
+3. Move from prototype panes to real file-tree and editor contracts.`,
+      ai: {
+        queueDepth: 2,
+        warnings: 1,
+        relatedEntities: ["Desktop CLI", "Sync Center", "Bridge Local Config"],
+        suggestions: [
+          "Promote the bridge status payload to a shared frontend contract.",
+          "Expose selected note context to the AI panel for follow-up workflows.",
+        ],
+        lint: ["Bridge status should surface config precedence and failure codes."],
+      },
+    },
+    "sync-recovery": {
+      title: "Sync Recovery Checklist",
+      path: "Notes/Engineering/Sync Recovery Checklist.md",
+      statusTone: "danger",
+      statusLabel: "Needs conflict audit",
+      lastSaved: "Saved yesterday",
+      tags: ["sync", "recovery", "conflicts"],
+      body: `# Sync Recovery Checklist
+
+## Before retry
+- Confirm staging files were cleaned after the failed attempt.
+- Verify unresolved conflict copies are still visible in the vault.
+- Rebuild the next snapshot from a fresh working tree scan.
+
+## Operator note
+Do not resume a commit from stale plaintext snapshots. The next round must rebuild from the latest source versions.`,
+      ai: {
+        queueDepth: 1,
+        warnings: 3,
+        relatedEntities: ["commit_intent_journal", ".noteapp/staging", "conflict_copies"],
+        suggestions: [
+          "Add a visible recovery badge in the sync dock when staging cleanup is required.",
+          "Link conflict artifacts directly from the future file-tree contract.",
+        ],
+        lint: [
+          "Missing rollback note for blob staging cleanup.",
+          "Needs example operator timeline for drift-abort handling.",
+        ],
+      },
+    },
+    "release-cadence": {
+      title: "Release Cadence",
+      path: "Notes/Product/Release Cadence.md",
+      statusTone: "success",
+      statusLabel: "Ready",
+      lastSaved: "Saved this morning",
+      tags: ["product", "delivery", "weekly"],
+      body: `# Release Cadence
+
+## Shipping rule
+- Push after each meaningful phase.
+- Keep the static shell deployable at every step.
+- Avoid mixing experimental UI work with bridge boundary fixes in the same commit unless they are tightly coupled.
+
+## Weekly ritual
+Monday: sync and diagnostics
+Wednesday: desktop shell boundary work
+Friday: workspace UX refinement`,
+      ai: {
+        queueDepth: 0,
+        warnings: 0,
+        relatedEntities: ["Weekly Review", "Milestone Board", "Release Notes"],
+        suggestions: ["Summarize the last three pushed commits into a changelog draft."],
+        lint: [],
+      },
+    },
+    "desktop-shell": {
+      title: "Desktop Shell Spec",
+      path: ".ai/wiki/shell/Desktop Shell Spec.md",
+      statusTone: "info",
+      statusLabel: "AI draft",
+      lastSaved: "Compiled 18 minutes ago",
+      tags: ["ai", "shell", "spec"],
+      body: `# Desktop Shell Spec
+
+## Intent
+Capture the shell-level contracts the desktop client exposes to the static web layer.
+
+## Coverage
+- sync-shell-snapshot
+- sync-center summary and cards
+- activity feed
+- executable action forwarding
+
+## Gap
+The current web shell still needs a first-class file tree and editor contract.`,
+      ai: {
+        queueDepth: 4,
+        warnings: 2,
+        relatedEntities: ["sync-shell-snapshot", "activity_feed", "execute-sync-action-and-snapshot"],
+        suggestions: [
+          "Accept the AI draft once the editor and tree panes are backed by real contracts.",
+        ],
+        lint: ["Spec references future UI panes without sample contract payloads."],
+      },
+    },
+    "bridge-diagnostics": {
+      title: "Bridge Diagnostics",
+      path: ".ai/wiki/ops/Bridge Diagnostics.md",
+      statusTone: "warning",
+      statusLabel: "Needs accept",
+      lastSaved: "Compiled 2 hours ago",
+      tags: ["ai", "ops", "diagnostics"],
+      body: `# Bridge Diagnostics
+
+## Captured signals
+- config source precedence
+- missing required bridge settings
+- desktop CLI spawn failures
+- invalid JSON returned by the desktop boundary
+
+## Pending
+Map diagnostics into a shared frontend model and keep the browser copy minimal.`,
+      ai: {
+        queueDepth: 1,
+        warnings: 1,
+        relatedEntities: ["configSource", "sourceByField", "desktop_cli_invalid_json"],
+        suggestions: ["Add one screenshot-ready status panel for operator demos."],
+        lint: ["Needs explicit note that bearer tokens remain local-only."],
+      },
+    },
+  },
+};
 
 const state = {
   syncCenter: null,
   activityFeed: null,
   snapshotMetadata: null,
+  selectedWorkspaceNoteId: "desktop-bridge",
   selectedAction: null,
   bridgeStatus: null,
   bridgeCheckedAtMs: null,
@@ -45,6 +234,9 @@ const elements = {
   executeSelectedButton: document.getElementById("execute-selected-button"),
   actionExecutionStatus: document.getElementById("action-execution-status"),
   actionChipTemplate: document.getElementById("action-chip-template"),
+  workspaceTree: document.getElementById("workspace-tree"),
+  workspaceEditor: document.getElementById("workspace-editor"),
+  workspaceAiPanel: document.getElementById("workspace-ai-panel"),
 };
 
 function formatDateTime(value) {
@@ -270,6 +462,118 @@ function resolveTone(level) {
   return ["success", "warning", "danger", "info"].includes(level) ? level : "info";
 }
 
+function getSelectedWorkspaceNote() {
+  return (
+    WORKSPACE_SAMPLE.notes[state.selectedWorkspaceNoteId] || WORKSPACE_SAMPLE.notes["desktop-bridge"]
+  );
+}
+
+function renderWorkspaceTree() {
+  elements.workspaceTree.innerHTML = WORKSPACE_SAMPLE.sections
+    .map(
+      (section) => `
+        <section class="tree-section">
+          <h3>${escapeHtml(section.label)}</h3>
+          <div class="tree-list">
+            ${section.items
+              .map(
+                (item) => `
+                  <button
+                    class="tree-node ${item.id === state.selectedWorkspaceNoteId ? "is-active" : ""}"
+                    data-note-id="${escapeHtml(item.id)}"
+                    type="button"
+                  >
+                    <span class="tree-node-title">${escapeHtml(item.title)}</span>
+                    <span class="tree-node-path">${escapeHtml(item.path)}</span>
+                    <span class="tree-node-path">${escapeHtml(item.status)}</span>
+                  </button>
+                `,
+              )
+              .join("")}
+          </div>
+        </section>
+      `,
+    )
+    .join("");
+
+  for (const button of elements.workspaceTree.querySelectorAll("[data-note-id]")) {
+    button.addEventListener("click", () => {
+      state.selectedWorkspaceNoteId = button.dataset.noteId;
+      renderWorkspaceChrome();
+    });
+  }
+}
+
+function renderWorkspaceEditor() {
+  const note = getSelectedWorkspaceNote();
+  elements.workspaceEditor.innerHTML = `
+    <div class="editor-toolbar">
+      <div>
+        <p class="card-meta">Editor Prototype</p>
+        <h2 class="editor-title">${escapeHtml(note.title)}</h2>
+      </div>
+      <span class="level-pill tone-${resolveTone(note.statusTone)}">${escapeHtml(note.statusLabel)}</span>
+    </div>
+    <div class="editor-meta-row">
+      <span class="mini-pill tone-info">${escapeHtml(note.path)}</span>
+      <span class="mini-pill tone-info">${escapeHtml(note.lastSaved)}</span>
+    </div>
+    <ul class="editor-tags">
+      ${note.tags.map((tag) => `<li>${escapeHtml(tag)}</li>`).join("")}
+    </ul>
+    <pre class="editor-body">${escapeHtml(note.body)}</pre>
+  `;
+}
+
+function renderWorkspaceAiPanel() {
+  const note = getSelectedWorkspaceNote();
+  elements.workspaceAiPanel.innerHTML = `
+    <div class="pane-heading">
+      <div>
+        <p class="card-meta">AI Panel</p>
+        <h2 class="ai-panel-title">Context For ${escapeHtml(note.title)}</h2>
+      </div>
+      <span class="mini-pill tone-warning">Draft</span>
+    </div>
+    <div class="ai-stat-grid">
+      <article class="ai-stat">
+        <span class="metric-label">Queue</span>
+        <strong>${escapeHtml(note.ai.queueDepth)}</strong>
+      </article>
+      <article class="ai-stat">
+        <span class="metric-label">Warnings</span>
+        <strong>${escapeHtml(note.ai.warnings)}</strong>
+      </article>
+    </div>
+    <section class="ai-section">
+      <h3>Related Entities</h3>
+      <div class="editor-tags">
+        ${note.ai.relatedEntities.map((entity) => `<span class="ai-chip">${escapeHtml(entity)}</span>`).join("")}
+      </div>
+    </section>
+    <section class="ai-section">
+      <h3>Suggested Actions</h3>
+      <ul class="ai-list">
+        ${note.ai.suggestions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
+    </section>
+    <section class="ai-section">
+      <h3>Lint</h3>
+      ${
+        note.ai.lint.length
+          ? `<ul class="ai-list">${note.ai.lint.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+          : '<p class="ai-copy">No lint warnings for this note.</p>'
+      }
+    </section>
+  `;
+}
+
+function renderWorkspaceChrome() {
+  renderWorkspaceTree();
+  renderWorkspaceEditor();
+  renderWorkspaceAiPanel();
+}
+
 function buildPayloadDetail() {
   if (!state.snapshotMetadata) {
     return state.sourceLabel;
@@ -447,6 +751,7 @@ function renderEmptyDashboard(message) {
 function render() {
   renderBridgeStatus();
   renderExecutionResult(state.lastExecution);
+  renderWorkspaceChrome();
 
   if (!state.syncCenter && !state.activityFeed) {
     renderEmptyDashboard("Load the sample contract or paste your own JSON.");
