@@ -1214,6 +1214,48 @@ function buildAiBoundarySummary() {
   };
 }
 
+function applyAiBoundaryStatus(status, options = {}) {
+  const { origin = "poll" } = options;
+  const previous = state.aiBoundaryStatus;
+  const previousAvailable = previous?.available === true;
+  const previousMode = previous?.mode || null;
+  const nextAvailable = status?.available === true;
+  const nextMode = status?.mode || null;
+
+  state.aiBoundaryStatus = status;
+  state.aiBoundaryCheckedAtMs = Date.now();
+  persistLocalWorkspaceSession();
+
+  const modeLabel = formatAiBoundaryModeLabel(nextMode);
+  if (!previous) {
+    if (origin === "manual") {
+      pushSessionHistory({
+        type: "ai_boundary_checked",
+        level: nextAvailable ? "success" : "warning",
+        detail: `${nextAvailable ? "AI 接口在线" : "本地回退"} · ${modeLabel}`,
+      });
+    }
+    return;
+  }
+
+  if (previousAvailable !== nextAvailable || previousMode !== nextMode) {
+    pushSessionHistory({
+      type: nextAvailable ? "ai_boundary_online" : "ai_boundary_fallback",
+      level: nextAvailable ? "success" : "warning",
+      detail: `${nextAvailable ? "AI 接口在线" : "本地回退"} · ${modeLabel}`,
+    });
+    return;
+  }
+
+  if (origin === "manual") {
+    pushSessionHistory({
+      type: "ai_boundary_checked",
+      level: nextAvailable ? "info" : "warning",
+      detail: `${nextAvailable ? "AI 接口在线" : "本地回退"} · ${modeLabel}`,
+    });
+  }
+}
+
 function formatSessionSourceLabel(source) {
   return {
     sample: "演示会话",
@@ -1363,6 +1405,9 @@ function formatSessionEventLabel(type) {
     workspace_ai_applied: "AI 建议已写入草稿",
     ai_answer_generated: "AI 回答已生成",
     ai_compile_generated: "AI 知识页已生成",
+    ai_boundary_checked: "AI 边界已检查",
+    ai_boundary_online: "AI 边界已接通",
+    ai_boundary_fallback: "AI 边界已退回本地",
     ai_wiki_reviewed: "AI 知识页已校对",
     ai_wiki_reopened: "AI 知识页已退回整理",
     ai_wiki_review_blocked: "AI 知识页校对已拦截",
@@ -2179,6 +2224,7 @@ function renderViewDetailGrid() {
           </div>
         </div>
         <div class="detail-actions">
+          <button class="ghost detail-inline-button" data-overview-command="refresh-ai-boundary" type="button">重查 AI 边界</button>
           <button class="ghost detail-inline-button" data-overview-command="open-settings" type="button">打开设置</button>
         </div>
       </article>
@@ -2326,6 +2372,11 @@ function renderViewDetailGrid() {
         }
         if (button.dataset.overviewCommand === "check-bridge") {
           await requestBridgeStatus();
+          render();
+          return;
+        }
+        if (button.dataset.overviewCommand === "refresh-ai-boundary") {
+          await requestAiBoundaryStatus("manual");
           render();
           return;
         }
@@ -3100,6 +3151,9 @@ function renderViewDetailGrid() {
             <span>${escapeHtml(settings.aiBoundary.capabilities.length ? settings.aiBoundary.capabilities.join(" / ") : settings.aiBoundary.message || "可继续在右侧 AI 面板触发调用，观察边界状态变化。")}</span>
           </div>
         </div>
+        <div class="detail-actions">
+          <button class="ghost detail-inline-button" data-settings-command="refresh-ai-boundary" type="button">重查 AI 边界</button>
+        </div>
       </article>
       <article class="view-detail-card">
         <p class="card-section-label">工作区入口</p>
@@ -3450,6 +3504,11 @@ function renderViewDetailGrid() {
           elements.workspaceStatus.textContent = state.localUiSettings.expertMode
             ? "已开启高级调试模式。"
             : "已切回普通工作台模式。";
+          render();
+          return;
+        }
+        if (command === "refresh-ai-boundary") {
+          await requestAiBoundaryStatus("manual");
           render();
           return;
         }
@@ -4566,11 +4625,10 @@ async function generateAiCopilotAnswer({ note, noteBody, syncContext, draftInsig
     aiBriefing,
   });
   try {
-    state.aiBoundaryStatus = {
+    applyAiBoundaryStatus({
       available: true,
       mode: "dev-server-local",
-    };
-    state.aiBoundaryCheckedAtMs = Date.now();
+    }, { origin: "runtime" });
     return {
       ...(await requestAiCopilotAnswer(
         payload,
@@ -4578,12 +4636,11 @@ async function generateAiCopilotAnswer({ note, noteBody, syncContext, draftInsig
       source: "api",
     };
   } catch (error) {
-    state.aiBoundaryStatus = {
+    applyAiBoundaryStatus({
       available: false,
       mode: "local-fallback",
       message: error instanceof Error ? error.message : String(error),
-    };
-    state.aiBoundaryCheckedAtMs = Date.now();
+    }, { origin: "runtime" });
     elements.workspaceStatus.textContent = "AI 调用边界暂不可用，已退回本地回答生成。";
     return {
       ...buildAiCopilotAnswerFromPayload(payload),
@@ -5791,7 +5848,10 @@ function renderWorkspaceAiPanel() {
         <h2 class="ai-panel-title">${escapeHtml(note.title)} 的上下文</h2>
         <p class="ai-copy">${escapeHtml(`调用边界：${aiBoundaryLabel} · ${formatAiBoundaryModeLabel(state.aiBoundaryStatus?.mode)}`)}</p>
       </div>
-      <span class="mini-pill tone-${escapeHtml(aiBoundaryTone)}">${escapeHtml(aiBoundaryLabel)}</span>
+      <div class="detail-actions">
+        <span class="mini-pill tone-${escapeHtml(aiBoundaryTone)}">${escapeHtml(aiBoundaryLabel)}</span>
+        <button class="ghost detail-inline-button" data-ai-command="refresh-ai-boundary" type="button">立即重查</button>
+      </div>
     </div>
     <section class="ai-sync-box">
       <h3>AI 问答</h3>
@@ -6160,6 +6220,11 @@ function renderWorkspaceAiPanel() {
           level: "info",
           detail: `${note.title} · ${answer.scopeLabel} · ${formatAiBoundarySource(answer.source)}`,
         });
+        render();
+        return;
+      }
+      if (command === "refresh-ai-boundary") {
+        await requestAiBoundaryStatus("manual");
         render();
         return;
       }
@@ -6655,17 +6720,15 @@ async function requestBridgeStatus() {
   renderBridgeStatus();
 }
 
-async function requestAiBoundaryStatus() {
+async function requestAiBoundaryStatus(origin = "poll") {
   try {
-    state.aiBoundaryStatus = await fetchAiBoundaryStatus();
-    state.aiBoundaryCheckedAtMs = Date.now();
+    applyAiBoundaryStatus(await fetchAiBoundaryStatus(), { origin });
   } catch (error) {
-    state.aiBoundaryStatus = {
+    applyAiBoundaryStatus({
       available: false,
       mode: "local-fallback",
       message: error instanceof Error ? error.message : String(error),
-    };
-    state.aiBoundaryCheckedAtMs = Date.now();
+    }, { origin });
   }
   renderWorkspaceAiPanel();
 }
@@ -7122,11 +7185,10 @@ async function compileCurrentScopeToAiWiki() {
   });
   let compiledDraft = null;
   try {
-    state.aiBoundaryStatus = {
+    applyAiBoundaryStatus({
       available: true,
       mode: "dev-server-local",
-    };
-    state.aiBoundaryCheckedAtMs = Date.now();
+    }, { origin: "runtime" });
     compiledDraft = {
       ...(await requestAiWikiCompile(
         compilePayload,
@@ -7134,12 +7196,11 @@ async function compileCurrentScopeToAiWiki() {
       source: "api",
     };
   } catch (error) {
-    state.aiBoundaryStatus = {
+    applyAiBoundaryStatus({
       available: false,
       mode: "local-fallback",
       message: error instanceof Error ? error.message : String(error),
-    };
-    state.aiBoundaryCheckedAtMs = Date.now();
+    }, { origin: "runtime" });
     elements.workspaceStatus.textContent = "AI 编译接口暂不可用，已退回本地知识页生成。";
     compiledDraft = {
       ...buildAiWikiCompileFromPayload(compilePayload),
@@ -7500,17 +7561,15 @@ startBridgeStatusPolling({
 startAiBoundaryStatusPolling({
   intervalMs: 20000,
   onStatus(status) {
-    state.aiBoundaryStatus = status;
-    state.aiBoundaryCheckedAtMs = Date.now();
+    applyAiBoundaryStatus(status, { origin: "poll" });
     renderWorkspaceAiPanel();
   },
   onError(error) {
-    state.aiBoundaryStatus = {
+    applyAiBoundaryStatus({
       available: false,
       mode: "local-fallback",
       message: error && typeof error.message === "string" ? error.message : "",
-    };
-    state.aiBoundaryCheckedAtMs = Date.now();
+    }, { origin: "poll" });
     renderWorkspaceAiPanel();
   },
 });
