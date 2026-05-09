@@ -928,10 +928,50 @@ function renderNavigation() {
 
 function renderViewModeCard() {
   renderNavigation();
+  const dirtyDraftCount = collectDirtyEditorDrafts().length;
+  const recoveryCount = state.recoveryDrafts.length;
 
   if (state.activeNavView === "overview") {
-    elements.viewModeCard.hidden = true;
-    elements.viewModeCard.innerHTML = "";
+    elements.viewModeCard.hidden = false;
+    elements.viewModeCard.innerHTML = `
+      <div class="panel-topline">
+        <span class="level-pill tone-info">总览</span>
+        <span class="mini-pill tone-info">未保存草稿：${escapeHtml(dirtyDraftCount)}</span>
+        <span class="mini-pill tone-${recoveryCount ? "warning" : "success"}">恢复队列：${escapeHtml(recoveryCount)}</span>
+      </div>
+      <h2 class="panel-headline">工作台总览</h2>
+      <p class="summary-copy">这里汇总当前会话的编辑、收件箱、同步前准备以及异常恢复入口，作为真实使用时的首页工作台。</p>
+      ${
+        recoveryCount
+          ? `
+            <div class="detail-row detail-row-block">
+              <strong>检测到上次未完成会话留下的恢复草稿</strong>
+              <span>根据本地恢复区数据，当前有 ${escapeHtml(recoveryCount)} 份草稿可恢复。你可以先恢复全部，再继续当前工作流。</span>
+            </div>
+            <div class="detail-actions">
+              <button class="solid detail-inline-button" data-view-mode-command="restore-all-recovery" type="button">恢复全部草稿</button>
+              <button class="ghost detail-inline-button" data-view-mode-command="discard-all-recovery" type="button">放弃这些草稿</button>
+            </div>
+          `
+          : `
+            <div class="detail-row">
+              <span>本地恢复区</span>
+              <strong>当前没有待恢复草稿</strong>
+            </div>
+          `
+      }
+    `;
+    for (const button of elements.viewModeCard.querySelectorAll("[data-view-mode-command]")) {
+      button.addEventListener("click", () => {
+        if (button.dataset.viewModeCommand === "restore-all-recovery") {
+          restoreAllRecoveryDrafts();
+          return;
+        }
+        if (button.dataset.viewModeCommand === "discard-all-recovery") {
+          discardAllRecoveryDrafts();
+        }
+      });
+    }
     return;
   }
 
@@ -3638,6 +3678,14 @@ elements.executeSelectedButton.addEventListener("click", async () => {
     elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
     renderBridgeError(state.lastBridgeError);
   }
+});
+
+window.addEventListener("beforeunload", (event) => {
+  if (!collectDirtyEditorDrafts().length) {
+    return;
+  }
+  event.preventDefault();
+  event.returnValue = "";
 });
 
 refreshRecoveryDrafts();
