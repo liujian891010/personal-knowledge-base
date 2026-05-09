@@ -21,40 +21,45 @@
         </section>
 
         <nav class="sidebar-nav">
-          <button class="sidebar-nav-item is-active" data-nav-view="overview" type="button">
-            <span class="sidebar-nav-item-icon">仪</span>
-            <span>仪表盘</span>
-          </button>
-          <button class="sidebar-nav-item" data-nav-view="graph" type="button">
-            <span class="sidebar-nav-item-icon">图</span>
-            <span>图谱视图</span>
-          </button>
-          <button class="sidebar-nav-item" data-nav-view="repository" type="button">
-            <span class="sidebar-nav-item-icon">库</span>
-            <span>笔记库</span>
-          </button>
-          <button class="sidebar-nav-item" data-nav-view="conflicts" type="button">
-            <span class="sidebar-nav-item-icon">冲</span>
-            <span>冲突解决</span>
-          </button>
+          <div class="sidebar-nav-group">
+            <div class="sidebar-nav-label">工作台</div>
+            <button class="sidebar-nav-item is-active" data-nav-view="overview" type="button">
+              <span class="sidebar-nav-item-icon">仪</span>
+              <span>仪表盘</span>
+            </button>
+            <button class="sidebar-nav-item" data-nav-view="repository" type="button">
+              <span class="sidebar-nav-item-icon">库</span>
+              <span>笔记库</span>
+            </button>
+          </div>
+          <div class="sidebar-nav-group">
+            <div class="sidebar-nav-label">分析与同步</div>
+            <button class="sidebar-nav-item" data-nav-view="graph" type="button">
+              <span class="sidebar-nav-item-icon">图</span>
+              <span>图谱</span>
+            </button>
+            <button class="sidebar-nav-item" data-nav-view="conflicts" type="button">
+              <span class="sidebar-nav-item-icon">冲</span>
+              <span>冲突</span>
+            </button>
+          </div>
         </nav>
 
         <section class="sidebar-block sidebar-tree-card">
           <div class="sidebar-card-header">
             <div>
               <p class="card-section-label">知识库</p>
-              <h2>当前笔记库</h2>
+              <h2>目录浏览</h2>
             </div>
-            <span class="mini-pill tone-info">本地优先</span>
+            <span class="mini-pill tone-info">轻目录</span>
           </div>
-          <p class="sidebar-helper">左侧只保留用户常用入口，主区域专注编辑、整理、图谱和同步协作。</p>
           <div id="workspace-tree"></div>
         </section>
 
         <section class="sidebar-block sidebar-session-card" id="workspace-rail"></section>
 
         <section class="sidebar-footer">
-          <div class="sidebar-footer-label">工具</div>
+          <div class="sidebar-footer-label">系统</div>
           <button class="sidebar-nav-item sidebar-nav-item-secondary" data-nav-view="settings" type="button">
             <span class="sidebar-nav-item-icon">设</span>
             <span>设置</span>

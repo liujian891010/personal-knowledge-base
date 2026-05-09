@@ -5946,6 +5946,17 @@ function countWorkspaceNotes(workspaceShell) {
   );
 }
 
+function formatCompactTreePath(path = "") {
+  const parts = String(path || "")
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (!parts.length) {
+    return "未记录路径";
+  }
+  return parts.slice(-2).join("/");
+}
+
 function renderWorkspaceTree() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
   const filteredSections = buildFilteredWorkspaceSections(workspaceShell);
@@ -5964,37 +5975,44 @@ function renderWorkspaceTree() {
     .map(
       (section) => {
         const stats = summarizeSectionActivity(section, workspaceShell);
+        const sectionSummary = [
+          `${section.items.length} 篇文档`,
+          stats.draftCount ? `${stats.draftCount} 篇草稿` : null,
+          stats.riskCount ? `${stats.riskCount} 个风险` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
         return `
           <section class="tree-section ${section.id === selectedSectionId ? "is-active" : ""}">
             <div class="tree-section-header">
-              <div>
+              <div class="tree-section-copy">
                 <h3>${escapeHtml(section.label)}</h3>
-                <p class="tree-section-summary">${escapeHtml(`当前可见 ${section.items.length} 篇文档${stats.draftCount ? ` · ${stats.draftCount} 篇有未保存草稿` : ""}`)}</p>
+                <p class="tree-section-summary">${escapeHtml(sectionSummary)}</p>
               </div>
-              <div class="tree-section-meta">
-                <span class="mini-pill tone-info">${escapeHtml(section.items.length)} 篇</span>
-                ${
-                  stats.draftCount
-                    ? `<span class="mini-pill tone-warning">${escapeHtml(stats.draftCount)} 草稿</span>`
-                    : ""
-                }
-                ${
-                  stats.riskCount
-                    ? `<span class="mini-pill tone-danger">${escapeHtml(stats.riskCount)} 风险</span>`
-                    : ""
-                }
-              </div>
+              <span class="tree-section-count">${escapeHtml(section.items.length)}</span>
             </div>
             <div class="tree-list">
               ${section.items
                 .map((item) => {
                   const noteDraft = getEditorDraftByNoteId(item.id);
                   const note = workspaceShell.notes[item.id];
-                  const draftLabel = noteDraft
-                    ? isEditorDraftDirty(note, noteDraft)
-                      ? "有未保存草稿"
-                      : "草稿编辑中"
-                    : "";
+                  const isDirtyDraft = Boolean(noteDraft && note && isEditorDraftDirty(note, noteDraft));
+                  const tone = resolveTone(note?.statusTone || "info");
+                  const stateLabel = isDirtyDraft
+                    ? "未保存"
+                    : tone === "danger"
+                      ? "风险"
+                      : tone === "warning"
+                        ? "待处理"
+                        : item.id === state.selectedWorkspaceNoteId
+                          ? "当前"
+                          : "";
+                  const secondaryLine = isDirtyDraft
+                    ? "本地草稿尚未保存"
+                    : tone === "danger" || tone === "warning"
+                      ? note?.statusLabel || item.status
+                      : "";
+                  const metaLine = [note?.lastSaved || item.status, formatCompactTreePath(item.path)].filter(Boolean).join(" · ");
                   return `
                     <button
                       class="tree-node ${item.id === state.selectedWorkspaceNoteId ? "is-active" : ""}"
@@ -6003,15 +6021,14 @@ function renderWorkspaceTree() {
                     >
                       <div class="tree-node-main">
                         <span class="tree-node-title">${escapeHtml(item.title)}</span>
-                        <span class="mini-pill tone-${resolveTone(note?.statusTone || "info")}">${escapeHtml(item.status)}</span>
+                        ${
+                          stateLabel
+                            ? `<span class="tree-node-state tone-${isDirtyDraft ? "warning" : tone}">${escapeHtml(stateLabel)}</span>`
+                            : ""
+                        }
                       </div>
-                      <span class="tree-node-path">${escapeHtml(item.path)}</span>
-                      ${
-                        draftLabel
-                          ? `<span class="tree-node-path tone-warning-inline">${escapeHtml(draftLabel)}</span>`
-                          : ""
-                      }
-                      <span class="tree-node-signals" data-signal-host="${escapeHtml(item.id)}"></span>
+                      <span class="tree-node-meta">${escapeHtml(metaLine)}</span>
+                      ${secondaryLine ? `<span class="tree-node-secondary">${escapeHtml(secondaryLine)}</span>` : ""}
                     </button>
                   `;
                 })
@@ -6028,21 +6045,6 @@ function renderWorkspaceTree() {
       state.selectedWorkspaceNoteId = button.dataset.noteId;
       render();
     });
-  }
-
-  for (const host of elements.workspaceTree.querySelectorAll("[data-signal-host]")) {
-    const note = workspaceShell.notes[host.dataset.signalHost];
-    if (!note) {
-      continue;
-    }
-    const syncContext = deriveWorkspaceSyncContext(note);
-    for (const signal of syncContext.signals.slice(0, 2)) {
-      const fragment = elements.workspaceSignalTemplate.content.cloneNode(true);
-      const pill = fragment.querySelector(".workspace-signal-pill");
-      pill.className = `mini-pill tone-${signal.level} workspace-signal-pill`;
-      pill.textContent = signal.label;
-      host.appendChild(fragment);
-    }
   }
 }
 
