@@ -832,6 +832,15 @@ pre {
   opacity: 0.56;
 }
 
+.action-chip.is-selected {
+  border-color: rgba(233, 69, 96, 0.4);
+  background: rgba(233, 69, 96, 0.12);
+}
+
+.action-chip.is-last-executed {
+  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.3);
+}
+
 .action-chip .action-label {
   font-weight: 700;
 }
