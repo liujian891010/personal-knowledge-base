@@ -6,11 +6,22 @@ import {
   refreshBridgeSnapshot,
   startBridgeStatusPolling,
 } from "./bridge-client.js";
+import {
+  buildDraftRecoveryEntry,
+  createRuntimeSessionId,
+  DRAFT_RECOVERY_STORAGE_KEY,
+  listRecoverableDrafts,
+  parseDraftRecoveryStore,
+  removeDraftRecoveryEntry,
+  serializeDraftRecoveryStore,
+  upsertDraftRecoveryEntry,
+} from "./draft-recovery.js";
 
 const SAMPLE_PATH = "./fixtures/sync-shell-snapshot.sample.json";
 const LIVE_SNAPSHOT_PATH = "./fixtures/live-sync-shell.json";
 const WORKSPACE_SAMPLE_PATH = "./fixtures/workspace-shell.sample.json";
 const DEFAULT_ACTION_COMMAND = "pkb-desktop-sync";
+const draftAutosaveTimers = new Map();
 const WORKSPACE_SAMPLE = {
   sections: [
     {
@@ -242,6 +253,8 @@ const state = {
   appSession: null,
   sessionHistory: [],
   editorDrafts: {},
+  recoveryDrafts: [],
+  runtimeSessionId: createRuntimeSessionId(),
 };
 
 const elements = {
@@ -312,6 +325,23 @@ function escapeHtml(value) {
 
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function readDraftRecoveryStore() {
+  try {
+    return parseDraftRecoveryStore(window.localStorage.getItem(DRAFT_RECOVERY_STORAGE_KEY));
+  } catch {
+    return parseDraftRecoveryStore(null);
+  }
+}
+
+function writeDraftRecoveryStore(store) {
+  try {
+    window.localStorage.setItem(DRAFT_RECOVERY_STORAGE_KEY, serializeDraftRecoveryStore(store));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeSearchQuery(value = "") {
@@ -736,6 +766,9 @@ function formatSessionEventLabel(type) {
     workspace_note_saved: "工作区文档已保存",
     workspace_edit_blocked: "编辑切换已拦截",
     workspace_sync_blocked: "同步执行已拦截",
+    workspace_draft_autosaved: "恢复草稿已自动保存",
+    workspace_draft_restored: "恢复草稿已恢复",
+    workspace_draft_discarded: "恢复草稿已放弃",
   }[type] || type;
 }
 
@@ -952,12 +985,58 @@ function renderViewDetailGrid() {
     const draftNotes = notes
       .filter((entry) => entry.note.statusLabel?.includes("草稿") || entry.note.tags?.includes("draft"))
       .slice(0, 4);
+    const recoveryDrafts = state.recoveryDrafts.slice(0, 4);
     const recentNotes = notes.slice(0, 4);
     const actionableDraft = draftNotes.find((entry) => entry.note.statusLabel?.includes("更新")) || draftNotes[0] || null;
     const recommendedDraftAction = actionableDraft ? findRecommendedSyncActionForNote(actionableDraft.note) : null;
 
     elements.viewDetailGrid.hidden = false;
     elements.viewDetailGrid.innerHTML = `
+      <article class="view-detail-card">
+        <p class="card-section-label">异常恢复</p>
+        <h3>草稿恢复</h3>
+        <div class="view-stack">
+          ${
+            recoveryDrafts.length
+              ? recoveryDrafts
+                  .map(
+                    (entry) => `
+                      <article class="detail-row detail-row-block overview-row">
+                        <div class="overview-row-main">
+                          <div class="overview-row-copy">
+                            <strong>${escapeHtml(entry.title || "未命名草稿")}</strong>
+                            <span>${escapeHtml([entry.sectionLabel || "未知分区", entry.path || "未记录路径"].join(" · "))}</span>
+                            <span>${escapeHtml(entry.noteMissing ? "原文档当前未加载，将恢复到收件箱。" : "检测到上次会话遗留的未保存内容。")}</span>
+                          </div>
+                          <div class="overview-row-meta">
+                            <span class="mini-pill tone-warning">待恢复</span>
+                            <span class="mini-pill tone-info">${escapeHtml(formatDateTime(entry.updatedAtMs))}</span>
+                          </div>
+                        </div>
+                        <div class="detail-actions overview-row-actions">
+                          <button class="solid detail-inline-button" data-recovery-restore="${escapeHtml(entry.noteId)}" type="button">恢复</button>
+                          <button class="ghost detail-inline-button" data-recovery-discard="${escapeHtml(entry.noteId)}" type="button">放弃</button>
+                        </div>
+                      </article>
+                    `,
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前没有等待恢复的本地草稿。</p></div>'
+          }
+        </div>
+        <div class="detail-actions">
+          ${
+            state.recoveryDrafts.length
+              ? `<button class="solid detail-inline-button" data-overview-command="restore-all-recovery" type="button">恢复全部</button>`
+              : ""
+          }
+          ${
+            state.recoveryDrafts.length
+              ? `<button class="ghost detail-inline-button" data-overview-command="discard-all-recovery" type="button">清空恢复区</button>`
+              : ""
+          }
+        </div>
+      </article>
       <article class="view-detail-card">
         <p class="card-section-label">工作台入口</p>
         <h3>最近编辑</h3>
@@ -1074,10 +1153,28 @@ function renderViewDetailGrid() {
         await executeRecommendedSyncActionForNote(button.dataset.noteExecuteAction || state.selectedWorkspaceNoteId);
       });
     }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-recovery-restore]")) {
+      button.addEventListener("click", () => {
+        restoreRecoveryDraft(button.dataset.recoveryRestore || "");
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-recovery-discard]")) {
+      button.addEventListener("click", () => {
+        discardRecoveryDraft(button.dataset.recoveryDiscard || "");
+      });
+    }
     for (const button of elements.viewDetailGrid.querySelectorAll("[data-overview-command]")) {
       button.addEventListener("click", async () => {
         if (button.dataset.overviewCommand === "quick-capture") {
           createQuickCaptureNote();
+          return;
+        }
+        if (button.dataset.overviewCommand === "restore-all-recovery") {
+          restoreAllRecoveryDrafts();
+          return;
+        }
+        if (button.dataset.overviewCommand === "discard-all-recovery") {
+          discardAllRecoveryDrafts();
           return;
         }
         if (button.dataset.overviewCommand === "refresh-session") {
@@ -1550,6 +1647,17 @@ function findWorkspaceItemById(workspaceShell, noteId) {
   return null;
 }
 
+function findWorkspaceSectionByNoteId(workspaceShell, noteId) {
+  for (const section of workspaceShell.sections || []) {
+    for (const item of section.items || []) {
+      if (item.id === noteId) {
+        return section;
+      }
+    }
+  }
+  return null;
+}
+
 function getSelectedWorkspaceNote() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
   const visibleIds = getVisibleWorkspaceNoteIds(workspaceShell);
@@ -1632,6 +1740,198 @@ function collectDirtyEditorDrafts() {
       };
     })
     .filter(Boolean);
+}
+
+function refreshRecoveryDrafts() {
+  state.recoveryDrafts = listRecoverableDrafts(readDraftRecoveryStore(), {
+    currentSessionId: state.runtimeSessionId,
+    workspaceShell: getCurrentWorkspaceShell(),
+  });
+}
+
+function clearDraftAutosaveTimer(noteId) {
+  const timerId = draftAutosaveTimers.get(noteId);
+  if (!timerId) {
+    return;
+  }
+  window.clearTimeout(timerId);
+  draftAutosaveTimers.delete(noteId);
+}
+
+function persistRecoveryDraftForNote(noteId, options = {}) {
+  const workspaceShell = getCurrentWorkspaceShell();
+  const note = workspaceShell.notes?.[noteId];
+  const draft = getEditorDraftByNoteId(noteId);
+  if (!note || !draft || !isEditorDraftDirty(note, draft)) {
+    discardPersistedRecoveryDraft(noteId, { refresh: options.refresh });
+    return false;
+  }
+
+  const section = findWorkspaceSectionByNoteId(workspaceShell, noteId);
+  const entry = buildDraftRecoveryEntry(
+    {
+      noteId,
+      title: draft.title,
+      body: draft.body,
+      path: note.path,
+      sectionId: section?.id || "",
+      sectionLabel: section?.label || "",
+      workspaceSourceLabel: state.workspaceSourceLabel,
+    },
+    {
+      sessionId: state.runtimeSessionId,
+      updatedAtMs: Date.now(),
+    },
+  );
+
+  const store = upsertDraftRecoveryEntry(readDraftRecoveryStore(), entry);
+  const persisted = writeDraftRecoveryStore(store);
+  if (options.refresh !== false) {
+    refreshRecoveryDrafts();
+  }
+  return persisted;
+}
+
+function discardPersistedRecoveryDraft(noteId, options = {}) {
+  clearDraftAutosaveTimer(noteId);
+  const store = removeDraftRecoveryEntry(readDraftRecoveryStore(), noteId);
+  const persisted = writeDraftRecoveryStore(store);
+  if (options.refresh !== false) {
+    refreshRecoveryDrafts();
+  }
+  return persisted;
+}
+
+function scheduleRecoveryDraftAutosave(noteId) {
+  clearDraftAutosaveTimer(noteId);
+  const timerId = window.setTimeout(() => {
+    const persisted = persistRecoveryDraftForNote(noteId, { refresh: false });
+    draftAutosaveTimers.delete(noteId);
+    if (!persisted) {
+      return;
+    }
+    elements.workspaceStatus.textContent = `已自动保存恢复草稿：${getEditorDraftByNoteId(noteId)?.title || noteId}`;
+  }, 1000);
+  draftAutosaveTimers.set(noteId, timerId);
+}
+
+function createRecoveredNoteFromEntry(entry) {
+  const workspaceShell = ensureEditableWorkspaceShell();
+  const recoveredId = `recovered-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+  const title = entry.title?.trim() || "恢复草稿";
+  const recoveredTitle = title.startsWith("恢复 - ") ? title : `恢复 - ${title}`;
+  const inboxPath = `Inbox/${recoveredTitle}.md`;
+  let inboxSection = workspaceShell.sections.find((section) => section.id === "inbox");
+
+  if (!inboxSection) {
+    inboxSection = {
+      id: "inbox",
+      label: "收件箱",
+      items: [],
+    };
+    workspaceShell.sections.unshift(inboxSection);
+  }
+
+  inboxSection.items.unshift({
+    id: recoveredId,
+    title: recoveredTitle,
+    path: inboxPath,
+    status: "恢复草稿",
+  });
+  workspaceShell.notes[recoveredId] = {
+    title: recoveredTitle,
+    path: inboxPath,
+    statusTone: "warning",
+    statusLabel: "恢复草稿",
+    lastSaved: "刚刚恢复",
+    tags: ["recovered", "draft", "inbox"],
+    syncContext: {
+      watchActionIds: ["detect-local-changes", "submit-detected-commit"],
+      watchCardKinds: ["changes", "activity"],
+      watchBlockingReasons: ["requires_full_pull"],
+    },
+    body: entry.body || "",
+    ai: {
+      queueDepth: 0,
+      warnings: 1,
+      relatedEntities: ["恢复草稿", "本地恢复区", "收件箱"],
+      suggestions: ["先确认恢复内容，再决定是否保存回正式知识库。"],
+      lint: ["该草稿来自未完成会话，建议先人工复核。"],
+    },
+  };
+
+  state.selectedWorkspaceNoteId = recoveredId;
+  state.workspaceSourceLabel = "浏览器本地草稿";
+  elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  return recoveredId;
+}
+
+function restoreRecoveryDraft(noteId) {
+  const recoveryEntry = state.recoveryDrafts.find((entry) => entry.noteId === noteId);
+  if (!recoveryEntry) {
+    return;
+  }
+
+  let targetNoteId = recoveryEntry.noteId;
+  if (recoveryEntry.noteMissing || !getCurrentWorkspaceShell().notes?.[recoveryEntry.noteId]) {
+    targetNoteId = createRecoveredNoteFromEntry(recoveryEntry);
+  }
+
+  setEditorDraftForNote(targetNoteId, {
+    noteId: targetNoteId,
+    title: recoveryEntry.title,
+    body: recoveryEntry.body,
+  });
+  state.selectedWorkspaceNoteId = targetNoteId;
+  state.activeNavView = "overview";
+  persistRecoveryDraftForNote(targetNoteId);
+  if (targetNoteId !== recoveryEntry.noteId) {
+    discardPersistedRecoveryDraft(recoveryEntry.noteId, { refresh: false });
+  }
+  refreshRecoveryDrafts();
+  elements.workspaceStatus.textContent = `已恢复草稿：${recoveryEntry.title}`;
+  pushSessionHistory({
+    type: "workspace_draft_restored",
+    level: "success",
+    detail: `${recoveryEntry.title} · 已恢复到当前工作区`,
+  });
+  render();
+}
+
+function discardRecoveryDraft(noteId) {
+  const recoveryEntry = state.recoveryDrafts.find((entry) => entry.noteId === noteId);
+  discardPersistedRecoveryDraft(noteId, { refresh: true });
+  if (recoveryEntry) {
+    elements.workspaceStatus.textContent = `已放弃恢复草稿：${recoveryEntry.title}`;
+    pushSessionHistory({
+      type: "workspace_draft_discarded",
+      level: "warning",
+      detail: `${recoveryEntry.title} · 已从本地恢复区删除`,
+    });
+  }
+  render();
+}
+
+function restoreAllRecoveryDrafts() {
+  const noteIds = state.recoveryDrafts.map((entry) => entry.noteId);
+  for (const noteId of noteIds) {
+    restoreRecoveryDraft(noteId);
+  }
+}
+
+function discardAllRecoveryDrafts() {
+  const noteIds = state.recoveryDrafts.map((entry) => entry.noteId);
+  for (const noteId of noteIds) {
+    discardPersistedRecoveryDraft(noteId, { refresh: false });
+  }
+  refreshRecoveryDrafts();
+  elements.workspaceStatus.textContent = "已清空本地恢复区中的未恢复草稿。";
+  pushSessionHistory({
+    type: "workspace_draft_discarded",
+    level: "warning",
+    detail: `已批量放弃 ${noteIds.length} 份恢复草稿`,
+  });
+  render();
 }
 
 function isEditorDraftDirty(note, draft) {
@@ -2089,6 +2389,18 @@ function renderWorkspaceRail() {
           : ""
       }
       ${
+        state.recoveryDrafts.length
+          ? `
+            <article class="session-rail-item">
+              <span class="session-rail-title">恢复提醒</span>
+              <strong>${escapeHtml(state.recoveryDrafts.length)} 份待恢复草稿</strong>
+              <p class="session-rail-copy">这些内容来自上一次未完成的前端会话，本次可选择恢复或放弃。</p>
+              <p class="session-rail-copy">${escapeHtml(state.recoveryDrafts.slice(0, 3).map((entry) => entry.title || entry.noteId).join(" · "))}</p>
+            </article>
+          `
+          : ""
+      }
+      ${
         lastExecution
           ? `
             <article class="session-rail-item">
@@ -2302,6 +2614,7 @@ function renderWorkspaceEditor() {
         body: bodyInput.value,
       });
       updateDraftMeta();
+      scheduleRecoveryDraftAutosave(editorDraft.noteId);
     });
     bodyInput.addEventListener("input", (event) => {
       setEditorDraftForNote(editorDraft.noteId, {
@@ -2310,6 +2623,7 @@ function renderWorkspaceEditor() {
         body: event.target.value,
       });
       updateDraftMeta();
+      scheduleRecoveryDraftAutosave(editorDraft.noteId);
     });
     const saveOnShortcut = (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -2842,6 +3156,7 @@ function applyWorkspaceShell(payload, sourceLabel) {
   state.workspaceSourceLabel = sourceLabel;
   state.appSession = null;
   pruneEditorDrafts(workspaceShell);
+  refreshRecoveryDrafts();
   if (!workspaceShell.notes[state.selectedWorkspaceNoteId]) {
     state.selectedWorkspaceNoteId = Object.keys(workspaceShell.notes)[0] || "desktop-bridge";
   }
@@ -3023,6 +3338,7 @@ function startEditingSelectedNote() {
 }
 
 function cancelEditingSelectedNote() {
+  discardPersistedRecoveryDraft(state.selectedWorkspaceNoteId);
   removeEditorDraftForNote(state.selectedWorkspaceNoteId);
   render();
 }
@@ -3060,6 +3376,7 @@ function saveEditingSelectedNote() {
   }
 
   state.workspaceSourceLabel = "浏览器本地草稿";
+  discardPersistedRecoveryDraft(activeDraft.noteId);
   removeEditorDraftForNote(activeDraft.noteId);
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
   elements.workspaceStatus.textContent = `已保存文档：${trimmedTitle}`;
@@ -3323,6 +3640,7 @@ elements.executeSelectedButton.addEventListener("click", async () => {
   }
 });
 
+refreshRecoveryDrafts();
 render();
 startBridgeStatusPolling({
   intervalMs: 15000,
