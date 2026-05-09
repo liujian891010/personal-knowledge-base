@@ -4,13 +4,13 @@
       "card_id": "conflicts",
       "kind": "conflicts",
       "level": "warning",
-      "title": "2 unresolved local conflict artifacts",
-      "body": "Conflict copies and orphan conflict files must be reviewed or cleared before commit submission can reopen.",
+      "title": "有 2 个未处理的本地冲突工件",
+      "body": "提交本地变更重新开放前，必须先核查或清理冲突副本与孤立冲突文件。",
       "badge_count": 2,
       "actions": [
         {
           "action_id": "list-conflicts",
-          "label": "Review Conflicts",
+          "label": "检查冲突",
           "enabled": true,
           "emphasis": "primary",
           "command": "list-conflicts",
@@ -20,12 +20,12 @@
         },
         {
           "action_id": "resolve-conflicts-all",
-          "label": "Resolve All Local Artifacts",
+          "label": "清理全部本地冲突工件",
           "enabled": true,
           "emphasis": "warning",
           "command": "resolve-conflicts",
           "argv": ["--all"],
-          "reason": "Deletes all listed local conflict-copy artifacts after user confirmation.",
+          "reason": "确认后会删除当前列出的全部本地冲突副本工件。",
           "requires_confirmation": true
         }
       ]
@@ -34,13 +34,13 @@
       "card_id": "local-changes",
       "kind": "changes",
       "level": "info",
-      "title": "3 local changes are waiting",
-      "body": "Tracked modifications, missing files, or untracked files are ready for the next submit or sync cycle.",
+      "title": "有 3 项本地变更待处理",
+      "body": "已跟踪修改、缺失文件和未跟踪文件已经就绪，可进入下一次提交或同步周期。",
       "badge_count": 3,
       "actions": [
         {
           "action_id": "detect-local-changes",
-          "label": "Inspect Local Changes",
+          "label": "查看本地变更",
           "enabled": true,
           "emphasis": "normal",
           "command": "detect-local-changes",
@@ -50,7 +50,7 @@
         },
         {
           "action_id": "submit-detected-commit",
-          "label": "Submit Local Changes",
+          "label": "提交本地变更",
           "enabled": false,
           "emphasis": "primary",
           "command": "submit-detected-commit",
@@ -64,13 +64,13 @@
       "card_id": "activity",
       "kind": "activity",
       "level": "danger",
-      "title": "4 recent sync actions recorded",
-      "body": "Latest action `pull` finished with status `failed` from `card:healthy`: RuntimeError: network down",
+      "title": "最近记录了 4 次同步动作",
+      "body": "最近一次 `pull` 来自 `card:healthy`，状态为 `failed`：RuntimeError: network down",
       "badge_count": 4,
       "actions": [
         {
           "action_id": "sync-activity",
-          "label": "Open Activity Feed",
+          "label": "打开活动流",
           "enabled": true,
           "emphasis": "primary",
           "command": "sync-activity",
@@ -83,13 +83,13 @@
   ],
   "panel": {
     "level": "warning",
-    "headline": "Resolve conflicts before the next commit",
-    "detail": "The vault has unresolved local conflict copies and commit submission is still blocked.",
+    "headline": "下次提交前，请先处理冲突",
+    "detail": "当前仓库仍有未解决的本地冲突副本，提交动作依旧被阻塞。",
     "conflict_badge_count": 2,
     "change_badge_count": 3,
     "primary_action": {
       "action_id": "list-conflicts",
-      "label": "Review Conflicts",
+      "label": "检查冲突",
       "enabled": true,
       "emphasis": "primary",
       "command": "list-conflicts",
@@ -100,7 +100,7 @@
     "secondary_actions": [
       {
         "action_id": "show-vault-summary",
-        "label": "Open Summary",
+        "label": "打开摘要",
         "enabled": true,
         "emphasis": "normal",
         "command": "vault-summary",
@@ -110,12 +110,12 @@
       },
       {
         "action_id": "resolve-conflicts-all",
-        "label": "Resolve All Local Artifacts",
+        "label": "清理全部本地冲突工件",
         "enabled": true,
         "emphasis": "warning",
         "command": "resolve-conflicts",
         "argv": ["--all"],
-        "reason": "Deletes all listed local conflict-copy artifacts after user confirmation.",
+        "reason": "确认后会删除当前列出的全部本地冲突副本工件。",
         "requires_confirmation": true
       }
     ],
@@ -321,7 +321,7 @@
         "command": "worker-health",
         "status": "disabled",
         "source": "card:worker-health",
-        "message": "No worker state recorded yet"
+        "message": "尚未记录任何同步线程状态"
       },
       {
         "activity_id": "activity-003",
@@ -331,7 +331,7 @@
         "command": "open-shell-debug",
         "status": "unsupported",
         "source": "panel",
-        "message": "unsupported sync action command: open-shell-debug"
+        "message": "当前桌面边界不支持同步动作命令：open-shell-debug"
       },
       {
         "activity_id": "activity-004",

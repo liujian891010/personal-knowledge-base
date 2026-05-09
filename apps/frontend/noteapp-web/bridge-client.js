@@ -2,7 +2,7 @@ function normalizeBridgeErrorPayload(error, fallbackCode = "bridge_client_error"
   if (!error) {
     return {
       code: fallbackCode,
-      message: "Bridge request failed unexpectedly.",
+      message: "桥接请求发生了未预期错误。",
       details: null,
     };
   }
@@ -19,7 +19,7 @@ function normalizeBridgeErrorPayload(error, fallbackCode = "bridge_client_error"
     return {
       code: typeof error.code === "string" ? error.code : fallbackCode,
       message:
-        typeof error.message === "string" ? error.message : "Bridge request failed unexpectedly.",
+        typeof error.message === "string" ? error.message : "桥接请求发生了未预期错误。",
       details: "details" in error ? error.details : null,
     };
   }
@@ -43,7 +43,7 @@ async function readJsonResponse(response, fallbackCode) {
     throw normalizeBridgeErrorPayload(
       payload?.error || {
         code: fallbackCode,
-        message: `Bridge request failed with HTTP ${response.status}.`,
+        message: `桥接请求失败，HTTP 状态码 ${response.status}。`,
         details: {
           status: response.status,
         },
@@ -55,7 +55,7 @@ async function readJsonResponse(response, fallbackCode) {
   if (!payload) {
     throw normalizeBridgeErrorPayload({
       code: "bridge_empty_response",
-      message: "Bridge returned an empty response body.",
+      message: "桥接服务返回了空响应体。",
       details: {
         status: response.status,
       },

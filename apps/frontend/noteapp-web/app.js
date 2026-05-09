@@ -271,13 +271,14 @@ const elements = {
   workspaceInput: document.getElementById("workspace-input"),
   applyWorkspaceInputButton: document.getElementById("apply-workspace-input-button"),
   workspaceTree: document.getElementById("workspace-tree"),
+  workspaceRail: document.getElementById("workspace-rail"),
   workspaceEditor: document.getElementById("workspace-editor"),
   workspaceAiPanel: document.getElementById("workspace-ai-panel"),
 };
 
 function formatDateTime(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "Unknown time";
+    return "未知时间";
   }
 
   return new Intl.DateTimeFormat("zh-CN", {
@@ -326,7 +327,7 @@ function detectPayloadKind(payload) {
   }
 
   throw new Error(
-    "Unsupported payload shape. Expected sync-shell-snapshot, sync-center, or sync-activity JSON.",
+    "不支持的同步载荷结构。请提供 sync-shell-snapshot、sync-center 或 sync-activity JSON。",
   );
 }
 
@@ -343,7 +344,7 @@ function validateWorkspaceShell(payload) {
     return payload;
   }
 
-  throw new Error("Unsupported workspace shell shape. Expected { sections: [], notes: {} }.");
+  throw new Error("不支持的工作区壳层结构。期望格式为 { sections: [], notes: {} }。");
 }
 
 function validateAppSession(payload) {
@@ -357,7 +358,7 @@ function validateAppSession(payload) {
     return payload;
   }
 
-  throw new Error("Unsupported app session shape.");
+  throw new Error("不支持的应用会话结构。");
 }
 
 function renderExecutionResult(execution) {
@@ -451,7 +452,7 @@ function renderBridgeStatus() {
   }
 
   if (status.available) {
-    const sourceLabel = status.config?.configSource || "env";
+    const sourceLabel = formatBridgeConfigSource(status.config?.configSource || "env");
     elements.bridgeStatus.textContent =
       `本地桌面桥接已就绪：${status.config.vaultId} · ${status.config.vaultRoot} · ${sourceLabel}`;
     elements.refreshLocalButton.disabled = false;
@@ -470,7 +471,7 @@ function renderBridgeStatus() {
   renderBridgeError(state.lastBridgeError);
 }
 
-function setSelectedAction(action, source = "manual selection") {
+function setSelectedAction(action, source = "手动选择") {
   state.selectedAction = action;
 
   if (!action) {
@@ -485,17 +486,17 @@ function setSelectedAction(action, source = "manual selection") {
 
   const commandLine = [DEFAULT_ACTION_COMMAND, action.command, ...(action.argv || [])].join(" ");
   const lines = [
-    `来源: ${source}`,
-    `动作 ID: ${action.action_id}`,
-    `可执行: ${action.enabled !== false}`,
-    `命令: ${action.command}`,
-    `参数: ${JSON.stringify(action.argv || [])}`,
-    `需要确认: ${Boolean(action.requires_confirmation)}`,
-    `Shell 契约: ${commandLine}`,
+    `来源：${formatActionSourceLabel(source)}`,
+    `动作 ID：${action.action_id}`,
+    `可执行：${action.enabled !== false ? "是" : "否"}`,
+    `命令：${action.command}`,
+    `参数：${JSON.stringify(action.argv || [])}`,
+    `需要确认：${Boolean(action.requires_confirmation) ? "是" : "否"}`,
+    `Shell 契约：${commandLine}`,
   ];
 
   if (action.reason) {
-    lines.push(`原因: ${action.reason}`);
+    lines.push(`原因：${formatActionReason(action.reason)}`);
   }
 
   elements.actionContractHelp.textContent =
@@ -542,7 +543,9 @@ function formatStatusLabel(status) {
     disabled: "不可执行",
     failed: "失败",
     healthy: "健康",
+    degraded: "降级",
     stale: "过期",
+    unsupported: "不支持",
   }[status] || status;
 }
 
@@ -559,7 +562,73 @@ function formatCardKindLabel(kind) {
     baseline: "基线",
     changes: "变更",
     activity: "活动",
+    conflicts: "冲突",
   }[kind] || kind;
+}
+
+function formatBridgeConfigSource(source) {
+  return {
+    env: "环境变量",
+    cli: "命令行",
+    local_file: "本地配置文件",
+    desktop_bridge: "桌面桥接",
+    sample: "内置样例",
+  }[source] || source;
+}
+
+function formatBlockingReason(reason) {
+  return {
+    unresolved_conflicts: "存在未解决冲突",
+    requires_full_pull: "需要先完整拉取",
+  }[reason] || reason;
+}
+
+function formatManifestStatusLabel(status) {
+  return {
+    valid: "有效",
+    stale: "过期",
+  }[status] || status;
+}
+
+function formatCardSourceLabel(cardId) {
+  return {
+    baseline: "同步基线",
+    "local-changes": "本地变更",
+    activity: "活动流",
+    conflicts: "冲突",
+    healthy: "健康检查",
+    "worker-health": "同步线程",
+  }[cardId] || cardId;
+}
+
+function formatActionSourceLabel(source) {
+  if (!source) {
+    return "未知来源";
+  }
+  if (source === "panel") {
+    return "顶部面板";
+  }
+  if (source.startsWith("card:")) {
+    return `同步卡片 / ${formatCardSourceLabel(source.slice(5))}`;
+  }
+  return source;
+}
+
+function formatActionReason(reason) {
+  if (!reason) {
+    return "无";
+  }
+  return String(reason)
+    .split(",")
+    .map((part) => formatBlockingReason(part.trim()))
+    .join("，");
+}
+
+function formatSessionSourceLabel(source) {
+  return {
+    sample: "内置样例",
+    "desktop-bridge": "桌面桥接",
+  }[source] || source;
 }
 
 function createSignal(level, label) {
@@ -616,11 +685,11 @@ function deriveWorkspaceSyncContext(note) {
   );
 
   for (const card of matchedCards) {
-    signals.push(createSignal(card.level, `${card.kind}: ${card.title}`));
+    signals.push(createSignal(card.level, `${formatCardKindLabel(card.kind)}：${card.title}`));
   }
 
   for (const reason of matchedBlockingReasons) {
-    signals.push(createSignal("danger", `提交门禁：${reason}`));
+    signals.push(createSignal("danger", `提交门禁：${formatBlockingReason(reason)}`));
   }
 
   const dedupedSignals = [];
@@ -666,6 +735,13 @@ function deriveWorkspaceSyncContext(note) {
 function getSelectedWorkspaceNote() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
   return workspaceShell.notes[state.selectedWorkspaceNoteId] || workspaceShell.notes["desktop-bridge"];
+}
+
+function countWorkspaceNotes(workspaceShell) {
+  return workspaceShell.sections.reduce(
+    (total, section) => total + (Array.isArray(section.items) ? section.items.length : 0),
+    0,
+  );
 }
 
 function renderWorkspaceTree() {
@@ -721,13 +797,71 @@ function renderWorkspaceTree() {
   }
 }
 
+function renderWorkspaceRail() {
+  const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
+  const note = getSelectedWorkspaceNote();
+  const summary = state.syncCenter?.summary || null;
+  const conflictCount = summary
+    ? (summary.conflicts?.conflict_copies?.length || 0) + (summary.conflicts?.conflict_orphans?.length || 0)
+    : 0;
+  const blockingReasons = Array.isArray(summary?.commit_gate?.blocking_reasons)
+    ? summary.commit_gate.blocking_reasons.map(formatBlockingReason)
+    : [];
+  const syncKind = state.snapshotMetadata
+    ? formatPayloadKindLabel("sync-shell-snapshot")
+    : state.syncCenter
+      ? formatPayloadKindLabel("sync-center")
+      : state.activityFeed
+        ? formatPayloadKindLabel("sync-activity")
+        : "未加载";
+
+  elements.workspaceRail.innerHTML = `
+    <div class="sidebar-card-header">
+      <div>
+        <p class="card-section-label">当前上下文</p>
+        <h2>工作区概览</h2>
+      </div>
+      <span class="mini-pill tone-info">${escapeHtml(countWorkspaceNotes(workspaceShell))} 篇</span>
+    </div>
+    <div class="session-rail-grid">
+      <article class="session-rail-item">
+        <span class="session-rail-title">当前文档</span>
+        <strong>${escapeHtml(note.title)}</strong>
+        <p class="session-rail-copy">${escapeHtml(note.path)}</p>
+        <div class="session-rail-pills">
+          <span class="mini-pill tone-${resolveTone(note.statusTone)}">${escapeHtml(note.statusLabel)}</span>
+          <span class="mini-pill tone-info">${escapeHtml(note.lastSaved)}</span>
+        </div>
+      </article>
+      <article class="session-rail-item">
+        <span class="session-rail-title">会话来源</span>
+        <strong>${escapeHtml(syncKind)}</strong>
+        <p class="session-rail-copy">${escapeHtml(state.sourceLabel)}</p>
+        <p class="session-rail-copy">工作区：${escapeHtml(state.workspaceSourceLabel)}</p>
+      </article>
+      <article class="session-rail-item">
+        <span class="session-rail-title">同步摘要</span>
+        <strong>${escapeHtml(summary?.changes?.change_count ?? 0)} 项待处理</strong>
+        <p class="session-rail-copy">冲突工件 ${escapeHtml(conflictCount)}</p>
+        <p class="session-rail-copy">
+          ${
+            blockingReasons.length
+              ? escapeHtml(blockingReasons.join("，"))
+              : "当前无提交阻塞项"
+          }
+        </p>
+      </article>
+    </div>
+  `;
+}
+
 function renderWorkspaceEditor() {
   const note = getSelectedWorkspaceNote();
   const syncContext = deriveWorkspaceSyncContext(note);
   elements.workspaceEditor.innerHTML = `
     <div class="editor-toolbar">
       <div>
-        <p class="card-meta">编辑器原型</p>
+        <p class="card-meta">当前文档</p>
         <h2 class="editor-title">${escapeHtml(note.title)}</h2>
       </div>
       <span class="level-pill tone-${resolveTone(note.statusTone)}">${escapeHtml(note.statusLabel)}</span>
@@ -740,7 +874,7 @@ function renderWorkspaceEditor() {
       ${note.tags.map((tag) => `<li>${escapeHtml(tag)}</li>`).join("")}
     </ul>
     <section class="editor-sync-box">
-      <h3>同步信号</h3>
+      <h3>同步联动</h3>
       <p class="summary-copy">${escapeHtml(syncContext.headline)}</p>
       <div class="editor-signal-row">
         ${syncContext.signals
@@ -761,10 +895,10 @@ function renderWorkspaceAiPanel() {
   elements.workspaceAiPanel.innerHTML = `
     <div class="pane-heading">
       <div>
-        <p class="card-meta">AI 面板</p>
+        <p class="card-meta">AI 助手</p>
         <h2 class="ai-panel-title">${escapeHtml(note.title)} 的上下文</h2>
       </div>
-      <span class="mini-pill tone-warning">草稿</span>
+      <span class="mini-pill tone-warning">联动</span>
     </div>
     <div class="ai-stat-grid">
       <article class="ai-stat">
@@ -809,7 +943,7 @@ function renderWorkspaceAiPanel() {
           ? `<ul class="ai-list">${syncContext.relatedActivity
               .map(
                 (record) =>
-                  `<li>${escapeHtml(record.action_id)} / ${escapeHtml(record.status)} / ${escapeHtml(record.message || "无附加信息")}</li>`,
+                  `<li>${escapeHtml(record.action_id)} · ${escapeHtml(formatStatusLabel(record.status))} · ${escapeHtml(formatActionSourceLabel(record.source))}${record.message ? ` · ${escapeHtml(record.message)}` : ""}</li>`,
               )
               .join("")}</ul>`
           : '<p class="ai-copy">这篇文档当前没有匹配到相关同步活动。</p>'
@@ -821,6 +955,7 @@ function renderWorkspaceAiPanel() {
 function renderWorkspaceChrome() {
   elements.workspaceStatus.textContent = `工作区契约来源：${state.workspaceSourceLabel}`;
   renderWorkspaceTree();
+  renderWorkspaceRail();
   renderWorkspaceEditor();
   renderWorkspaceAiPanel();
 }
@@ -861,7 +996,8 @@ function renderSummary(syncCenter) {
     {
       label: "提交门禁",
       value: summary.commit_gate.can_submit_commit ? "可提交" : "被阻塞",
-      kicker: summary.commit_gate.blocking_reasons?.join(", ") || "当前无阻塞原因",
+      kicker:
+        summary.commit_gate.blocking_reasons?.map(formatBlockingReason).join("，") || "当前无阻塞原因",
     },
     {
       label: "本地变更",
@@ -880,7 +1016,7 @@ function renderSummary(syncCenter) {
     {
       label: "版本",
       value: `${summary.state.acked_revision}/${summary.state.remote_head_revision}`,
-      kicker: `Manifest 状态：${summary.state.last_manifest_summary_status}`,
+      kicker: `Manifest 状态：${formatManifestStatusLabel(summary.state.last_manifest_summary_status)}`,
     },
   ];
 
@@ -976,7 +1112,7 @@ function renderActivity(feed) {
       </div>
       <div class="timeline-row">
         <span class="mini-pill tone-${resolveTone(record.level)}">${escapeHtml(formatLevelLabel(record.level))}</span>
-        <span class="card-meta">${escapeHtml(record.command)} · 来源 ${escapeHtml(record.source)}</span>
+        <span class="card-meta">${escapeHtml(record.command)} · 来源 ${escapeHtml(formatActionSourceLabel(record.source))}</span>
       </div>
       ${record.message ? `<p class="timeline-message">${escapeHtml(record.message)}</p>` : ""}
     `;
@@ -1076,7 +1212,7 @@ function applyPayload(payload, sourceLabel) {
 async function loadPayloadFromPath(path, sourceLabel) {
   const response = await fetch(path, { cache: "no-store" });
   if (!response.ok) {
-    throw new Error(`Unable to load payload ${path}: ${response.status}`);
+    throw new Error(`无法加载同步载荷 ${path}：HTTP ${response.status}`);
   }
 
   const payload = await response.json();
@@ -1100,7 +1236,7 @@ async function loadLiveSnapshot() {
 async function loadWorkspaceShellFromPath(path, sourceLabel) {
   const response = await fetch(path, { cache: "no-store" });
   if (!response.ok) {
-    throw new Error(`Unable to load workspace shell ${path}: ${response.status}`);
+    throw new Error(`无法加载工作区壳层 ${path}：HTTP ${response.status}`);
   }
 
   const payload = await response.json();
@@ -1134,7 +1270,8 @@ function applyAppSession(payload, sourceLabel) {
   applyWorkspaceShell(session.workspaceShell, `${sourceLabel} / workspace`);
   applyPayload(session.syncPayload, `${sourceLabel} / sync`);
   state.lastBridgeError = null;
-  elements.actionExecutionStatus.textContent = `应用会话来源：${session.source} · ${formatDateTime(session.loadedAtMs)}`;
+  elements.actionExecutionStatus.textContent =
+    `应用会话来源：${formatSessionSourceLabel(session.source)} · ${formatDateTime(session.loadedAtMs)}`;
 }
 
 async function refreshFromDesktop() {
