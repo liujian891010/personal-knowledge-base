@@ -73,6 +73,30 @@ Waiting for bridge diagnostics...
             <pre id="action-result-output">No action has been executed yet.</pre>
             <pre id="bridge-error-output" class="compact-output">No bridge errors.</pre>
           </section>
+
+          <section class="control-card">
+            <h2>Workspace Shell</h2>
+            <p>
+              Load the bundled workspace sample, paste a workspace contract, or import a local
+              file for the file tree, editor, and AI panel shell.
+            </p>
+            <div class="control-actions">
+              <button id="load-workspace-sample-button" class="solid">Load Workspace Sample</button>
+              <label class="ghost file-picker">
+                Import Workspace JSON
+                <input id="workspace-file-input" type="file" accept="application/json" />
+              </label>
+            </div>
+            <p id="workspace-status" class="bridge-status">Workspace shell not loaded yet.</p>
+            <textarea
+              id="workspace-input"
+              spellcheck="false"
+              placeholder='Paste a workspace shell JSON payload here'
+            ></textarea>
+            <div class="control-actions">
+              <button id="apply-workspace-input-button" class="solid">Apply Workspace JSON</button>
+            </div>
+          </section>
         </aside>
 
         <section class="dashboard">

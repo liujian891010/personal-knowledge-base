@@ -20,6 +20,12 @@ cd apps\frontend\noteapp-web
 npm run dev
 ```
 
+Then open:
+
+```text
+http://127.0.0.1:4173/
+```
+
 You can also pass bridge config directly on the dev command line:
 
 ```powershell
