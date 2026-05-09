@@ -2171,6 +2171,67 @@ function buildEditorDraftInsight(note, draft) {
   };
 }
 
+function summarizeRichText(text, maxLength = 110) {
+  const normalized = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#") && !line.startsWith("- ") && !/^\d+\.\s/.test(line));
+  const source = normalized[0] || "当前文档还没有可提炼的摘要，可继续补充正文内容。";
+  return source.length > maxLength ? `${source.slice(0, maxLength - 1)}…` : source;
+}
+
+function buildMarkdownOutline(text, limit = 4) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^#{1,6}\s+/.test(line))
+    .map((line) => line.replace(/^#{1,6}\s+/, ""))
+    .slice(0, limit);
+}
+
+function estimateReadingMinutes(text) {
+  const characters = countDraftCharacters(text);
+  if (!characters) {
+    return 1;
+  }
+  return Math.max(1, Math.ceil(characters / 320));
+}
+
+function buildEditorFocusCards({ note, syncContext, draftInsight, draftRecoveryStatus, readingMinutes, outline }) {
+  return [
+    {
+      label: "阅读成本",
+      value: `${readingMinutes} 分钟`,
+      detail: outline.length ? `当前检测到 ${outline.length} 个结构节点` : "当前还没有检测到明显的小节结构",
+    },
+    {
+      label: "草稿状态",
+      value: draftInsight?.dirty ? "待保存修改" : "可继续整理",
+      detail: draftRecoveryStatus?.detail || "开始编辑后会自动写入本地恢复区。",
+    },
+    {
+      label: "下一步",
+      value: syncContext.actions[0] || "继续补充正文",
+      detail: syncContext.signals[0]?.label || "当前没有更高优先级的同步提醒。",
+    },
+  ];
+}
+
+function buildAiBriefing({ note, noteBody, syncContext, draftInsight }) {
+  const summary = summarizeRichText(noteBody, 132);
+  const topSignal = syncContext.signals[0]?.label || "当前没有命中的同步信号";
+  const headline = draftInsight?.dirty
+    ? "先定稿当前草稿，再进入后续同步动作。"
+    : syncContext.actions[0] || "当前文档适合继续补充内容或进入下一步同步。";
+  return {
+    summary,
+    headline,
+    topSignal,
+    outline: buildMarkdownOutline(noteBody, 3),
+    entityPreview: note.ai.relatedEntities.slice(0, 4),
+  };
+}
+
 function buildDraftRecoveryStatus(noteId) {
   const meta = getDraftRecoveryMeta(noteId);
   if (!meta) {
@@ -2657,6 +2718,18 @@ function renderWorkspaceEditor() {
   const workspaceSyncActions = collectWorkspaceSyncActions(note);
   const canEnterSyncFlow = !draftInsight || !draftInsight.dirty;
   const lastExecution = buildLastExecutionSummary();
+  const noteBody = editorDraft ? editorDraft.body : note.body;
+  const noteSummary = summarizeRichText(noteBody);
+  const noteOutline = buildMarkdownOutline(noteBody);
+  const readingMinutes = estimateReadingMinutes(noteBody);
+  const editorFocusCards = buildEditorFocusCards({
+    note,
+    syncContext,
+    draftInsight,
+    draftRecoveryStatus,
+    readingMinutes,
+    outline: noteOutline,
+  });
   elements.workspaceEditor.innerHTML = `
     <div class="editor-toolbar">
       <div>
@@ -2684,6 +2757,38 @@ function renderWorkspaceEditor() {
     <ul class="editor-tags">
       ${note.tags.map((tag) => `<li>${escapeHtml(tag)}</li>`).join("")}
     </ul>
+    <section class="editor-brief-card">
+      <div class="editor-brief-copy">
+        <p class="card-section-label">内容概览</p>
+        <h3>${escapeHtml(noteSummary)}</h3>
+        <p class="summary-copy">当前正文预计阅读 ${escapeHtml(readingMinutes)} 分钟。${escapeHtml(noteOutline.length ? `已检测到 ${noteOutline.length} 个结构节点，可继续沿结构整理内容。` : "建议先补一个明确的小节标题，便于后续 AI 和同步动作理解内容层次。")}</p>
+      </div>
+      <div class="editor-brief-metrics">
+        ${editorFocusCards
+          .map(
+            (item) => `
+              <article class="editor-focus-card">
+                <span class="metric-label">${escapeHtml(item.label)}</span>
+                <strong>${escapeHtml(item.value)}</strong>
+                <p>${escapeHtml(item.detail)}</p>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+    </section>
+    ${
+      noteOutline.length
+        ? `
+          <section class="editor-outline-card">
+            <h3>本页结构</h3>
+            <div class="editor-outline-list">
+              ${noteOutline.map((item) => `<span class="editor-outline-chip">${escapeHtml(item)}</span>`).join("")}
+            </div>
+          </section>
+        `
+        : ""
+    }
     <section class="editor-sync-box">
       <h3>同步联动</h3>
       <p class="summary-copy">${escapeHtml(syncContext.headline)}</p>
@@ -2934,6 +3039,13 @@ function renderWorkspaceAiPanel() {
   const syncContext = deriveWorkspaceSyncContext(note);
   const editorDraft = getActiveEditorDraft();
   const draftInsight = buildEditorDraftInsight(note, editorDraft);
+  const noteBody = editorDraft ? editorDraft.body : note.body;
+  const aiBriefing = buildAiBriefing({
+    note,
+    noteBody,
+    syncContext,
+    draftInsight,
+  });
   const draftActions = [];
   if (draftInsight?.dirty) {
     draftActions.push("先保存本地草稿，再决定是否执行同步动作或切换文档。");
@@ -2952,6 +3064,26 @@ function renderWorkspaceAiPanel() {
       </div>
       <span class="mini-pill tone-warning">联动</span>
     </div>
+    <section class="ai-brief-card">
+      <p class="card-section-label">AI 速览</p>
+      <h3>${escapeHtml(aiBriefing.headline)}</h3>
+      <p class="ai-copy">${escapeHtml(aiBriefing.summary)}</p>
+      <div class="ai-brief-grid">
+        <div class="ai-brief-item">
+          <span class="metric-label">首要信号</span>
+          <strong>${escapeHtml(aiBriefing.topSignal)}</strong>
+        </div>
+        <div class="ai-brief-item">
+          <span class="metric-label">结构提取</span>
+          <strong>${escapeHtml(aiBriefing.outline[0] || "待补结构标题")}</strong>
+        </div>
+      </div>
+      ${
+        aiBriefing.entityPreview.length
+          ? `<div class="editor-tags">${aiBriefing.entityPreview.map((entity) => `<span class="ai-chip">${escapeHtml(entity)}</span>`).join("")}</div>`
+          : ""
+      }
+    </section>
     <div class="ai-stat-grid">
       <article class="ai-stat">
         <span class="metric-label">队列</span>
@@ -3012,23 +3144,41 @@ function renderWorkspaceAiPanel() {
       </ul>
     </section>
     <section class="ai-section">
+      <h3>本轮建议动作</h3>
+      <div class="ai-action-list">
+        ${note.ai.suggestions
+          .map(
+            (item) => `
+              <article class="ai-action-card">
+                <strong>${escapeHtml(item)}</strong>
+                <p>${escapeHtml(draftInsight?.dirty ? "建议先处理草稿，再执行这条建议。" : "可作为当前文档的下一步处理动作。")}</p>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>
+    </section>
+    <section class="ai-section">
       <h3>相关实体</h3>
       <div class="editor-tags">
         ${note.ai.relatedEntities.map((entity) => `<span class="ai-chip">${escapeHtml(entity)}</span>`).join("")}
       </div>
     </section>
     <section class="ai-section">
-      <h3>建议动作</h3>
-      <ul class="ai-list">
-        ${note.ai.suggestions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
-      </ul>
-    </section>
-    <section class="ai-section">
-      <h3>Lint 提示</h3>
+      <h3>风险与校对</h3>
       ${
         note.ai.lint.length
-          ? `<ul class="ai-list">${note.ai.lint.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
-          : '<p class="ai-copy">当前没有 lint 提示。</p>'
+          ? `<div class="ai-action-list">${note.ai.lint
+              .map(
+                (item) => `
+                  <article class="ai-action-card tone-danger-surface">
+                    <strong>${escapeHtml(item)}</strong>
+                    <p>建议在进入同步前先人工核对这一项。</p>
+                  </article>
+                `,
+              )
+              .join("")}</div>`
+          : '<p class="ai-copy">当前没有额外的风险提示，可以继续整理内容。</p>'
       }
     </section>
     <section class="ai-section">
