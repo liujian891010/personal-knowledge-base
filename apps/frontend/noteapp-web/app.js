@@ -8,6 +8,7 @@ const state = {
   snapshotMetadata: null,
   selectedAction: null,
   bridgeStatus: null,
+  lastExecution: null,
   sourceLabel: "Not loaded",
 };
 
@@ -20,6 +21,7 @@ const elements = {
   activityCard: document.getElementById("activity-card"),
   actionContractOutput: document.getElementById("action-contract-output"),
   actionContractHelp: document.getElementById("action-contract-help"),
+  actionResultOutput: document.getElementById("action-result-output"),
   payloadInput: document.getElementById("payload-input"),
   loadSampleButton: document.getElementById("load-sample-button"),
   loadLiveButton: document.getElementById("load-live-button"),
@@ -88,8 +90,41 @@ function detectPayloadKind(payload) {
   );
 }
 
+function renderExecutionResult(execution) {
+  if (!execution) {
+    elements.actionResultOutput.textContent = "No action has been executed yet.";
+    return;
+  }
+  elements.actionResultOutput.textContent = JSON.stringify(execution, null, 2);
+}
+
+function renderBridgeStatus() {
+  const status = state.bridgeStatus;
+  if (!status) {
+    elements.bridgeStatus.textContent = "Checking local desktop bridge...";
+    elements.refreshLocalButton.disabled = true;
+    elements.executeSelectedButton.disabled = true;
+    return;
+  }
+
+  if (status.available) {
+    const sourceLabel = status.config?.configSource || "env";
+    elements.bridgeStatus.textContent =
+      `Local desktop bridge ready for ${status.config.vaultId} at ${status.config.vaultRoot} ` +
+      `(${sourceLabel})`;
+    elements.refreshLocalButton.disabled = false;
+    elements.executeSelectedButton.disabled = !state.selectedAction;
+    return;
+  }
+
+  elements.bridgeStatus.textContent = `Local desktop bridge unavailable: ${status.missing.join(", ")}`;
+  elements.refreshLocalButton.disabled = true;
+  elements.executeSelectedButton.disabled = true;
+}
+
 function setSelectedAction(action, source = "manual selection") {
   state.selectedAction = action;
+
   if (!action) {
     elements.actionContractHelp.textContent =
       "Select an action from the panel, cards, or activity area to preview the shell command contract.";
@@ -116,7 +151,7 @@ function setSelectedAction(action, source = "manual selection") {
   }
 
   elements.actionContractHelp.textContent =
-    "The UI does not execute actions yet; it previews the exact command contract the shell can forward.";
+    "The UI does not execute actions directly; it previews the exact command contract the local bridge can forward.";
   elements.actionContractOutput.textContent = lines.join("\n");
   elements.actionExecutionStatus.textContent =
     "Use Run Selected Action to forward this contract through the local desktop bridge.";
@@ -131,6 +166,7 @@ function createActionChip(action, source) {
 
   label.textContent = action.label;
   command.textContent = [action.command, ...(action.argv || [])].join(" ");
+
   if (action.enabled === false) {
     button.classList.add("is-disabled");
   }
@@ -141,6 +177,15 @@ function createActionChip(action, source) {
 
 function resolveTone(level) {
   return ["success", "warning", "danger", "info"].includes(level) ? level : "info";
+}
+
+function buildPayloadDetail() {
+  if (!state.snapshotMetadata) {
+    return state.sourceLabel;
+  }
+
+  const { generated_at_ms, vault_id, device_id, vault_root } = state.snapshotMetadata;
+  return `${state.sourceLabel} | ${vault_id} | ${device_id} | ${vault_root} | ${formatDateTime(generated_at_ms)}`;
 }
 
 function renderPanel(syncCenter) {
@@ -158,9 +203,7 @@ function renderPanel(syncCenter) {
   `;
 
   const panelActions = elements.panelCard.querySelector("#panel-actions");
-  panelActions.appendChild(
-    createActionChip(panel.primary_action, "panel.primary_action"),
-  );
+  panelActions.appendChild(createActionChip(panel.primary_action, "panel.primary_action"));
   for (const action of panel.secondary_actions || []) {
     panelActions.appendChild(createActionChip(action, "panel.secondary_actions"));
   }
@@ -306,39 +349,14 @@ function renderEmptyDashboard(message) {
       <p>Load a payload to render the sync dashboard.</p>
     </div>
   `;
+  renderExecutionResult(state.lastExecution);
   setSelectedAction(null);
-}
-
-function renderBridgeStatus() {
-  const status = state.bridgeStatus;
-  if (!status) {
-    elements.bridgeStatus.textContent = "Checking local desktop bridge…";
-    elements.refreshLocalButton.disabled = true;
-    elements.executeSelectedButton.disabled = true;
-    return;
-  }
-  if (status.available) {
-    elements.bridgeStatus.textContent = `Local desktop bridge ready for ${status.config.vaultId} at ${status.config.vaultRoot}`;
-    elements.refreshLocalButton.disabled = false;
-    elements.executeSelectedButton.disabled = !state.selectedAction;
-    return;
-  }
-  elements.bridgeStatus.textContent = `Local desktop bridge unavailable: ${status.missing.join(", ")}`;
-  elements.refreshLocalButton.disabled = true;
-  elements.executeSelectedButton.disabled = true;
-}
-
-function buildPayloadDetail() {
-  if (!state.snapshotMetadata) {
-    return state.sourceLabel;
-  }
-
-  const { generated_at_ms, vault_id, device_id, vault_root } = state.snapshotMetadata;
-  return `${state.sourceLabel} | ${vault_id} | ${device_id} | ${vault_root} | ${formatDateTime(generated_at_ms)}`;
 }
 
 function render() {
   renderBridgeStatus();
+  renderExecutionResult(state.lastExecution);
+
   if (!state.syncCenter && !state.activityFeed) {
     renderEmptyDashboard("Load the sample contract or paste your own JSON.");
     return;
@@ -415,7 +433,7 @@ function applyPayload(payload, sourceLabel) {
 }
 
 async function loadPayloadFromPath(path, sourceLabel) {
-  const response = await fetch(path);
+  const response = await fetch(path, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Unable to load payload ${path}: ${response.status}`);
   }
@@ -455,25 +473,26 @@ async function postBridgeJson(path, payload = {}) {
 
 async function refreshFromDesktop() {
   const json = await postBridgeJson("/api/bridge/refresh-snapshot", {});
-  const snapshot = json.snapshot;
-  elements.payloadInput.value = JSON.stringify(snapshot, null, 2);
-  applyPayload(snapshot, "Refreshed from local desktop bridge");
+  state.lastExecution = null;
+  elements.payloadInput.value = JSON.stringify(json.snapshot, null, 2);
+  applyPayload(json.snapshot, "Refreshed from local desktop bridge");
 }
 
 async function executeSelectedAction() {
   if (!state.selectedAction) {
     throw new Error("select an action before trying to run it");
   }
+
+  const actionId = state.selectedAction.action_id;
   const json = await postBridgeJson("/api/bridge/execute-action", {
-    actionId: state.selectedAction.action_id,
+    actionId,
   });
-  const snapshot = json.snapshot;
-  elements.payloadInput.value = JSON.stringify(snapshot, null, 2);
-  applyPayload(
-    snapshot,
-    `Executed ${state.selectedAction.action_id} through local desktop bridge`,
-  );
-  elements.actionExecutionStatus.textContent = `Executed ${json.execution.action.action_id} with status ${json.execution.status}.`;
+
+  state.lastExecution = json.execution;
+  elements.payloadInput.value = JSON.stringify(json.snapshot, null, 2);
+  applyPayload(json.snapshot, `Executed ${actionId} through local desktop bridge`);
+  elements.actionExecutionStatus.textContent =
+    `Executed ${json.execution.action.action_id} with status ${json.execution.status}.`;
 }
 
 async function loadInitialPayload() {
@@ -499,19 +518,20 @@ function applyTextareaPayload() {
     return;
   }
 
-  const payload = JSON.parse(raw);
-  applyPayload(payload, "Textarea JSON payload");
+  state.lastExecution = null;
+  applyPayload(JSON.parse(raw), "Textarea JSON payload");
 }
 
 async function importLocalFile(file) {
   const text = await file.text();
   elements.payloadInput.value = text;
-  const payload = JSON.parse(text);
-  applyPayload(payload, `Imported file: ${file.name}`);
+  state.lastExecution = null;
+  applyPayload(JSON.parse(text), `Imported file: ${file.name}`);
 }
 
 elements.loadSampleButton.addEventListener("click", async () => {
   try {
+    state.lastExecution = null;
     await loadSample();
   } catch (error) {
     renderEmptyDashboard(error instanceof Error ? error.message : String(error));
@@ -520,6 +540,7 @@ elements.loadSampleButton.addEventListener("click", async () => {
 
 elements.loadLiveButton.addEventListener("click", async () => {
   try {
+    state.lastExecution = null;
     await loadLiveSnapshot();
   } catch (error) {
     renderEmptyDashboard(error instanceof Error ? error.message : String(error));
@@ -550,6 +571,7 @@ elements.clearInputButton.addEventListener("click", () => {
   state.activityFeed = null;
   state.snapshotMetadata = null;
   state.selectedAction = null;
+  state.lastExecution = null;
   state.sourceLabel = "Not loaded";
   render();
 });

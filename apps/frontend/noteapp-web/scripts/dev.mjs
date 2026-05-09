@@ -78,6 +78,7 @@ function buildBridgeStatusPayload() {
       deviceId: bridgeConfig.deviceId,
       outputJson: bridgeConfig.outputJson,
       activityLimit: bridgeConfig.activityLimit,
+      configSource: bridgeConfig.configSource,
     },
   };
 }
