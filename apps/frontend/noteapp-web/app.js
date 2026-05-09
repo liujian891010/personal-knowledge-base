@@ -293,6 +293,7 @@ const state = {
   aiCopilot: { ...DEFAULT_AI_COPILOT_STATE },
   aiCompile: { ...DEFAULT_AI_COMPILE_STATE },
   runtimeSessionId: createRuntimeSessionId(),
+  settingsSurfaceTab: "general",
 };
 
 const elements = {
@@ -2053,185 +2054,439 @@ function bindSurfaceViewButtons(root) {
 
 function renderSettingsSurface() {
   const settings = buildSettingsSnapshot();
+  const activeTab = state.settingsSurfaceTab || "general";
+  const tabs = [
+    { id: "general", label: "常规" },
+    { id: "sync", label: "同步" },
+    { id: "ai", label: "AI" },
+    { id: "storage", label: "本地策略" },
+  ];
+  const tabMeta = {
+    general: {
+      title: "常规设置",
+      detail: "继续当前工作区、恢复本机会话，并保持主工作流清晰可追踪。",
+    },
+    sync: {
+      title: "同步设置",
+      detail: "集中查看桌面桥接、实时会话和最近一次同步执行状态。",
+    },
+    ai: {
+      title: "AI 设置",
+      detail: "管理当前 AI 边界、问答来源和知识页编译能力，不在这里暴露原始调试细节。",
+    },
+    storage: {
+      title: "本地策略",
+      detail: "这些策略只影响当前浏览器或当前设备，不会改变常规同步边界。",
+    },
+  };
+  let content = "";
+
+  if (activeTab === "general") {
+    content = `
+      <div class="settings-panel-grid">
+        <article class="settings-panel-card">
+          <header>
+            <h3>继续当前工作区</h3>
+            <p>${escapeHtml(settings.workspaceSourceSummary.detail)}</p>
+          </header>
+          <div class="settings-metric-strip">
+            <div class="settings-mini-metric">
+              <span class="metric-label">当前入口</span>
+              <strong>${escapeHtml(settings.workspaceSourceDisplay)}</strong>
+            </div>
+            <div class="settings-mini-metric">
+              <span class="metric-label">可见文档</span>
+              <strong>${escapeHtml(`${settings.visibleNoteCount}/${settings.totalNoteCount}`)}</strong>
+            </div>
+            <div class="settings-mini-metric">
+              <span class="metric-label">当前焦点</span>
+              <strong>${escapeHtml(settings.selectedNote?.title || "当前没有命中文档")}</strong>
+            </div>
+          </div>
+          <div class="detail-actions">
+            ${
+              settings.canRestoreLocalSession
+                ? '<button class="solid detail-inline-button" data-surface-command="continue-local-workspace-session" type="button">继续本机草稿</button>'
+                : ""
+            }
+            <button class="ghost detail-inline-button" data-surface-command="load-sample-session" type="button">加载演示会话</button>
+            <button class="ghost detail-inline-button" data-surface-command="load-workspace-sample" type="button">打开演示工作区</button>
+          </div>
+        </article>
+        <article class="settings-panel-card">
+          <header>
+            <h3>恢复与会话</h3>
+            <p>你上一次在浏览器本地保存下来的工作区，会在这里保持连续性。</p>
+          </header>
+          <div class="settings-inline-list">
+            <div class="settings-inline-row">
+              <span>恢复状态</span>
+              <strong>${settings.localWorkspaceSession ? "已保存" : "未保存"}</strong>
+            </div>
+            <div class="settings-inline-row">
+              <span>恢复队列</span>
+              <strong>${escapeHtml(settings.recoveryCount)}</strong>
+            </div>
+            <div class="settings-inline-row">
+              <span>最后保存</span>
+              <strong>${escapeHtml(settings.localWorkspaceSession ? formatDateTime(settings.localWorkspaceSession.savedAtMs) : "无")}</strong>
+            </div>
+            ${
+              settings.localWorkspaceSession?.activeNavView
+                ? `
+                  <div class="settings-inline-row">
+                    <span>上次停留</span>
+                    <strong>${escapeHtml(formatNavViewLabel(settings.localWorkspaceSession.activeNavView))}</strong>
+                  </div>
+                `
+                : ""
+            }
+          </div>
+          <div class="detail-actions">
+            ${
+              settings.localWorkspaceSession
+                ? '<button class="ghost detail-inline-button" data-surface-command="clear-local-workspace-session" type="button">清除本机会话</button>'
+                : ""
+            }
+            ${
+              settings.recoveryCount
+                ? '<button class="ghost detail-inline-button" data-surface-command="restore-all-recovery" type="button">恢复全部草稿</button>'
+                : ""
+            }
+            ${
+              settings.recoveryCount
+                ? '<button class="ghost detail-inline-button" data-surface-command="discard-all-recovery" type="button">放弃恢复区</button>'
+                : ""
+            }
+          </div>
+        </article>
+        <article class="settings-panel-card">
+          <header>
+            <h3>最近整理状态</h3>
+            <p>这是当前主工作流最值得关注的三个指标。</p>
+          </header>
+          <div class="settings-metric-strip">
+            <div class="settings-mini-metric">
+              <span class="metric-label">未保存草稿</span>
+              <strong>${escapeHtml(settings.dirtyDraftCount)}</strong>
+            </div>
+            <div class="settings-mini-metric">
+              <span class="metric-label">待恢复草稿</span>
+              <strong>${escapeHtml(settings.recoveryCount)}</strong>
+            </div>
+            <div class="settings-mini-metric">
+              <span class="metric-label">同步看板</span>
+              <strong>${escapeHtml(settings.syncSourceDisplay)}</strong>
+            </div>
+          </div>
+          <div class="detail-actions">
+            <button class="solid detail-inline-button" data-surface-command="quick-capture" type="button">新建快速记录</button>
+            <button class="ghost detail-inline-button" data-surface-nav="overview" type="button">返回仪表盘</button>
+            <button class="ghost detail-inline-button" data-surface-nav="repository" type="button">打开笔记库</button>
+          </div>
+        </article>
+        <article class="settings-panel-card">
+          <header>
+            <h3>高级入口已分离</h3>
+            <p>桌面诊断、原始参数和专家调试已迁移到独立调试中心，避免打断日常整理流程。</p>
+          </header>
+          <div class="settings-inline-pills">
+            <span class="mini-pill tone-info">用户设置保留在这里</span>
+            <span class="mini-pill tone-warning">工程调试移到独立入口</span>
+          </div>
+          <div class="detail-actions">
+            <button class="solid detail-inline-button" data-surface-nav="debug" type="button">打开调试中心</button>
+          </div>
+        </article>
+      </div>
+    `;
+  } else if (activeTab === "sync") {
+    content = `
+      <div class="settings-panel-grid">
+        <article class="settings-panel-card">
+          <header>
+            <h3>桌面桥接状态</h3>
+            <p>桥接接通后，当前工作台就可以直接刷新真实会话并继续处理同步动作。</p>
+          </header>
+          <div class="settings-metric-strip">
+            <div class="settings-mini-metric">
+              <span class="metric-label">连接状态</span>
+              <strong>${settings.bridgeAvailable ? "已连接" : "未连接"}</strong>
+            </div>
+            <div class="settings-mini-metric">
+              <span class="metric-label">桥接模式</span>
+              <strong>${escapeHtml(settings.bridgeMode)}</strong>
+            </div>
+            <div class="settings-mini-metric">
+              <span class="metric-label">配置来源</span>
+              <strong>${escapeHtml(settings.bridgeSource)}</strong>
+            </div>
+          </div>
+          <div class="settings-inline-pills">
+            ${
+              settings.missing.length
+                ? settings.missing.map((item) => `<span class="mini-pill tone-warning">${escapeHtml(formatBridgeMissingItem(item))}</span>`).join("")
+                : '<span class="mini-pill tone-success">桥接配置已齐全</span>'
+            }
+          </div>
+          <div class="detail-actions">
+            <button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">检查桌面连接</button>
+            ${
+              settings.bridgeAvailable
+                ? '<button class="solid detail-inline-button" data-surface-command="load-bridge-session" type="button">切到桌面实时会话</button>'
+                : '<button class="ghost detail-inline-button" data-surface-command="load-sample-session" type="button">先看演示会话</button>'
+            }
+          </div>
+        </article>
+        <article class="settings-panel-card">
+          <header>
+            <h3>会话入口</h3>
+            <p>无论你是继续浏览器本地草稿，还是切回真实桌面会话，这里都提供清晰入口。</p>
+          </header>
+          <div class="settings-inline-list">
+            <div class="settings-inline-row">
+              <span>当前工作区</span>
+              <strong>${escapeHtml(settings.workspaceSourceDisplay)}</strong>
+            </div>
+            <div class="settings-inline-row">
+              <span>同步看板</span>
+              <strong>${escapeHtml(settings.syncSourceDisplay)}</strong>
+            </div>
+            ${
+              settings.appSession
+                ? `
+                  <div class="settings-inline-row">
+                    <span>最近载入</span>
+                    <strong>${escapeHtml(formatDateTime(settings.appSession.loadedAtMs))}</strong>
+                  </div>
+                `
+                : ""
+            }
+          </div>
+          <div class="detail-actions">
+            <button class="ghost detail-inline-button" data-surface-command="load-sample-session" type="button">加载演示会话</button>
+            <button class="ghost detail-inline-button" data-view-command="refresh-session" type="button">刷新实时会话</button>
+          </div>
+        </article>
+        <article class="settings-panel-card">
+          <header>
+            <h3>最近执行</h3>
+            <p>如果最近有桥接执行动作，这里会保留一份简明摘要，方便你继续排查或回看。</p>
+          </header>
+          <div class="settings-inline-list">
+            ${
+              settings.lastExecution
+                ? `
+                  <div class="settings-inline-row">
+                    <span>动作 ID</span>
+                    <strong>${escapeHtml(settings.lastExecution.actionId)}</strong>
+                  </div>
+                  <div class="settings-inline-row">
+                    <span>执行结果</span>
+                    <strong>${escapeHtml(settings.lastExecution.statusLabel)}</strong>
+                  </div>
+                  <div class="settings-inline-row">
+                    <span>执行时间</span>
+                    <strong>${escapeHtml(settings.lastExecution.atLabel)}</strong>
+                  </div>
+                `
+                : '<div class="empty-state"><p>最近还没有桥接执行记录。</p></div>'
+            }
+          </div>
+          <div class="detail-actions">
+            <button class="ghost detail-inline-button" data-surface-nav="conflicts" type="button">查看冲突解决</button>
+            <button class="ghost detail-inline-button" data-surface-nav="debug" type="button">查看调试详情</button>
+          </div>
+        </article>
+      </div>
+    `;
+  } else if (activeTab === "ai") {
+    content = `
+      <div class="settings-panel-grid">
+        <article class="settings-panel-card">
+          <header>
+            <h3>${escapeHtml(settings.aiBoundary.headline)}</h3>
+            <p>AI 问答与知识页编译会优先经过显式边界，必要时再自动回退到本地生成。</p>
+          </header>
+          <div class="settings-metric-strip">
+            <div class="settings-mini-metric">
+              <span class="metric-label">当前模式</span>
+              <strong>${escapeHtml(settings.aiBoundary.modeLabel)}</strong>
+            </div>
+            <div class="settings-mini-metric">
+              <span class="metric-label">问答来源</span>
+              <strong>${escapeHtml(settings.aiBoundary.answerSourceLabel)}</strong>
+            </div>
+            <div class="settings-mini-metric">
+              <span class="metric-label">知识页编译</span>
+              <strong>${escapeHtml(settings.aiBoundary.compileSourceLabel)}</strong>
+            </div>
+          </div>
+          <div class="settings-inline-pills">
+            ${
+              settings.aiBoundary.capabilities.length
+                ? settings.aiBoundary.capabilities.map((item) => `<span class="mini-pill tone-info">${escapeHtml(item)}</span>`).join("")
+                : '<span class="mini-pill tone-warning">当前未返回能力清单</span>'
+            }
+          </div>
+          <div class="detail-actions">
+            <button class="ghost detail-inline-button" data-surface-command="refresh-ai-boundary" type="button">刷新 AI 边界</button>
+            <button class="solid detail-inline-button" data-surface-nav="overview" type="button">回到 AI 主工作流</button>
+          </div>
+        </article>
+        <article class="settings-panel-card">
+          <header>
+            <h3>最近 AI 连续性</h3>
+            <p>如果你在本机会话里已经发起过问答或编译，这里会保留上下文摘要。</p>
+          </header>
+          <div class="settings-inline-list">
+            ${
+              settings.localWorkspaceSession?.aiQuestion
+                ? `
+                  <div class="settings-inline-row">
+                    <span>最近问题</span>
+                    <strong>${escapeHtml(settings.localWorkspaceSession.aiQuestion)}</strong>
+                  </div>
+                `
+                : ""
+            }
+            ${
+              settings.localWorkspaceSession?.aiHeadline
+                ? `
+                  <div class="settings-inline-row">
+                    <span>最近结论</span>
+                    <strong>${escapeHtml(settings.localWorkspaceSession.aiHeadline)}</strong>
+                  </div>
+                `
+                : ""
+            }
+            <div class="settings-inline-row">
+              <span>最近检查</span>
+              <strong>${escapeHtml(settings.aiBoundary.checkedAtLabel)}</strong>
+            </div>
+          </div>
+          ${settings.aiBoundary.message ? `<div class="empty-state"><p>${escapeHtml(settings.aiBoundary.message)}</p></div>` : ""}
+        </article>
+      </div>
+    `;
+  } else {
+    content = `
+      <div class="settings-panel-grid">
+        <article class="settings-panel-card">
+          <header>
+            <h3>`.ai/raw` 本地策略</h3>
+            <p>这些规则只影响当前设备上的 AI 中间产物管理，不会直接改变你的常规笔记同步。</p>
+          </header>
+          <div class="editor-sync-checklist">
+            <div class="editor-sync-item">
+              <span>单文件上限</span>
+              <strong>${escapeHtml(`${settings.localUiSettings.aiRawFileLimitMb} MB`)}</strong>
+            </div>
+            <div class="editor-sync-item">
+              <span>目录总量上限</span>
+              <strong>${escapeHtml(`${settings.localUiSettings.aiRawTotalLimitMb} MB`)}</strong>
+            </div>
+            <div class="editor-sync-item">
+              <span>清理策略</span>
+              <strong>${escapeHtml(formatAiRawCleanupPolicy(settings.localUiSettings.aiRawCleanupPolicy))}</strong>
+            </div>
+          </div>
+          <div class="editor-draft-panel">
+            <label class="editor-field">
+              <span class="metric-label">单个抽取文本文件上限（MB）</span>
+              <input id="settings-ai-raw-file-limit" class="editor-title-input" type="number" min="1" max="100" step="1" value="${escapeHtml(settings.localUiSettings.aiRawFileLimitMb)}" />
+            </label>
+            <label class="editor-field">
+              <span class="metric-label">`.ai/raw` 目录总量上限（MB）</span>
+              <input id="settings-ai-raw-total-limit" class="editor-title-input" type="number" min="50" max="5000" step="50" value="${escapeHtml(settings.localUiSettings.aiRawTotalLimitMb)}" />
+            </label>
+            <label class="editor-field">
+              <span class="metric-label">超限时处理方式</span>
+              <select id="settings-ai-raw-cleanup-policy" class="editor-title-input">
+                <option value="prompt" ${settings.localUiSettings.aiRawCleanupPolicy === "prompt" ? "selected" : ""}>超限时先提醒</option>
+                <option value="prune-oldest" ${settings.localUiSettings.aiRawCleanupPolicy === "prune-oldest" ? "selected" : ""}>超限后清理最旧内容</option>
+                <option value="manual" ${settings.localUiSettings.aiRawCleanupPolicy === "manual" ? "selected" : ""}>仅手动清理</option>
+              </select>
+            </label>
+            <label class="editor-field">
+              <span class="metric-label">完整 Vault 导出时是否附带 `.ai/raw`</span>
+              <select id="settings-ai-raw-export-mode" class="editor-title-input">
+                <option value="exclude" ${settings.localUiSettings.includeAiRawInExport ? "" : "selected"}>默认不附带</option>
+                <option value="include" ${settings.localUiSettings.includeAiRawInExport ? "selected" : ""}>按本机偏好附带</option>
+              </select>
+            </label>
+          </div>
+          <div class="detail-actions">
+            <button class="solid detail-inline-button" data-surface-command="save-ai-raw-settings" type="button">保存到本机</button>
+            <button class="ghost detail-inline-button" data-surface-command="reset-ai-raw-settings" type="button">恢复默认</button>
+          </div>
+        </article>
+        <article class="settings-panel-card">
+          <header>
+            <h3>工作台模式</h3>
+            <p>普通工作台会隐藏低频工程入口；高级调试会展开调试中心中的更多细节。</p>
+          </header>
+          <div class="settings-inline-list">
+            <div class="settings-inline-row">
+              <span>当前模式</span>
+              <strong>${settings.expertMode ? "高级调试" : "普通工作台"}</strong>
+            </div>
+            <div class="settings-inline-row">
+              <span>高级入口</span>
+              <strong>${settings.expertMode ? "已展开" : "已收起"}</strong>
+            </div>
+          </div>
+          <div class="detail-actions">
+            <button class="ghost detail-inline-button" data-surface-nav="debug" type="button">打开调试中心</button>
+          </div>
+        </article>
+      </div>
+    `;
+  }
+
   elements.viewDetailGrid.hidden = false;
   elements.viewDetailGrid.innerHTML = `
-    <article class="view-detail-card">
-      <p class="card-section-label">工作区</p>
-      <h3>继续当前工作区</h3>
-      <div class="detail-metric-grid">
-        <div class="detail-metric">
-          <span class="metric-label">当前入口</span>
-          <strong>${escapeHtml(settings.workspaceSourceDisplay)}</strong>
-        </div>
-        <div class="detail-metric">
-          <span class="metric-label">当前规模</span>
-          <strong>${escapeHtml(`${settings.totalNoteCount} 篇 / ${settings.visibleNoteCount} 可见`)}</strong>
-        </div>
-      </div>
-      <div class="view-stack">
-        <div class="detail-row detail-row-block">
-          <strong>${escapeHtml(settings.workspaceSourceSummary.headline)}</strong>
-          <span>${escapeHtml(settings.workspaceSourceSummary.detail)}</span>
-        </div>
-        <div class="detail-row">
-          <span>当前焦点</span>
-          <strong>${escapeHtml(settings.selectedNote?.title || "当前没有命中文档")}</strong>
-        </div>
-        <div class="detail-row">
-          <span>同步看板</span>
-          <strong>${escapeHtml(settings.syncSourceDisplay)}</strong>
-        </div>
-        ${
-          settings.appSession
-            ? `
-              <div class="detail-row">
-                <span>最近载入</span>
-                <strong>${escapeHtml(formatDateTime(settings.appSession.loadedAtMs))}</strong>
-              </div>
-            `
-            : ""
-        }
-      </div>
-      <div class="detail-actions">
-        ${
-          settings.canRestoreLocalSession
-            ? '<button class="solid detail-inline-button" data-surface-command="continue-local-workspace-session" type="button">继续本机草稿</button>'
-            : ""
-        }
-        ${
-          settings.bridgeAvailable
-            ? '<button class="ghost detail-inline-button" data-surface-command="load-bridge-session" type="button">切到桌面实时会话</button>'
-            : '<button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">检查桌面连接</button>'
-        }
-        <button class="ghost detail-inline-button" data-surface-command="load-sample-session" type="button">加载演示会话</button>
-        <button class="ghost detail-inline-button" data-surface-command="load-workspace-sample" type="button">打开演示工作区</button>
-      </div>
-    </article>
-    <article class="view-detail-card">
-      <p class="card-section-label">恢复</p>
-      <h3>本机会话恢复</h3>
-      <div class="detail-metric-grid">
-        <div class="detail-metric">
-          <span class="metric-label">恢复状态</span>
-          <strong>${settings.localWorkspaceSession ? "已保存" : "未保存"}</strong>
-        </div>
-        <div class="detail-metric">
-          <span class="metric-label">恢复队列</span>
-          <strong>${escapeHtml(settings.recoveryCount)}</strong>
-        </div>
-      </div>
-      <div class="view-stack">
-        <div class="detail-row">
-          <span>最后保存</span>
-          <strong>${escapeHtml(settings.localWorkspaceSession ? formatDateTime(settings.localWorkspaceSession.savedAtMs) : "无")}</strong>
-        </div>
-        <div class="detail-row">
-          <span>焦点文档</span>
-          <strong>${escapeHtml(settings.localWorkspaceSession?.workspaceShell?.notes?.[settings.localWorkspaceSession?.selectedWorkspaceNoteId]?.title || "无")}</strong>
-        </div>
-        ${
-          settings.localWorkspaceSession?.activeNavView
-            ? `
-              <div class="detail-row">
-                <span>上次停留</span>
-                <strong>${escapeHtml(formatNavViewLabel(settings.localWorkspaceSession.activeNavView))}</strong>
-              </div>
-            `
-            : ""
-        }
-        ${
-          settings.localWorkspaceSession?.aiQuestion
-            ? `
-              <div class="detail-row detail-row-block">
-                <strong>最近 AI 问答</strong>
-                <span>${escapeHtml(settings.localWorkspaceSession.aiQuestion)}</span>
-                ${settings.localWorkspaceSession.aiHeadline ? `<span>${escapeHtml(settings.localWorkspaceSession.aiHeadline)}</span>` : ""}
-              </div>
-            `
-            : ""
-        }
-      </div>
-      <div class="detail-actions">
-        ${
-          settings.canRestoreLocalSession
-            ? '<button class="solid detail-inline-button" data-surface-command="continue-local-workspace-session" type="button">恢复到编辑区</button>'
-            : ""
-        }
-        ${
-          settings.localWorkspaceSession
-            ? '<button class="ghost detail-inline-button" data-surface-command="clear-local-workspace-session" type="button">清除本机会话</button>'
-            : ""
-        }
-        ${
-          settings.recoveryCount
-            ? '<button class="ghost detail-inline-button" data-surface-command="restore-all-recovery" type="button">恢复全部草稿</button>'
-            : ""
-        }
-        ${
-          settings.recoveryCount
-            ? '<button class="ghost detail-inline-button" data-surface-command="discard-all-recovery" type="button">清空恢复区</button>'
-            : ""
-        }
-      </div>
-    </article>
-    <article class="view-detail-card">
-      <p class="card-section-label">状态</p>
-      <h3>系统状态</h3>
-      <div class="detail-metric-grid">
-        <div class="detail-metric">
-          <span class="metric-label">桌面桥接</span>
-          <strong>${settings.bridgeAvailable ? "已连接" : "未连接"}</strong>
-        </div>
-        <div class="detail-metric">
-          <span class="metric-label">AI 边界</span>
-          <strong>${settings.aiBoundary.available ? "在线" : "回退"}</strong>
-        </div>
-      </div>
-      <div class="view-stack">
-        <div class="detail-row">
-          <span>桥接模式</span>
-          <strong>${escapeHtml(settings.bridgeMode)}</strong>
-        </div>
-        <div class="detail-row">
-          <span>AI 模式</span>
-          <strong>${escapeHtml(settings.aiBoundary.modeLabel)}</strong>
-        </div>
-        <div class="detail-row detail-row-block">
-          <strong>${escapeHtml(settings.aiBoundary.headline)}</strong>
-          <span>${escapeHtml(settings.aiBoundary.message || "当前 AI 问答和知识页编译会优先通过显式边界，必要时自动回退到本地生成。")}</span>
-        </div>
-      </div>
-      <div class="detail-actions">
-        <button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">刷新桥接状态</button>
-        <button class="ghost detail-inline-button" data-surface-command="refresh-ai-boundary" type="button">刷新 AI 边界</button>
-        <button class="solid detail-inline-button" data-surface-nav="debug" type="button">打开调试中心</button>
-      </div>
-    </article>
-    <article class="view-detail-card">
-      <p class="card-section-label">流程</p>
-      <h3>整理偏好</h3>
-      <div class="view-stack">
-        <div class="detail-row detail-row-block">
-          <strong>当前建议</strong>
-          <span>${escapeHtml(settings.bridgeAvailable ? "如果准备处理真实同步问题，优先切到桌面实时会话；如果只是沉淀内容，继续本机草稿即可。" : "当前更适合先整理本机草稿、补充快速记录，或在演示会话里熟悉界面结构。")}</span>
-        </div>
-        <div class="detail-row">
-          <span>未保存草稿</span>
-          <strong>${escapeHtml(settings.dirtyDraftCount)}</strong>
-        </div>
-        <div class="detail-row">
-          <span>待恢复草稿</span>
-          <strong>${escapeHtml(settings.recoveryCount)}</strong>
-        </div>
-      </div>
-      <div class="detail-actions">
-        <button class="solid detail-inline-button" data-surface-command="quick-capture" type="button">新建快速记录</button>
-        <button class="ghost detail-inline-button" data-surface-nav="overview" type="button">返回仪表盘</button>
-        <button class="ghost detail-inline-button" data-surface-nav="repository" type="button">打开笔记库</button>
-        <button class="ghost detail-inline-button" data-surface-nav="conflicts" type="button">查看冲突解决</button>
+    <article class="view-detail-card is-full-span">
+      <div class="settings-shell">
+        <aside class="settings-sidebar">
+          <div>
+            <p class="card-section-label">设置</p>
+            <h3>NoteAI</h3>
+            <p>面向用户的设置只保留常用入口；诊断与工程能力已经迁到独立调试中心。</p>
+          </div>
+          <nav class="settings-nav-list">
+            ${tabs
+              .map(
+                (tab) => `
+                  <button class="settings-nav-button ${tab.id === activeTab ? "is-active" : ""}" data-settings-surface-tab="${escapeHtml(tab.id)}" type="button">
+                    ${escapeHtml(tab.label)}
+                  </button>
+                `,
+              )
+              .join("")}
+          </nav>
+          <div class="settings-inline-pills">
+            <span class="mini-pill tone-info">${escapeHtml(settings.workspaceSourceDisplay)}</span>
+            <span class="mini-pill tone-${settings.bridgeAvailable ? "success" : "warning"}">${settings.bridgeAvailable ? "桥接在线" : "桥接未连接"}</span>
+          </div>
+        </aside>
+        <section class="settings-content-stack">
+          <header class="settings-header">
+            <p class="card-section-label">${escapeHtml(tabs.find((tab) => tab.id === activeTab)?.label || "设置")}</p>
+            <h2>${escapeHtml(tabMeta[activeTab]?.title || "设置")}</h2>
+            <p>${escapeHtml(tabMeta[activeTab]?.detail || "")}</p>
+          </header>
+          ${content}
+        </section>
       </div>
     </article>
   `;
+  for (const button of elements.viewDetailGrid.querySelectorAll("[data-settings-surface-tab]")) {
+    button.addEventListener("click", () => {
+      state.settingsSurfaceTab = button.dataset.settingsSurfaceTab || "general";
+      render();
+    });
+  }
   bindSurfaceNavButtons(elements.viewDetailGrid);
   bindSurfaceCommandButtons(elements.viewDetailGrid);
   bindSurfaceViewButtons(elements.viewDetailGrid);
@@ -2522,122 +2777,240 @@ function renderViewDetailGrid() {
     const localWorkspaceSession = summarizeLocalWorkspaceSession();
     const workspaceSourceSummary = buildWorkspaceSourceSummary();
     const aiBoundary = buildAiBoundarySummary();
+    const focusEntry = notes.find((entry) => entry.id === state.selectedWorkspaceNoteId) || recentNotes[0] || null;
+    const dashboardInsights = aiBoundary.capabilities.length
+      ? aiBoundary.capabilities.slice(0, 3)
+      : [
+          aiBoundary.answerSourceLabel !== "尚未生成" ? `问答来源：${aiBoundary.answerSourceLabel}` : null,
+          aiBoundary.compileSourceLabel !== "尚未生成" ? `知识页编译：${aiBoundary.compileSourceLabel}` : null,
+          latestActivity ? `最近活动：${formatStatusLabel(latestActivity.status)}` : null,
+        ].filter(Boolean);
 
     elements.viewDetailGrid.hidden = false;
     elements.viewDetailGrid.innerHTML = `
-      <article class="view-detail-card">
-        <p class="card-section-label">同步速览</p>
-        <h3>当前同步状态</h3>
-        <div class="detail-metric-grid">
-          <div class="detail-metric">
-            <span class="metric-label">本地变更</span>
-            <strong>${escapeHtml(summary?.changes?.change_count ?? 0)}</strong>
-          </div>
-          <div class="detail-metric">
-            <span class="metric-label">冲突工件</span>
-            <strong>${escapeHtml(conflictCount)}</strong>
-          </div>
+      <article class="view-detail-card is-full-span">
+        <div class="dashboard-hero-grid">
+          <section class="dashboard-focus-card">
+            <div class="dashboard-focus-copy">
+              <p class="card-section-label">仪表盘</p>
+              <h3>${escapeHtml(focusEntry ? `继续处理「${focusEntry.title}」` : "今天从知识库开始")}</h3>
+              <p>${escapeHtml(focusEntry ? `${workspaceSourceSummary.detail} 当前焦点位于 ${focusEntry.sectionLabel}，可以直接继续编辑或切回同步流程。` : workspaceSourceSummary.detail)}</p>
+            </div>
+            <div class="dashboard-metric-strip">
+              <div class="dashboard-mini-metric">
+                <span class="metric-label">当前工作区</span>
+                <strong>${escapeHtml(formatWorkspaceSourceLabel(state.workspaceSourceLabel))}</strong>
+              </div>
+              <div class="dashboard-mini-metric">
+                <span class="metric-label">可见文档</span>
+                <strong>${escapeHtml(`${notes.length} / ${countWorkspaceNotes(getCurrentWorkspaceShell())}`)}</strong>
+              </div>
+              <div class="dashboard-mini-metric">
+                <span class="metric-label">待处理事项</span>
+                <strong>${escapeHtml(`${draftNotes.length + recoveryDrafts.length + aiWikiReviewNotes.length}`)}</strong>
+              </div>
+            </div>
+            <div class="dashboard-inline-pills">
+              <span class="mini-pill tone-info">${escapeHtml(formatSyncSourceLabel(state.sourceLabel))}</span>
+              <span class="mini-pill tone-${state.bridgeStatus?.available ? "success" : "warning"}">${escapeHtml(state.bridgeStatus?.available ? "桌面连接已接通" : "桌面连接未接通")}</span>
+              ${
+                lastExecution
+                  ? `<span class="mini-pill tone-${escapeHtml(lastExecution.tone)}">${escapeHtml(`最近执行 ${lastExecution.statusLabel}`)}</span>`
+                  : '<span class="mini-pill tone-info">尚未执行同步动作</span>'
+              }
+            </div>
+            <div class="detail-actions">
+              <button class="solid detail-inline-button" data-overview-command="quick-capture" type="button">快速记录</button>
+              ${
+                focusEntry
+                  ? `<button class="ghost detail-inline-button" data-note-edit="${escapeHtml(focusEntry.id)}" type="button">继续编辑焦点文档</button>`
+                  : ""
+              }
+              ${
+                localWorkspaceSession && state.workspaceSourceLabel !== "浏览器本地草稿"
+                  ? '<button class="ghost detail-inline-button" data-overview-command="continue-local-workspace-session" type="button">恢复本机工作区</button>'
+                  : ""
+              }
+              ${
+                state.bridgeStatus?.available
+                  ? '<button class="ghost detail-inline-button" data-overview-command="refresh-session" type="button">进入桌面实时会话</button>'
+                  : '<button class="ghost detail-inline-button" data-overview-command="check-bridge" type="button">检查桌面连接</button>'
+              }
+            </div>
+          </section>
+          <section class="dashboard-insight-card">
+            <div class="dashboard-insight-copy">
+              <p class="card-section-label">AI 洞察</p>
+              <h3>${escapeHtml(aiBoundary.headline)}</h3>
+              <p>${escapeHtml(blockingReasons.length ? `当前同步前还有 ${blockingReasons.length} 个阻塞项，建议先处理草稿和冲突后再推进提交。` : aiBoundary.message || "当前边界状态稳定，可以继续整理知识页、校对 AI 结果，或把草稿推进到同步动作。")}</p>
+            </div>
+            <div class="detail-metric-grid">
+              <div class="detail-metric">
+                <span class="metric-label">当前模式</span>
+                <strong>${escapeHtml(aiBoundary.modeLabel)}</strong>
+              </div>
+              <div class="detail-metric">
+                <span class="metric-label">冲突工件</span>
+                <strong>${escapeHtml(conflictCount)}</strong>
+              </div>
+            </div>
+            <div class="dashboard-inline-pills">
+              ${dashboardInsights.length
+                ? dashboardInsights.map((item) => `<span class="mini-pill tone-info">${escapeHtml(item)}</span>`).join("")
+                : '<span class="mini-pill tone-info">等待下一次 AI 调用</span>'}
+            </div>
+            <div class="detail-actions">
+              <button class="ghost detail-inline-button" data-overview-command="refresh-ai-boundary" type="button">重查 AI 边界</button>
+              <button class="ghost detail-inline-button" data-overview-nav="repository" type="button">打开笔记库</button>
+              <button class="ghost detail-inline-button" data-overview-nav="conflicts" type="button">查看同步详情</button>
+            </div>
+          </section>
         </div>
-        <div class="view-stack">
-          <div class="detail-row detail-row-block">
-            <strong>${escapeHtml(state.bridgeStatus?.available ? "桌面连接已接通" : "桌面连接未接通")}</strong>
-            <span>${escapeHtml(state.bridgeStatus?.available ? "当前可以从工作台直接触发同步动作。" : "仍可整理本地草稿，但暂时无法直接执行实时同步动作。")}</span>
-          </div>
-          <div class="detail-row detail-row-block">
-            <strong>${escapeHtml(blockingReasons.length ? `存在 ${blockingReasons.length} 个阻塞项` : "当前无提交阻塞项")}</strong>
-            <span>${escapeHtml(blockingReasons.length ? blockingReasons.join("，") : "可以在完成草稿整理后，进入冲突处理视图检查详细卡片。")}</span>
-          </div>
+      </article>
+      <article class="view-detail-card is-full-span">
+        <p class="card-section-label">最近编辑</p>
+        <h3>继续最近处理的文档</h3>
+        <div class="dashboard-note-grid">
           ${
-            lastExecution
-              ? `
-                <div class="detail-row detail-row-block">
-                  <strong>${escapeHtml(`最近执行：${lastExecution.actionId}`)}</strong>
-                  <span>${escapeHtml(`${lastExecution.statusLabel} · ${lastExecution.atLabel}`)}</span>
-                </div>
-              `
-              : ""
+            recentNotes.length
+              ? recentNotes
+                  .map((entry) =>
+                    buildDashboardNoteCard(entry, {
+                      summary: summarizeRichText(entry.note.body || "", 88),
+                      pills: [
+                        entry.id === state.selectedWorkspaceNoteId ? "当前查看" : null,
+                        entry.note.lastSaved || entry.status,
+                      ],
+                      buttons: [
+                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                        `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">继续编辑</button>`,
+                      ],
+                    }),
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前还没有可展示的最近编辑文档。</p></div>'
+          }
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">收件箱</p>
+        <h3>先整理待处理记录</h3>
+        <div class="view-stack">
+          ${
+            inboxNotes.length
+              ? inboxNotes
+                  .map((entry) =>
+                    buildOverviewNoteRow(entry, {
+                      summary: "建议先补齐上下文、标签和去向，再决定是否进入同步周期。",
+                      pills: [entry.note.lastSaved || entry.status],
+                      buttons: [
+                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                        `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">继续编辑</button>`,
+                      ],
+                    }),
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>收件箱目前为空，可以直接用上方“快速记录”新增内容。</p></div>'
           }
         </div>
         <div class="detail-actions">
-          <button class="solid detail-inline-button" data-overview-nav="conflicts" type="button">查看同步详情</button>
+          <button class="solid detail-inline-button" data-overview-command="quick-capture" type="button">新建快速记录</button>
+          <button class="ghost detail-inline-button" data-overview-nav="repository" type="button">去笔记库整理</button>
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">同步前准备</p>
+        <h3>把草稿推进到下一步</h3>
+        <div class="view-stack">
+          ${
+            draftNotes.length
+              ? draftNotes
+                  .map((entry) => {
+                    const recommendation = findRecommendedSyncActionForNote(entry.note);
+                    return buildOverviewNoteRow(entry, {
+                      summary: recommendation
+                        ? `推荐动作：${recommendation.action.label}`
+                        : "当前还没有匹配到下一步同步动作。",
+                      pills: [entry.note.statusLabel || entry.status, recommendation?.action?.command || null],
+                      buttons: [
+                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                        recommendation
+                          ? `<button class="ghost detail-inline-button" data-note-select-action="${escapeHtml(entry.id)}" type="button">选中动作</button>`
+                          : "",
+                      ],
+                    });
+                  })
+                  .join("")
+              : '<div class="empty-state"><p>当前没有处于草稿态的文档。</p></div>'
+          }
+        </div>
+        <div class="detail-actions">
+          ${
+            actionableDraft
+              ? `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(actionableDraft.id)}" type="button">打开当前草稿</button>`
+              : ""
+          }
+          ${
+            actionableDraft && recommendedDraftAction
+              ? `<button class="solid detail-inline-button" data-note-execute-action="${escapeHtml(actionableDraft.id)}" type="button">执行「${escapeHtml(recommendedDraftAction.action.label)}」</button>`
+              : ""
+          }
           <button class="ghost detail-inline-button" data-overview-command="refresh-session" type="button">刷新实时会话</button>
         </div>
       </article>
       <article class="view-detail-card">
-        <p class="card-section-label">工作区入口</p>
-        <h3>立即开始</h3>
-        <div class="detail-metric-grid">
-          <div class="detail-metric">
-            <span class="metric-label">当前工作区</span>
-            <strong>${escapeHtml(formatWorkspaceSourceLabel(state.workspaceSourceLabel))}</strong>
-          </div>
-          <div class="detail-metric">
-            <span class="metric-label">同步看板</span>
-            <strong>${escapeHtml(formatSyncSourceLabel(state.sourceLabel))}</strong>
-          </div>
-        </div>
-        <div class="view-stack">
-          <div class="detail-row detail-row-block">
-            <strong>${escapeHtml(workspaceSourceSummary.headline)}</strong>
-            <span>${escapeHtml(workspaceSourceSummary.detail)}</span>
-          </div>
-          <div class="detail-row detail-row-block">
-            <strong>${escapeHtml(state.bridgeStatus?.available ? "桌面实时会话可直接进入" : "当前更适合先整理本机草稿")}</strong>
-            <span>${escapeHtml(state.bridgeStatus?.available ? "如果准备继续真实同步流程，可以直接拉取桌面实时会话。" : "桌面连接还没接通时，继续本机草稿或演示会话会更顺畅。")}</span>
-          </div>
-        </div>
-        <div class="detail-actions">
-          ${
-            localWorkspaceSession && state.workspaceSourceLabel !== "浏览器本地草稿"
-              ? '<button class="solid detail-inline-button" data-overview-command="continue-local-workspace-session" type="button">继续本机草稿</button>'
-              : ""
-          }
-          ${
-            state.bridgeStatus?.available
-              ? '<button class="ghost detail-inline-button" data-overview-command="refresh-session" type="button">进入桌面实时会话</button>'
-              : '<button class="ghost detail-inline-button" data-overview-command="check-bridge" type="button">检查桌面连接</button>'
-          }
-          <button class="ghost detail-inline-button" data-overview-command="load-sample-session" type="button">切到演示会话</button>
-          <button class="ghost detail-inline-button" data-overview-command="open-settings" type="button">更多入口</button>
-        </div>
-      </article>
-      <article class="view-detail-card">
-        <p class="card-section-label">最近处理</p>
-        <h3>会话节奏</h3>
+        <p class="card-section-label">AI 知识页</p>
+        <h3>校对与回看队列</h3>
         <div class="view-stack">
           ${
-            recentSessionEntries.length
-              ? recentSessionEntries
-                  .map(
-                    (entry) => `
-                      <div class="detail-row detail-row-block">
-                        <strong>${escapeHtml(formatSessionEventLabel(entry.type))}</strong>
-                        <span>${escapeHtml(entry.detail || "无附加说明")}</span>
-                        <span>${escapeHtml(formatDateTime(entry.atMs))}</span>
-                      </div>
-                    `,
+            aiWikiReviewNotes.length
+              ? aiWikiReviewNotes
+                  .map((entry) =>
+                    buildOverviewNoteRow(entry, {
+                      summary: entry.note.ai?.sourceNoteIds?.length
+                        ? `待校对，已汇总 ${entry.note.ai.sourceNoteIds.length} 篇来源文档，建议先核对结构与事实。`
+                        : "待校对，建议先核对结构、摘要和关键实体。",
+                      pills: [entry.note.statusLabel || entry.status, entry.note.ai?.sourceScopeLabel || null, entry.note.lastSaved || null],
+                      buttons: [
+                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                        `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">继续编辑</button>`,
+                        `<button class="ghost detail-inline-button" data-note-review-ai-wiki="${escapeHtml(entry.id)}" type="button">标记已校对</button>`,
+                      ],
+                    }),
                   )
                   .join("")
-              : '<div class="empty-state"><p>当前还没有前端会话记录。</p></div>'
+              : '<div class="empty-state"><p>当前没有待校对的 AI 知识页，可先在右侧 AI 面板生成新的 `.ai/wiki`。</p></div>'
           }
           ${
-            latestActivity
-              ? `
-                <div class="detail-row detail-row-block">
-                  <strong>${escapeHtml(`最新同步活动：${latestActivity.action_id}`)}</strong>
-                  <span>${escapeHtml(`${formatStatusLabel(latestActivity.status)} · ${formatDateTime(latestActivity.occurred_at_ms)}`)}</span>
-                </div>
-              `
+            aiWikiReviewedNotes.length
+              ? aiWikiReviewedNotes
+                  .slice(0, 2)
+                  .map((entry) =>
+                    buildOverviewNoteRow(entry, {
+                      summary: "这篇知识页已经完成一轮人工校对，修改正文后会重新回到待校对状态。",
+                      pills: [entry.note.statusLabel || entry.status, entry.note.ai?.sourceScopeLabel || null],
+                      buttons: [
+                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                        `<button class="ghost detail-inline-button" data-note-reopen-ai-wiki="${escapeHtml(entry.id)}" type="button">退回整理</button>`,
+                      ],
+                    }),
+                  )
+                  .join("")
               : ""
           }
         </div>
         <div class="detail-actions">
-          <button class="ghost detail-inline-button" data-overview-nav="conflicts" type="button">打开活动流</button>
+          ${
+            aiWikiNotes[0]
+              ? `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(aiWikiNotes[0].id)}" type="button">打开最新知识页</button>`
+              : ""
+          }
+          <button class="ghost detail-inline-button" data-overview-nav="repository" type="button">进入笔记库</button>
         </div>
       </article>
       <article class="view-detail-card">
-        <p class="card-section-label">异常恢复</p>
-        <h3>草稿恢复</h3>
+        <p class="card-section-label">本机恢复</p>
+        <h3>保持会话连续性</h3>
         <div class="view-stack">
           ${
             recoveryDrafts.length
@@ -2664,7 +3037,49 @@ function renderViewDetailGrid() {
                     `,
                   )
                   .join("")
-              : '<div class="empty-state"><p>当前没有等待恢复的本地草稿。</p></div>'
+              : localWorkspaceSession
+                ? `
+                  <article class="detail-row detail-row-block overview-row">
+                    <div class="overview-row-main">
+                      <div class="overview-row-copy">
+                        <strong>已保存本机工作区</strong>
+                        <span>${escapeHtml(`${localWorkspaceSession.sectionCount} 个分区 · ${localWorkspaceSession.noteCount} 篇文档`)}</span>
+                        <span>${escapeHtml(`最后保存于 ${formatDateTime(localWorkspaceSession.savedAtMs)}`)}</span>
+                        ${
+                          localWorkspaceSession.aiHeadline
+                            ? `<span>${escapeHtml(`最近 AI 结论：${localWorkspaceSession.aiHeadline}`)}</span>`
+                            : ""
+                        }
+                      </div>
+                      <div class="overview-row-meta">
+                        <span class="mini-pill tone-success">可自动恢复</span>
+                        <span class="mini-pill tone-info">${escapeHtml(formatNavViewLabel(localWorkspaceSession.activeNavView || "overview"))}</span>
+                      </div>
+                    </div>
+                  </article>
+                `
+                : '<div class="empty-state"><p>当前没有待恢复草稿，本机工作区也未保存新的会话快照。</p></div>'
+          }
+          ${
+            recentSessionEntries.length
+              ? `
+                <div class="detail-row detail-row-block">
+                  <strong>${escapeHtml(formatSessionEventLabel(recentSessionEntries[0].type))}</strong>
+                  <span>${escapeHtml(recentSessionEntries[0].detail || "无附加说明")}</span>
+                  <span>${escapeHtml(formatDateTime(recentSessionEntries[0].atMs))}</span>
+                </div>
+              `
+              : ""
+          }
+          ${
+            latestActivity
+              ? `
+                <div class="detail-row detail-row-block">
+                  <strong>${escapeHtml(`最新同步活动：${latestActivity.action_id}`)}</strong>
+                  <span>${escapeHtml(`${formatStatusLabel(latestActivity.status)} · ${formatDateTime(latestActivity.occurred_at_ms)}`)}</span>
+                </div>
+              `
+              : ""
           }
         </div>
         <div class="detail-actions">
@@ -2678,231 +3093,11 @@ function renderViewDetailGrid() {
               ? `<button class="ghost detail-inline-button" data-overview-command="discard-all-recovery" type="button">清空恢复区</button>`
               : ""
           }
-        </div>
-      </article>
-      <article class="view-detail-card">
-        <p class="card-section-label">会话连续性</p>
-        <h3>本机工作区会话</h3>
-        <div class="view-stack">
           ${
             localWorkspaceSession
-              ? `
-                <article class="detail-row detail-row-block overview-row">
-                  <div class="overview-row-main">
-                    <div class="overview-row-copy">
-                      <strong>已保存本机工作区</strong>
-                      <span>${escapeHtml(`${localWorkspaceSession.sectionCount} 个分区 · ${localWorkspaceSession.noteCount} 篇文档`)}</span>
-                      <span>${escapeHtml(`最后保存于 ${formatDateTime(localWorkspaceSession.savedAtMs)}`)}</span>
-                      ${
-                        localWorkspaceSession.searchQuery
-                          ? `<span>${escapeHtml(`上次搜索：${localWorkspaceSession.searchQuery}`)}</span>`
-                          : ""
-                      }
-                      ${
-                        localWorkspaceSession.aiHeadline
-                          ? `<span>${escapeHtml(`最近 AI 结论：${localWorkspaceSession.aiHeadline}`)}</span>`
-                          : ""
-                      }
-                    </div>
-                    <div class="overview-row-meta">
-                      <span class="mini-pill tone-success">可自动恢复</span>
-                      <span class="mini-pill tone-info">${escapeHtml(formatNavViewLabel(localWorkspaceSession.activeNavView || "overview"))}</span>
-                      ${
-                        localWorkspaceSession.aiGeneratedAtMs
-                          ? `<span class="mini-pill tone-info">${escapeHtml(`AI ${formatDateTime(localWorkspaceSession.aiGeneratedAtMs)}`)}</span>`
-                          : ""
-                      }
-                    </div>
-                  </div>
-                  <div class="detail-actions overview-row-actions">
-                    <button class="ghost detail-inline-button" data-overview-command="open-settings" type="button">管理会话</button>
-                    <button class="ghost detail-inline-button" data-overview-command="clear-local-workspace-session" type="button">清除恢复入口</button>
-                  </div>
-                </article>
-              `
-              : '<div class="empty-state"><p>当前没有保存中的本机工作区会话，刷新后会直接进入演示会话或本地桥接会话。</p></div>'
-          }
-        </div>
-      </article>
-      <article class="view-detail-card">
-        <p class="card-section-label">工作台入口</p>
-        <h3>最近编辑</h3>
-        <div class="view-stack">
-          ${
-            recentNotes.length
-              ? recentNotes
-                  .map(
-                    (entry) =>
-                      buildOverviewNoteRow(entry, {
-                        pills: [
-                          entry.id === state.selectedWorkspaceNoteId ? "当前查看" : null,
-                          entry.note.lastSaved || entry.status,
-                        ],
-                        buttons: [
-                          `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
-                        ],
-                      }),
-                  )
-                  .join("")
-              : '<div class="empty-state"><p>当前还没有可展示的最近编辑文档。</p></div>'
-          }
-        </div>
-      </article>
-      <article class="view-detail-card">
-        <p class="card-section-label">AI 知识页</p>
-        <h3>校对队列</h3>
-        <div class="view-stack">
-          ${
-            aiWikiReviewNotes.length
-              ? aiWikiReviewNotes
-                  .map((entry) =>
-                    buildOverviewNoteRow(entry, {
-                      summary: entry.note.ai?.sourceNoteIds?.length
-                        ? `待校对，已汇总 ${entry.note.ai.sourceNoteIds.length} 篇来源文档，建议先核对结构和事实。`
-                        : "待校对，建议先核对结构、摘要和关键实体。",
-                      pills: [entry.note.statusLabel || entry.status, entry.note.ai?.sourceScopeLabel || null, entry.note.lastSaved || null],
-                      buttons: [
-                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
-                        `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">继续编辑</button>`,
-                        `<button class="ghost detail-inline-button" data-note-review-ai-wiki="${escapeHtml(entry.id)}" type="button">标记已校对</button>`,
-                      ],
-                    }),
-                  )
-                  .join("")
-              : '<div class="empty-state"><p>当前没有待校对的 AI 知识页，可先在右侧 AI 面板生成新的 `.ai/wiki`，或查看下方已校对队列。</p></div>'
-          }
-        </div>
-        <div class="view-stack">
-          ${
-            aiWikiReviewedNotes.length
-              ? aiWikiReviewedNotes
-                  .map((entry) =>
-                    buildOverviewNoteRow(entry, {
-                      summary: "已完成一轮人工校对；如果继续修改正文，保存后会重新回到待校对状态。",
-                      pills: [entry.note.statusLabel || entry.status, entry.note.ai?.sourceScopeLabel || null, entry.note.lastSaved || null],
-                      buttons: [
-                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
-                        `<button class="ghost detail-inline-button" data-note-reopen-ai-wiki="${escapeHtml(entry.id)}" type="button">退回整理</button>`,
-                      ],
-                    }),
-                  )
-                  .join("")
-              : '<div class="empty-state"><p>当前还没有完成校对的 AI 知识页。</p></div>'
-          }
-        </div>
-        <div class="detail-actions">
-          ${
-            aiWikiNotes[0]
-              ? `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(aiWikiNotes[0].id)}" type="button">打开最新知识页</button>`
+              ? '<button class="ghost detail-inline-button" data-overview-command="open-settings" type="button">管理恢复设置</button>'
               : ""
           }
-          <button class="ghost detail-inline-button" data-overview-nav="repository" type="button">打开仓库浏览</button>
-        </div>
-      </article>
-      <article class="view-detail-card">
-        <p class="card-section-label">AI 调用边界</p>
-        <h3>${escapeHtml(aiBoundary.headline)}</h3>
-        <div class="detail-metric-grid">
-          <div class="detail-metric">
-            <span class="metric-label">当前模式</span>
-            <strong>${escapeHtml(aiBoundary.modeLabel)}</strong>
-          </div>
-          <div class="detail-metric">
-            <span class="metric-label">最近检查</span>
-            <strong>${escapeHtml(aiBoundary.checkedAtLabel)}</strong>
-          </div>
-        </div>
-        <div class="view-stack">
-          <div class="detail-row detail-row-block">
-            <strong>${escapeHtml(`问答来源：${aiBoundary.answerSourceLabel}`)}</strong>
-            <span>${escapeHtml(`知识页编译：${aiBoundary.compileSourceLabel}`)}</span>
-          </div>
-          ${
-            aiBoundary.message
-              ? `
-                <div class="detail-row detail-row-block">
-                  <strong>最近失败原因</strong>
-                  <span>${escapeHtml(aiBoundary.message)}</span>
-                </div>
-              `
-              : ""
-          }
-          <div class="detail-row detail-row-block">
-            <strong>${escapeHtml(aiBoundary.capabilities.length ? `已挂载 ${aiBoundary.capabilities.length} 个能力` : "当前尚未返回能力清单")}</strong>
-            <span>${escapeHtml(aiBoundary.capabilities.length ? aiBoundary.capabilities.join(" / ") : aiBoundary.message || "可继续在右侧 AI 面板触发调用并观察边界状态。")}</span>
-          </div>
-        </div>
-        <div class="detail-actions">
-          <button class="ghost detail-inline-button" data-overview-command="refresh-ai-boundary" type="button">重查 AI 边界</button>
-          <button class="ghost detail-inline-button" data-overview-command="open-settings" type="button">打开设置</button>
-        </div>
-      </article>
-      <article class="view-detail-card">
-        <p class="card-section-label">收件箱</p>
-        <h3>待整理记录</h3>
-        <div class="view-stack">
-          ${
-            inboxNotes.length
-              ? inboxNotes
-                  .map(
-                    (entry) =>
-                      buildOverviewNoteRow(entry, {
-                        summary: "建议先补充上下文，再决定是否进入同步周期。",
-                        pills: [entry.status],
-                        buttons: [
-                          `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
-                          `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">继续编辑</button>`,
-                        ],
-                      }),
-                  )
-                  .join("")
-              : '<div class="empty-state"><p>收件箱目前为空，可以直接点顶部“快速记录”。</p></div>'
-          }
-        </div>
-        <div class="detail-actions">
-          <button class="solid detail-inline-button" data-overview-command="quick-capture" type="button">新建快速记录</button>
-        </div>
-      </article>
-      <article class="view-detail-card">
-        <p class="card-section-label">同步前准备</p>
-        <h3>待同步草稿</h3>
-        <div class="view-stack">
-          ${
-            draftNotes.length
-              ? draftNotes
-                  .map(
-                    (entry) => {
-                      const recommendation = findRecommendedSyncActionForNote(entry.note);
-                      return buildOverviewNoteRow(entry, {
-                        summary: recommendation
-                          ? `推荐动作：${recommendation.action.label}`
-                          : "当前没有匹配到可继续的同步动作。",
-                        pills: [entry.note.statusLabel || entry.status, recommendation?.action?.command || null],
-                        buttons: [
-                          `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
-                          recommendation
-                            ? `<button class="ghost detail-inline-button" data-note-select-action="${escapeHtml(entry.id)}" type="button">选中动作</button>`
-                            : "",
-                        ],
-                      });
-                    },
-                  )
-                  .join("")
-              : '<div class="empty-state"><p>当前没有处于草稿态的文档。</p></div>'
-          }
-        </div>
-        <div class="detail-actions">
-          ${
-            actionableDraft
-              ? `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(actionableDraft.id)}" type="button">打开当前草稿</button>`
-              : ""
-          }
-          ${
-            actionableDraft && recommendedDraftAction
-              ? `<button class="solid detail-inline-button" data-note-execute-action="${escapeHtml(actionableDraft.id)}" type="button">执行「${escapeHtml(recommendedDraftAction.action.label)}」</button>`
-              : ""
-          }
-          <button class="ghost detail-inline-button" data-overview-command="refresh-session" type="button">刷新实时会话</button>
         </div>
       </article>
     `;
@@ -3031,35 +3226,115 @@ function renderViewDetailGrid() {
     );
     elements.viewDetailGrid.hidden = false;
     elements.viewDetailGrid.innerHTML = `
-      <article class="view-detail-card">
-        <p class="card-section-label">仓库结构</p>
-        <h3>分区入口</h3>
-        <div class="view-stack">
+      <article class="view-detail-card is-full-span">
+        <div class="repository-shell">
+          <div class="repository-shell-header">
+            <div class="settings-panel-copy">
+              <p class="card-section-label">笔记库</p>
+              <h3>${escapeHtml(selectedEntry ? `浏览「${selectedEntry.title}」所在上下文` : "浏览当前知识库")}</h3>
+              <p>${escapeHtml(state.searchQuery ? `当前搜索词为“${state.searchQuery}”，以下内容只展示命中的仓库片段。` : "这里按分区、当前焦点和处理队列组织仓库内容，面向日常浏览与整理，不展示调试信息。")}</p>
+            </div>
+            <div class="dashboard-inline-pills">
+              <span class="mini-pill tone-info">${escapeHtml(`可见文档 ${repository.visibleEntries.length}`)}</span>
+              <span class="mini-pill tone-${dirtyDraftCount ? "warning" : "success"}">${escapeHtml(`未保存草稿 ${dirtyDraftCount}`)}</span>
+              <span class="mini-pill tone-info">${escapeHtml(formatWorkspaceSourceLabel(state.workspaceSourceLabel))}</span>
+            </div>
+          </div>
+          <article class="repository-note-card">
+            <div class="repository-note-head">
+              <div>
+                <p class="card-meta">${escapeHtml(selectedEntry ? `${selectedEntry.sectionLabel} · ${selectedEntry.path}` : "当前没有命中文档")}</p>
+                <h3>${escapeHtml(selectedEntry ? selectedEntry.title : "请调整搜索词或切换分区")}</h3>
+              </div>
+              ${
+                selectedEntry
+                  ? `<span class="mini-pill tone-${resolveTone(selectedEntry.note.statusTone || "info")}">${escapeHtml(selectedEntry.note.statusLabel || selectedEntry.status)}</span>`
+                  : ""
+              }
+            </div>
+            <p class="repository-note-summary">${escapeHtml(selectedEntry ? summarizeRichText(selectedEntry.note.body || "", 180) : "当前搜索结果为空。你可以清空搜索，回到完整的分区浏览视图。")}</p>
+            <div class="dashboard-metric-strip">
+              <div class="dashboard-mini-metric">
+                <span class="metric-label">同步看板</span>
+                <strong>${escapeHtml(formatSyncSourceLabel(state.sourceLabel))}</strong>
+              </div>
+              <div class="dashboard-mini-metric">
+                <span class="metric-label">推荐动作</span>
+                <strong>${escapeHtml(selectedRecommendation ? selectedRecommendation.action.label : "暂未推荐")}</strong>
+              </div>
+              <div class="dashboard-mini-metric">
+                <span class="metric-label">可移动分区</span>
+                <strong>${escapeHtml(repositoryMoveTargets.length)}</strong>
+              </div>
+            </div>
+            <div class="repository-note-meta">
+              ${
+                selectedEntry
+                  ? (selectedEntry.note.tags || []).slice(0, 3).map((tag) => `<span class="mini-pill tone-info">${escapeHtml(tag)}</span>`).join("")
+                  : '<span class="mini-pill tone-info">等待命中仓库文档</span>'
+              }
+            </div>
+            <div class="repository-note-actions">
+              ${
+                selectedEntry
+                  ? `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(selectedEntry.id)}" type="button">继续编辑</button>`
+                  : ""
+              }
+              ${
+                selectedEntry
+                  ? `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(selectedEntry.id)}" type="button">在工作区打开</button>`
+                  : ""
+              }
+              ${
+                selectedRecommendation
+                  ? `<button class="ghost detail-inline-button" data-note-select-action="${escapeHtml(selectedEntry.id)}" type="button">选中推荐动作</button>`
+                  : ""
+              }
+              ${
+                selectedEntry
+                  ? repositoryMoveTargets
+                      .slice(0, 2)
+                      .map(
+                        (section) =>
+                          `<button class="ghost detail-inline-button" data-note-move="${escapeHtml(section.id)}" type="button">整理到 ${escapeHtml(section.label)}</button>`,
+                      )
+                      .join("")
+                  : ""
+              }
+              <button class="ghost detail-inline-button" data-view-command="clear-search" type="button">清空搜索</button>
+            </div>
+          </article>
+        </div>
+      </article>
+      <article class="view-detail-card is-full-span">
+        <p class="card-section-label">分区浏览</p>
+        <h3>按仓库结构进入内容</h3>
+        <div class="repository-section-grid">
           ${repository.sectionCards
             .map(
               (section) => `
-                <article class="detail-row detail-row-block overview-row">
-                  <div class="overview-row-main">
-                    <div class="overview-row-copy">
-                      <strong>${escapeHtml(section.label)}</strong>
-                      <span>${escapeHtml(`当前可见 ${section.visibleCount} / 总计 ${section.totalCount} 篇`)}</span>
-                      <span>${escapeHtml(section.leadEntry ? `当前焦点：${section.leadEntry.title}` : "当前分区还没有可展示文档。")}</span>
+                <article class="repository-section-card">
+                  <div class="repository-note-head">
+                    <div>
+                      <p class="card-meta">${escapeHtml(`当前可见 ${section.visibleCount} / 总计 ${section.totalCount} 篇`)}</p>
+                      <h4>${escapeHtml(section.label)}</h4>
                     </div>
-                    <div class="overview-row-meta">
-                      <span class="mini-pill tone-info">${escapeHtml(section.totalCount)} 篇</span>
-                      ${
-                        section.draftCount
-                          ? `<span class="mini-pill tone-warning">${escapeHtml(section.draftCount)} 草稿</span>`
-                          : ""
-                      }
-                      ${
-                        section.riskCount
-                          ? `<span class="mini-pill tone-danger">${escapeHtml(section.riskCount)} 风险</span>`
-                          : ""
-                      }
-                    </div>
+                    <span class="mini-pill tone-info">${escapeHtml(`${section.totalCount} 篇`)}</span>
                   </div>
-                  <div class="detail-actions overview-row-actions">
+                  <p>${escapeHtml(section.leadEntry ? `当前焦点：${section.leadEntry.title}` : "当前分区还没有可展示文档。")}</p>
+                  <div class="dashboard-inline-pills">
+                    ${
+                      section.draftCount
+                        ? `<span class="mini-pill tone-warning">${escapeHtml(`${section.draftCount} 草稿`)}</span>`
+                        : '<span class="mini-pill tone-success">草稿稳定</span>'
+                    }
+                    ${
+                      section.riskCount
+                        ? `<span class="mini-pill tone-danger">${escapeHtml(`${section.riskCount} 风险`)}</span>`
+                        : '<span class="mini-pill tone-info">无高风险条目</span>'
+                    }
+                  </div>
+                  <div class="detail-actions">
                     <button class="ghost detail-inline-button" data-section-focus="${escapeHtml(section.label)}" type="button">只看这一分区</button>
                     ${
                       section.leadEntry
@@ -3073,95 +3348,69 @@ function renderViewDetailGrid() {
             .join("")}
         </div>
       </article>
-      <article class="view-detail-card">
-        <p class="card-section-label">当前焦点</p>
-        <h3>仓库处理队列</h3>
-        <div class="view-stack">
-          <div class="detail-row detail-row-block">
-            <strong>${escapeHtml(selectedEntry ? selectedEntry.title : "当前没有命中文档")}</strong>
-            <span>${escapeHtml(selectedEntry ? `${selectedEntry.sectionLabel} · ${selectedEntry.path}` : "请调整搜索词或切换分区。")}</span>
-            <span>${escapeHtml(selectedEntry ? selectedEntry.note.statusLabel : "当前搜索结果为空。")}</span>
-          </div>
-          <div class="detail-metric-grid">
-            <div class="detail-metric">
-              <span class="metric-label">可见文档</span>
-              <strong>${escapeHtml(repository.visibleEntries.length)}</strong>
-            </div>
-            <div class="detail-metric">
-              <span class="metric-label">未保存草稿</span>
-              <strong>${escapeHtml(dirtyDraftCount)}</strong>
-            </div>
-          </div>
-          <div class="detail-row">
-            <span>工作区来源</span>
-            <strong>${escapeHtml(formatWorkspaceSourceLabel(state.workspaceSourceLabel))}</strong>
-          </div>
-          <div class="detail-row">
-            <span>同步看板</span>
-            <strong>${escapeHtml(formatSyncSourceLabel(state.sourceLabel))}</strong>
-          </div>
-        </div>
-        <div class="detail-actions">
+      <article class="view-detail-card is-full-span">
+        <p class="card-section-label">可见文档</p>
+        <h3>当前视野里的主要内容</h3>
+        <div class="repository-note-grid">
           ${
-            selectedEntry
-              ? `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(selectedEntry.id)}" type="button">继续编辑当前文档</button>`
-              : ""
-          }
-          ${
-            selectedRecommendation
-              ? `<button class="ghost detail-inline-button" data-note-select-action="${escapeHtml(selectedEntry.id)}" type="button">选中推荐动作</button>`
-              : ""
-          }
-          ${
-            selectedEntry
-              ? repositoryMoveTargets
-                  .map(
-                    (section) =>
-                      `<button class="ghost detail-inline-button" data-note-move="${escapeHtml(section.id)}" type="button">整理到 ${escapeHtml(section.label)}</button>`,
-                  )
+            repository.visibleEntries.length
+              ? repository.visibleEntries
+                  .slice(0, 6)
+                  .map((entry) => {
+                    const recommendation = findRecommendedSyncActionForNote(entry.note);
+                    return buildRepositoryNoteCard(entry, {
+                      summary: summarizeRichText(entry.note.body || "", 110),
+                      pills: [
+                        entry.id === state.selectedWorkspaceNoteId ? "当前焦点" : null,
+                        recommendation?.action?.label || null,
+                        entry.note.lastSaved || null,
+                      ],
+                      buttons: [
+                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                        `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">编辑</button>`,
+                      ],
+                    });
+                  })
                   .join("")
-              : ""
+              : '<div class="empty-state"><p>当前没有命中任何可见文档，建议清空搜索后再浏览。</p></div>'
           }
-          <button class="ghost detail-inline-button" data-view-command="clear-search" type="button">清空搜索</button>
         </div>
       </article>
       <article class="view-detail-card">
-        <p class="card-section-label">待处理草稿</p>
-        <h3>进入同步前</h3>
+        <p class="card-section-label">草稿队列</p>
+        <h3>进入同步前的内容</h3>
         <div class="view-stack">
           ${
             repository.draftEntries.length
               ? repository.draftEntries
                   .slice(0, 4)
-                  .map(
-                    (entry) => {
-                      const draft = getEditorDraftByNoteId(entry.id);
-                      const recommendation = findRecommendedSyncActionForNote(entry.note);
-                      return buildOverviewNoteRow(entry, {
-                        summary: draft && isEditorDraftDirty(entry.note, draft)
-                          ? "本地草稿仍有未保存修改，建议先保存。"
-                          : recommendation
-                            ? `推荐动作：${recommendation.action.label}`
-                            : "当前还没有匹配到下一步同步动作。",
-                        pills: [
-                          draft && isEditorDraftDirty(entry.note, draft) ? "未保存修改" : null,
-                          recommendation?.action?.command || null,
-                        ],
-                        buttons: [
-                          `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
-                          `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">编辑</button>`,
-                        ],
-                      });
-                    },
-                  )
+                  .map((entry) => {
+                    const draft = getEditorDraftByNoteId(entry.id);
+                    const recommendation = findRecommendedSyncActionForNote(entry.note);
+                    return buildOverviewNoteRow(entry, {
+                      summary: draft && isEditorDraftDirty(entry.note, draft)
+                        ? "本地草稿仍有未保存修改，建议先保存。"
+                        : recommendation
+                          ? `推荐动作：${recommendation.action.label}`
+                          : "当前还没有匹配到下一步同步动作。",
+                      pills: [
+                        draft && isEditorDraftDirty(entry.note, draft) ? "未保存修改" : null,
+                        recommendation?.action?.command || null,
+                      ],
+                      buttons: [
+                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                        `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">编辑</button>`,
+                      ],
+                    });
+                  })
                   .join("")
               : '<div class="empty-state"><p>当前没有挂起的草稿队列，可以继续整理仓库内容。</p></div>'
           }
         </div>
       </article>
       <article class="view-detail-card">
-        <p class="card-section-label">AI 知识页</p>
-        <h3>待校对队列</h3>
+        <p class="card-section-label">AI 校对</p>
+        <h3>待校对知识页</h3>
         <div class="view-stack">
           ${
             repository.aiWikiReviewEntries.length
@@ -3181,13 +3430,13 @@ function renderViewDetailGrid() {
                     }),
                   )
                   .join("")
-              : '<div class="empty-state"><p>当前可见范围里没有 AI 知识页，可先在右侧 AI 面板中生成。</p></div>'
+              : '<div class="empty-state"><p>当前可见范围里没有待校对的 AI 知识页。</p></div>'
           }
         </div>
       </article>
       <article class="view-detail-card">
-        <p class="card-section-label">AI 知识页</p>
-        <h3>已校对队列</h3>
+        <p class="card-section-label">已校对</p>
+        <h3>可继续沉淀的知识页</h3>
         <div class="view-stack">
           ${
             repository.aiWikiReviewedEntries.length
@@ -3210,28 +3459,25 @@ function renderViewDetailGrid() {
       </article>
       <article class="view-detail-card">
         <p class="card-section-label">风险与阻塞</p>
-        <h3>需要优先关注</h3>
+        <h3>需要优先处理的条目</h3>
         <div class="view-stack">
           ${
             repository.riskEntries.length
               ? repository.riskEntries
                   .slice(0, 4)
-                  .map(
-                    (entry) =>
-                      {
-                        const recommendation = findRecommendedSyncActionForNote(entry.note);
-                        return buildOverviewNoteRow(entry, {
-                          summary: `${entry.note.lastSaved || entry.status} · ${entry.note.path || entry.path}`,
-                          pills: [entry.note.statusLabel || entry.status, recommendation?.action?.command || null],
-                          buttons: [
-                            `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
-                            recommendation
-                              ? `<button class="ghost detail-inline-button" data-note-execute-action="${escapeHtml(entry.id)}" type="button">执行推荐动作</button>`
-                              : "",
-                          ],
-                        });
-                      },
-                  )
+                  .map((entry) => {
+                    const recommendation = findRecommendedSyncActionForNote(entry.note);
+                    return buildOverviewNoteRow(entry, {
+                      summary: `${entry.note.lastSaved || entry.status} · ${entry.note.path || entry.path}`,
+                      pills: [entry.note.statusLabel || entry.status, recommendation?.action?.command || null],
+                      buttons: [
+                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                        recommendation
+                          ? `<button class="ghost detail-inline-button" data-note-execute-action="${escapeHtml(entry.id)}" type="button">执行推荐动作</button>`
+                          : "",
+                      ],
+                    });
+                  })
                   .join("")
               : '<div class="empty-state"><p>当前可见文档里没有高风险条目。</p></div>'
           }
@@ -5498,6 +5744,58 @@ function buildOverviewNoteRow(entry, options = {}) {
           ? `<div class="detail-actions overview-row-actions">${buttons.join("")}</div>`
           : ""
       }
+    </article>
+  `;
+}
+
+function buildDashboardNoteCard(entry, options = {}) {
+  const note = entry.note || {};
+  const summary = options.summary || summarizeRichText(note.body || "", 92);
+  const pills = (options.pills || []).filter(Boolean).slice(0, 3);
+  const buttons = (options.buttons || []).filter(Boolean);
+  const meta = options.meta || [entry.sectionLabel, note.lastSaved || entry.status].filter(Boolean).join(" · ");
+  return `
+    <article class="dashboard-note-card">
+      <div class="dashboard-note-head">
+        <div>
+          <p class="card-meta">${escapeHtml(meta)}</p>
+          <h4>${escapeHtml(entry.title)}</h4>
+        </div>
+        <span class="mini-pill tone-${resolveTone(note.statusTone || "info")}">${escapeHtml(note.statusLabel || entry.status)}</span>
+      </div>
+      <p class="dashboard-note-summary">${escapeHtml(summary)}</p>
+      ${
+        pills.length
+          ? `<div class="dashboard-note-meta">${pills.map((pill) => `<span class="mini-pill tone-info">${escapeHtml(pill)}</span>`).join("")}</div>`
+          : ""
+      }
+      ${buttons.length ? `<div class="dashboard-note-actions">${buttons.join("")}</div>` : ""}
+    </article>
+  `;
+}
+
+function buildRepositoryNoteCard(entry, options = {}) {
+  const note = entry.note || {};
+  const summary = options.summary || summarizeRichText(note.body || "", 108);
+  const pills = (options.pills || []).filter(Boolean).slice(0, 3);
+  const buttons = (options.buttons || []).filter(Boolean);
+  const meta = options.meta || [entry.sectionLabel, note.lastSaved || entry.status].filter(Boolean).join(" · ");
+  return `
+    <article class="repository-note-card">
+      <div class="repository-note-head">
+        <div>
+          <p class="card-meta">${escapeHtml(meta)}</p>
+          <h3>${escapeHtml(entry.title)}</h3>
+        </div>
+        <span class="mini-pill tone-${resolveTone(note.statusTone || "info")}">${escapeHtml(note.statusLabel || entry.status)}</span>
+      </div>
+      <p class="repository-note-summary">${escapeHtml(summary)}</p>
+      ${
+        pills.length
+          ? `<div class="repository-note-meta">${pills.map((pill) => `<span class="mini-pill tone-info">${escapeHtml(pill)}</span>`).join("")}</div>`
+          : ""
+      }
+      ${buttons.length ? `<div class="repository-note-actions">${buttons.join("")}</div>` : ""}
     </article>
   `;
 }

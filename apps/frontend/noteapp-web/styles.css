@@ -1030,6 +1030,318 @@ pre {
   gap: 14px;
 }
 
+.view-detail-card.is-full-span {
+  grid-column: 1 / -1;
+}
+
+.dashboard-hero-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 16px;
+}
+
+.dashboard-focus-card,
+.dashboard-insight-card,
+.dashboard-note-card,
+.repository-section-card,
+.repository-note-card,
+.settings-panel-card {
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 42%),
+    rgba(18, 19, 22, 0.9);
+  box-shadow: var(--shadow);
+}
+
+.dashboard-insight-card {
+  background:
+    linear-gradient(135deg, rgba(233, 69, 96, 0.12), transparent 52%),
+    rgba(18, 19, 22, 0.92);
+  border-color: rgba(233, 69, 96, 0.24);
+}
+
+.dashboard-focus-card,
+.dashboard-insight-card {
+  display: grid;
+  gap: 16px;
+}
+
+.dashboard-focus-copy,
+.dashboard-insight-copy,
+.settings-panel-copy {
+  display: grid;
+  gap: 10px;
+}
+
+.dashboard-focus-copy h3,
+.dashboard-insight-copy h3,
+.settings-panel-card h3,
+.repository-note-card h3 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 1.22rem;
+  line-height: 1.3;
+}
+
+.dashboard-focus-copy p,
+.dashboard-insight-copy p,
+.settings-panel-copy p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.dashboard-metric-strip,
+.settings-metric-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dashboard-mini-metric,
+.settings-mini-metric {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, 0.03);
+  display: grid;
+  gap: 6px;
+}
+
+.dashboard-mini-metric strong,
+.settings-mini-metric strong {
+  font-family: var(--display);
+  font-size: 1.08rem;
+}
+
+.dashboard-note-grid,
+.repository-note-grid,
+.repository-section-grid,
+.settings-panel-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.dashboard-note-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.repository-section-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.repository-note-grid,
+.settings-panel-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-note-card,
+.repository-note-card {
+  display: grid;
+  gap: 12px;
+  min-height: 220px;
+}
+
+.dashboard-note-head,
+.repository-note-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dashboard-note-card h4,
+.repository-note-card h4,
+.repository-section-card h4 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.dashboard-note-summary,
+.repository-note-summary,
+.repository-section-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.dashboard-note-meta,
+.repository-note-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.dashboard-note-actions,
+.repository-note-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.dashboard-inline-pills,
+.settings-inline-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.repository-section-card {
+  display: grid;
+  gap: 12px;
+}
+
+.repository-shell {
+  display: grid;
+  gap: 16px;
+}
+
+.repository-shell-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+}
+
+.repository-shell-header h3 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 1.8rem;
+}
+
+.repository-shell-header p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.settings-shell {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 18px;
+}
+
+.settings-sidebar {
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: rgba(18, 19, 22, 0.92);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 18px;
+  align-self: start;
+}
+
+.settings-sidebar h3 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 1.45rem;
+}
+
+.settings-sidebar p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.settings-nav-list {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-nav-button {
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.settings-nav-button:hover,
+.settings-nav-button.is-active {
+  transform: translateY(-1px);
+}
+
+.settings-nav-button.is-active {
+  background: rgba(31, 43, 74, 0.88);
+  color: var(--accent-strong);
+  border-color: rgba(233, 69, 96, 0.28);
+  box-shadow: inset 3px 0 0 rgba(233, 69, 96, 0.85);
+}
+
+.settings-content-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.settings-header {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 1.8rem;
+}
+
+.settings-header p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.settings-panel-card {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-panel-card header {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-panel-card header h3 {
+  margin: 0;
+}
+
+.settings-panel-card header p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.settings-inline-list {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-inline-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.settings-inline-row strong {
+  font-family: var(--display);
+}
+
 .panel-card::after {
   content: "";
   position: absolute;
@@ -1354,6 +1666,12 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .dashboard-hero-grid,
+  .repository-shell-header,
+  .settings-shell {
+    grid-template-columns: 1fr;
+  }
+
   .editor-brief-metrics,
   .rail-metric-grid,
   .control-hero-grid {
@@ -1389,6 +1707,15 @@ pre {
     height: auto;
     padding: 18px;
     flex-wrap: wrap;
+  }
+
+  .dashboard-note-grid,
+  .repository-note-grid,
+  .repository-section-grid,
+  .settings-panel-grid,
+  .dashboard-metric-strip,
+  .settings-metric-strip {
+    grid-template-columns: 1fr;
   }
 
   .hero-status {
