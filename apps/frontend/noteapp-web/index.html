@@ -97,11 +97,11 @@
               <div class="control-group">
                 <div class="control-group-title">同步载荷</div>
                 <div class="control-actions">
-                  <button id="load-sample-button" class="ghost">加载同步样例</button>
-                  <button id="load-live-button" class="ghost">加载本地快照</button>
                   <button id="refresh-local-button" class="ghost">刷新本地同步</button>
                   <button id="reload-bridge-status-button" class="ghost">刷新桥接状态</button>
-                  <label class="ghost file-picker">
+                  <button id="load-live-button" class="ghost" type="button" data-advanced-control>加载本地快照</button>
+                  <button id="load-sample-button" class="ghost" type="button" data-advanced-control>加载同步样例</button>
+                  <label class="ghost file-picker" data-advanced-control>
                     导入同步 JSON
                     <input id="file-input" type="file" accept="application/json" />
                   </label>
@@ -111,8 +111,8 @@
             <details class="details-block">
               <summary>工作区来源</summary>
               <div class="control-actions">
-                <button id="load-workspace-sample-button" class="solid">加载工作区样例</button>
-                <label class="ghost file-picker">
+                <button id="load-workspace-sample-button" class="solid" data-advanced-control>加载工作区样例</button>
+                <label class="ghost file-picker" data-advanced-control>
                   导入工作区 JSON
                   <input id="workspace-file-input" type="file" accept="application/json" />
                 </label>
