@@ -2219,6 +2219,16 @@ function renderViewDetailGrid() {
             <strong>${escapeHtml(`问答来源：${aiBoundary.answerSourceLabel}`)}</strong>
             <span>${escapeHtml(`知识页编译：${aiBoundary.compileSourceLabel}`)}</span>
           </div>
+          ${
+            aiBoundary.message
+              ? `
+                <div class="detail-row detail-row-block">
+                  <strong>最近失败原因</strong>
+                  <span>${escapeHtml(aiBoundary.message)}</span>
+                </div>
+              `
+              : ""
+          }
           <div class="detail-row detail-row-block">
             <strong>${escapeHtml(aiBoundary.capabilities.length ? `已挂载 ${aiBoundary.capabilities.length} 个能力` : "当前尚未返回能力清单")}</strong>
             <span>${escapeHtml(aiBoundary.capabilities.length ? aiBoundary.capabilities.join(" / ") : aiBoundary.message || "可继续在右侧 AI 面板触发调用并观察边界状态。")}</span>
@@ -3151,6 +3161,16 @@ function renderViewDetailGrid() {
             <strong>${escapeHtml(settings.aiBoundary.capabilities.length ? "当前能力清单" : "当前未返回能力清单")}</strong>
             <span>${escapeHtml(settings.aiBoundary.capabilities.length ? settings.aiBoundary.capabilities.join(" / ") : settings.aiBoundary.message || "可继续在右侧 AI 面板触发调用，观察边界状态变化。")}</span>
           </div>
+          ${
+            settings.aiBoundary.message
+              ? `
+                <div class="detail-row detail-row-block">
+                  <strong>最近失败原因</strong>
+                  <span>${escapeHtml(settings.aiBoundary.message)}</span>
+                </div>
+              `
+              : ""
+          }
         </div>
         <div class="detail-actions">
           <button class="ghost detail-inline-button" data-settings-command="refresh-ai-boundary" type="button">重查 AI 边界</button>
@@ -5852,6 +5872,7 @@ function renderWorkspaceAiPanel() {
         <p class="card-meta">AI 助手</p>
         <h2 class="ai-panel-title">${escapeHtml(note.title)} 的上下文</h2>
         <p class="ai-copy">${escapeHtml(`调用边界：${aiBoundaryLabel} · ${formatAiBoundaryModeLabel(state.aiBoundaryStatus?.mode)}`)}</p>
+        ${aiBoundary.message ? `<p class="ai-copy">${escapeHtml(`最近失败原因：${aiBoundary.message}`)}</p>` : ""}
       </div>
       <div class="detail-actions">
         <span class="mini-pill tone-${escapeHtml(aiBoundaryTone)}">${escapeHtml(aiBoundaryLabel)}</span>
