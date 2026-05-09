@@ -452,6 +452,12 @@ pre {
   gap: 18px;
 }
 
+.view-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .workspace-shell {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) 340px;
@@ -658,6 +664,16 @@ pre {
   overflow: hidden;
 }
 
+.view-detail-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(22, 33, 62, 0.92);
+  box-shadow: var(--shadow);
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
 .control-card-secondary {
   background: rgba(12, 17, 30, 0.94);
 }
@@ -735,6 +751,82 @@ pre {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
+}
+
+.view-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-soft);
+  background: rgba(8, 12, 22, 0.62);
+}
+
+.detail-row strong,
+.relation-row strong,
+.token-card strong,
+.detail-metric strong {
+  font-family: var(--display);
+}
+
+.detail-row span {
+  color: var(--muted);
+}
+
+.detail-row-block {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.detail-row-block strong {
+  font-size: 0.98rem;
+}
+
+.detail-metric-grid,
+.token-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.detail-metric,
+.token-card,
+.relation-row {
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-soft);
+  background: rgba(8, 12, 22, 0.62);
+}
+
+.detail-metric strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 1.3rem;
+}
+
+.token-card {
+  display: grid;
+  gap: 8px;
+}
+
+.token-card span,
+.token-card p,
+.relation-row p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.relation-row {
+  display: grid;
+  gap: 6px;
 }
 
 .summary-item {
@@ -854,6 +946,7 @@ pre {
 @media (max-width: 1180px) {
   .hero,
   .workspace,
+  .view-detail-grid,
   .summary-grid,
   .cards-grid {
     grid-template-columns: 1fr;

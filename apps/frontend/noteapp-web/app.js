@@ -250,6 +250,7 @@ const elements = {
   controlCenterCard: document.getElementById("control-center-card"),
   workspaceShellRoot: document.getElementById("workspace-shell-root"),
   viewModeCard: document.getElementById("view-mode-card"),
+  viewDetailGrid: document.getElementById("view-detail-grid"),
   panelCard: document.getElementById("panel-card"),
   summaryGrid: document.getElementById("summary-grid"),
   cardsGrid: document.getElementById("cards-grid"),
@@ -666,10 +667,114 @@ function formatNavViewLabel(view) {
   }[view] || view;
 }
 
+function formatBridgeMode(mode) {
+  return {
+    "desktop-cli-local": "本地桌面桥接",
+    "dev-server-unreachable": "开发桥接不可达",
+  }[mode] || mode || "未知模式";
+}
+
 function createSignal(level, label) {
   return {
     level: resolveTone(level),
     label,
+  };
+}
+
+function getCurrentWorkspaceShell() {
+  return state.workspaceShell || WORKSPACE_SAMPLE;
+}
+
+function buildGraphSnapshot() {
+  const workspaceShell = getCurrentWorkspaceShell();
+  const noteEntries = Object.entries(workspaceShell.notes || {});
+  const notes = noteEntries.map(([id, note]) => ({
+    id,
+    title: note.title,
+    path: note.path,
+    tags: Array.isArray(note.tags) ? note.tags : [],
+    entities: Array.isArray(note.ai?.relatedEntities) ? note.ai.relatedEntities : [],
+  }));
+  const entityUsage = new Map();
+
+  for (const note of notes) {
+    for (const entity of [...note.tags, ...note.entities]) {
+      const key = String(entity || "").trim();
+      if (!key) {
+        continue;
+      }
+      if (!entityUsage.has(key)) {
+        entityUsage.set(key, {
+          entity: key,
+          count: 0,
+          notes: new Set(),
+        });
+      }
+      const bucket = entityUsage.get(key);
+      bucket.count += 1;
+      bucket.notes.add(note.title);
+    }
+  }
+
+  const topEntities = [...entityUsage.values()]
+    .sort((left, right) => right.notes.size - left.notes.size || right.count - left.count)
+    .slice(0, 6)
+    .map((item) => ({
+      entity: item.entity,
+      noteCount: item.notes.size,
+      notes: [...item.notes].slice(0, 3),
+    }));
+
+  const edges = [];
+  for (let index = 0; index < notes.length; index += 1) {
+    for (let inner = index + 1; inner < notes.length; inner += 1) {
+      const left = notes[index];
+      const right = notes[inner];
+      const shared = [...new Set([...left.tags, ...left.entities])]
+        .filter((token) => [...right.tags, ...right.entities].includes(token))
+        .slice(0, 3);
+      if (!shared.length) {
+        continue;
+      }
+      edges.push({
+        left: left.title,
+        right: right.title,
+        shared,
+      });
+    }
+  }
+
+  return {
+    noteCount: notes.length,
+    entityCount: entityUsage.size,
+    topEntities,
+    topEdges: edges.slice(0, 6),
+  };
+}
+
+function buildConflictSnapshot() {
+  const summary = state.syncCenter?.summary || null;
+  const conflicts = summary?.conflicts || {};
+  return {
+    blockingReasons: Array.isArray(summary?.commit_gate?.blocking_reasons)
+      ? summary.commit_gate.blocking_reasons.map(formatBlockingReason)
+      : [],
+    copies: Array.isArray(conflicts.conflict_copies) ? conflicts.conflict_copies : [],
+    orphans: Array.isArray(conflicts.conflict_orphans) ? conflicts.conflict_orphans : [],
+    canSubmit: Boolean(summary?.commit_gate?.can_submit_commit),
+  };
+}
+
+function buildSettingsSnapshot() {
+  const status = state.bridgeStatus;
+  return {
+    bridgeAvailable: Boolean(status?.available),
+    bridgeMode: formatBridgeMode(status?.mode),
+    bridgeSource: status?.config?.configSource ? formatBridgeConfigSource(status.config.configSource) : "未配置",
+    vaultRoot: status?.config?.vaultRoot || "未连接",
+    vaultId: status?.config?.vaultId || "未连接",
+    missing: Array.isArray(status?.missing) ? status.missing : [],
+    diagnostics: Array.isArray(status?.diagnostics) ? status.diagnostics : [],
   };
 }
 
@@ -731,12 +836,229 @@ function renderViewModeCard() {
   `;
 }
 
+function renderViewDetailGrid() {
+  if (state.activeNavView === "overview") {
+    elements.viewDetailGrid.hidden = true;
+    elements.viewDetailGrid.innerHTML = "";
+    return;
+  }
+
+  if (state.activeNavView === "repository") {
+    const workspaceShell = getCurrentWorkspaceShell();
+    const sections = workspaceShell.sections.map((section) => ({
+      label: section.label,
+      count: Array.isArray(section.items) ? section.items.length : 0,
+    }));
+    elements.viewDetailGrid.hidden = false;
+    elements.viewDetailGrid.innerHTML = `
+      <article class="view-detail-card">
+        <p class="card-section-label">仓库结构</p>
+        <h3>分区概览</h3>
+        <div class="view-stack">
+          ${sections
+            .map(
+              (section) => `
+                <div class="detail-row">
+                  <span>${escapeHtml(section.label)}</span>
+                  <strong>${escapeHtml(section.count)} 篇</strong>
+                </div>
+              `,
+            )
+            .join("")}
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">当前筛选</p>
+        <h3>检索状态</h3>
+        <div class="view-stack">
+          <div class="detail-row">
+            <span>关键词</span>
+            <strong>${escapeHtml(state.searchQuery || "未启用")}</strong>
+          </div>
+          <div class="detail-row">
+            <span>工作区来源</span>
+            <strong>${escapeHtml(state.workspaceSourceLabel)}</strong>
+          </div>
+          <div class="detail-row">
+            <span>同步来源</span>
+            <strong>${escapeHtml(state.sourceLabel)}</strong>
+          </div>
+        </div>
+      </article>
+    `;
+    return;
+  }
+
+  if (state.activeNavView === "graph") {
+    const graph = buildGraphSnapshot();
+    elements.viewDetailGrid.hidden = false;
+    elements.viewDetailGrid.innerHTML = `
+      <article class="view-detail-card">
+        <p class="card-section-label">知识连接</p>
+        <h3>实体热区</h3>
+        <div class="detail-metric-grid">
+          <div class="detail-metric">
+            <span class="metric-label">文档数</span>
+            <strong>${escapeHtml(graph.noteCount)}</strong>
+          </div>
+          <div class="detail-metric">
+            <span class="metric-label">实体数</span>
+            <strong>${escapeHtml(graph.entityCount)}</strong>
+          </div>
+        </div>
+        <div class="token-grid">
+          ${graph.topEntities
+            .map(
+              (entity) => `
+                <div class="token-card">
+                  <strong>${escapeHtml(entity.entity)}</strong>
+                  <span>${escapeHtml(entity.noteCount)} 篇文档引用</span>
+                  <p>${escapeHtml(entity.notes.join(" · "))}</p>
+                </div>
+              `,
+            )
+            .join("")}
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">关系草图</p>
+        <h3>文档连接</h3>
+        <div class="view-stack">
+          ${
+            graph.topEdges.length
+              ? graph.topEdges
+                  .map(
+                    (edge) => `
+                      <div class="relation-row">
+                        <strong>${escapeHtml(edge.left)}</strong>
+                        <span>↔</span>
+                        <strong>${escapeHtml(edge.right)}</strong>
+                        <p>${escapeHtml(edge.shared.join(" · "))}</p>
+                      </div>
+                    `,
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前样例还没有足够的共享实体来生成连接。</p></div>'
+          }
+        </div>
+      </article>
+    `;
+    return;
+  }
+
+  if (state.activeNavView === "conflicts") {
+    const conflictSnapshot = buildConflictSnapshot();
+    elements.viewDetailGrid.hidden = false;
+    elements.viewDetailGrid.innerHTML = `
+      <article class="view-detail-card">
+        <p class="card-section-label">处理优先级</p>
+        <h3>提交阻塞</h3>
+        <div class="detail-metric-grid">
+          <div class="detail-metric">
+            <span class="metric-label">可提交</span>
+            <strong>${conflictSnapshot.canSubmit ? "是" : "否"}</strong>
+          </div>
+          <div class="detail-metric">
+            <span class="metric-label">阻塞项</span>
+            <strong>${escapeHtml(conflictSnapshot.blockingReasons.length)}</strong>
+          </div>
+        </div>
+        <div class="token-grid">
+          ${conflictSnapshot.blockingReasons.length
+            ? conflictSnapshot.blockingReasons
+                .map((reason) => `<span class="mini-pill tone-danger">${escapeHtml(reason)}</span>`)
+                .join("")
+            : '<span class="mini-pill tone-success">当前无阻塞原因</span>'}
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">冲突清单</p>
+        <h3>本地冲突工件</h3>
+        <div class="view-stack">
+          ${
+            [...conflictSnapshot.copies, ...conflictSnapshot.orphans].length
+              ? [...conflictSnapshot.copies, ...conflictSnapshot.orphans]
+                  .map(
+                    (item) => `
+                      <div class="detail-row detail-row-block">
+                        <strong>${escapeHtml(item.kind === "conflict_copy" ? "冲突副本" : "孤立冲突文件")}</strong>
+                        <span>${escapeHtml(item.path || "未知路径")}</span>
+                      </div>
+                    `,
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前样例没有返回具体冲突文件，说明冲突面板已比阻塞态更靠前。</p></div>'
+          }
+        </div>
+      </article>
+    `;
+    return;
+  }
+
+  if (state.activeNavView === "settings") {
+    const settings = buildSettingsSnapshot();
+    elements.viewDetailGrid.hidden = false;
+    elements.viewDetailGrid.innerHTML = `
+      <article class="view-detail-card">
+        <p class="card-section-label">本地桥接</p>
+        <h3>连接状态</h3>
+        <div class="detail-metric-grid">
+          <div class="detail-metric">
+            <span class="metric-label">可用</span>
+            <strong>${settings.bridgeAvailable ? "已连接" : "未连接"}</strong>
+          </div>
+          <div class="detail-metric">
+            <span class="metric-label">模式</span>
+            <strong>${escapeHtml(settings.bridgeMode)}</strong>
+          </div>
+        </div>
+        <div class="view-stack">
+          <div class="detail-row">
+            <span>配置来源</span>
+            <strong>${escapeHtml(settings.bridgeSource)}</strong>
+          </div>
+          <div class="detail-row">
+            <span>Vault ID</span>
+            <strong>${escapeHtml(settings.vaultId)}</strong>
+          </div>
+          <div class="detail-row">
+            <span>Vault Root</span>
+            <strong>${escapeHtml(settings.vaultRoot)}</strong>
+          </div>
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">当前会话</p>
+        <h3>前端数据边界</h3>
+        <div class="view-stack">
+          <div class="detail-row">
+            <span>同步来源</span>
+            <strong>${escapeHtml(state.sourceLabel)}</strong>
+          </div>
+          <div class="detail-row">
+            <span>工作区来源</span>
+            <strong>${escapeHtml(state.workspaceSourceLabel)}</strong>
+          </div>
+          <div class="detail-row">
+            <span>缺失配置</span>
+            <strong>${escapeHtml(settings.missing.length ? settings.missing.join(", ") : "无")}</strong>
+          </div>
+        </div>
+        <div class="token-grid">
+          ${settings.diagnostics.slice(0, 4).map((item) => `<span class="mini-pill tone-${resolveTone(item.level)}">${escapeHtml(item.code)}</span>`).join("")}
+        </div>
+      </article>
+    `;
+  }
+}
+
 function renderNavViewVisibility() {
   const showSyncSections = ["overview", "conflicts"].includes(state.activeNavView);
   elements.panelCard.hidden = !showSyncSections;
   elements.summaryGrid.hidden = !showSyncSections;
   elements.cardsGrid.hidden = !showSyncSections;
   elements.activityCard.hidden = !showSyncSections;
+  elements.viewDetailGrid.hidden = state.activeNavView === "overview";
   elements.workspaceShellRoot.hidden = state.activeNavView === "settings";
   elements.controlCenterCard.hidden = state.activeNavView !== "settings";
 }
@@ -1352,6 +1674,7 @@ function renderActivity(feed) {
 
 function renderEmptyDashboard(message) {
   renderViewModeCard();
+  renderViewDetailGrid();
   renderNavViewVisibility();
   elements.payloadKind.textContent = "未加载";
   elements.payloadDetail.textContent = message;
@@ -1369,6 +1692,7 @@ function renderEmptyDashboard(message) {
 
 function render() {
   renderViewModeCard();
+  renderViewDetailGrid();
   renderNavViewVisibility();
   renderBridgeStatus();
   renderExecutionResult(state.lastExecution);
