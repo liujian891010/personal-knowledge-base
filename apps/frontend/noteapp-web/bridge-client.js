@@ -115,6 +115,28 @@ export async function refreshAppSession(payload = {}) {
   return readJsonResponse(response, "app_session_refresh_failed");
 }
 
+export async function requestAiCopilotAnswer(payload = {}) {
+  const response = await fetch("/api/ai/copilot-answer", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  return readJsonResponse(response, "ai_copilot_answer_failed");
+}
+
+export async function requestAiWikiCompile(payload = {}) {
+  const response = await fetch("/api/ai/compile-wiki", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  return readJsonResponse(response, "ai_wiki_compile_failed");
+}
+
 export function startBridgeStatusPolling({
   intervalMs = 15000,
   onStatus,

@@ -49,8 +49,12 @@ When `PKB_VAULT_ROOT` / `PKB_BASE_URL` / `PKB_VAULT_ID` / `PKB_DEVICE_ID` are se
 1. `POST /api/bridge/refresh-snapshot`
 2. `POST /api/bridge/execute-action`
 3. `GET /api/bridge/status`
+4. `POST /api/ai/copilot-answer`
+5. `POST /api/ai/compile-wiki`
 
 The shell uses that bridge for `Refresh Local Snapshot` and `Run Selected Action`. Internally the action path now delegates to the desktop CLI's `execute-sync-action-and-snapshot` boundary instead of stitching two commands together in the browser shell.
+
+The AI panel now also prefers the explicit `/api/ai/*` boundary for generating the current copilot answer and compiling the current scope into `.ai/wiki`. If that boundary is temporarily unavailable, the browser shell falls back to the existing local heuristic so the product remains usable while backend integration is being completed.
 
 The app-session endpoints now return:
 
