@@ -115,6 +115,13 @@ export async function refreshAppSession(payload = {}) {
   return readJsonResponse(response, "app_session_refresh_failed");
 }
 
+export async function fetchAiBoundaryStatus() {
+  const response = await fetch("/api/ai/status", {
+    cache: "no-store",
+  });
+  return readJsonResponse(response, "ai_boundary_status_failed");
+}
+
 export async function requestAiCopilotAnswer(payload = {}) {
   const response = await fetch("/api/ai/copilot-answer", {
     method: "POST",

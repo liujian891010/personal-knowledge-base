@@ -1,5 +1,6 @@
 import {
   executeBridgeAction,
+  fetchAiBoundaryStatus,
   fetchSampleAppSession,
   fetchBridgeStatus,
   requestAiCopilotAnswer,
@@ -274,6 +275,8 @@ const state = {
   selectedActionSource: null,
   bridgeStatus: null,
   bridgeCheckedAtMs: null,
+  aiBoundaryStatus: null,
+  aiBoundaryCheckedAtMs: null,
   lastBridgeError: null,
   lastExecution: null,
   lastExecutionAtMs: null,
@@ -1161,6 +1164,13 @@ function formatAiBoundarySource(source) {
     api: "AI 接口",
     "local-fallback": "本地回退",
   }[source] || "未标记";
+}
+
+function formatAiBoundaryModeLabel(mode) {
+  return {
+    "dev-server-local": "开发态本地接口",
+    "local-fallback": "本地回退",
+  }[mode] || mode || "待检查";
 }
 
 function formatSessionSourceLabel(source) {
@@ -4437,6 +4447,11 @@ async function generateAiCopilotAnswer({ note, noteBody, syncContext, draftInsig
     aiBriefing,
   });
   try {
+    state.aiBoundaryStatus = {
+      available: true,
+      mode: "dev-server-local",
+    };
+    state.aiBoundaryCheckedAtMs = Date.now();
     return {
       ...(await requestAiCopilotAnswer(
         payload,
@@ -4444,6 +4459,12 @@ async function generateAiCopilotAnswer({ note, noteBody, syncContext, draftInsig
       source: "api",
     };
   } catch (error) {
+    state.aiBoundaryStatus = {
+      available: false,
+      mode: "local-fallback",
+      message: error instanceof Error ? error.message : String(error),
+    };
+    state.aiBoundaryCheckedAtMs = Date.now();
     elements.workspaceStatus.textContent = "AI 调用边界暂不可用，已退回本地回答生成。";
     return {
       ...buildAiCopilotAnswerFromPayload(payload),
@@ -5605,6 +5626,13 @@ function renderWorkspaceAiPanel() {
     state.aiCompile.lastCompiledNoteId && getCurrentWorkspaceShell().notes[state.aiCompile.lastCompiledNoteId]
       ? getCurrentWorkspaceShell().notes[state.aiCompile.lastCompiledNoteId]
       : null;
+  const aiBoundaryAvailable = state.aiBoundaryStatus?.available === true;
+  const aiBoundaryLabel = state.aiBoundaryStatus
+    ? aiBoundaryAvailable
+      ? "AI 接口在线"
+      : "本地回退"
+    : "AI 边界待检查";
+  const aiBoundaryTone = state.aiBoundaryStatus ? (aiBoundaryAvailable ? "success" : "warning") : "info";
   const aiLastBoundarySource = aiLastAnswer?.source ? formatAiBoundarySource(aiLastAnswer.source) : null;
   const aiCompileBoundarySource = state.aiCompile.lastSource ? formatAiBoundarySource(state.aiCompile.lastSource) : null;
   const isAiWikiCurrentNote = isAiWikiNote(note.id);
@@ -5642,8 +5670,9 @@ function renderWorkspaceAiPanel() {
       <div>
         <p class="card-meta">AI 助手</p>
         <h2 class="ai-panel-title">${escapeHtml(note.title)} 的上下文</h2>
+        <p class="ai-copy">${escapeHtml(`调用边界：${aiBoundaryLabel} · ${formatAiBoundaryModeLabel(state.aiBoundaryStatus?.mode)}`)}</p>
       </div>
-      <span class="mini-pill tone-warning">联动</span>
+      <span class="mini-pill tone-${escapeHtml(aiBoundaryTone)}">${escapeHtml(aiBoundaryLabel)}</span>
     </div>
     <section class="ai-sync-box">
       <h3>AI 问答</h3>
@@ -6507,6 +6536,21 @@ async function requestBridgeStatus() {
   renderBridgeStatus();
 }
 
+async function requestAiBoundaryStatus() {
+  try {
+    state.aiBoundaryStatus = await fetchAiBoundaryStatus();
+    state.aiBoundaryCheckedAtMs = Date.now();
+  } catch (error) {
+    state.aiBoundaryStatus = {
+      available: false,
+      mode: "local-fallback",
+      message: error instanceof Error ? error.message : String(error),
+    };
+    state.aiBoundaryCheckedAtMs = Date.now();
+  }
+  renderWorkspaceAiPanel();
+}
+
 function applyPayload(payload, sourceLabel) {
   const kind = detectPayloadKind(payload);
   state.sourceLabel = sourceLabel;
@@ -6959,6 +7003,11 @@ async function compileCurrentScopeToAiWiki() {
   });
   let compiledDraft = null;
   try {
+    state.aiBoundaryStatus = {
+      available: true,
+      mode: "dev-server-local",
+    };
+    state.aiBoundaryCheckedAtMs = Date.now();
     compiledDraft = {
       ...(await requestAiWikiCompile(
         compilePayload,
@@ -6966,6 +7015,12 @@ async function compileCurrentScopeToAiWiki() {
       source: "api",
     };
   } catch (error) {
+    state.aiBoundaryStatus = {
+      available: false,
+      mode: "local-fallback",
+      message: error instanceof Error ? error.message : String(error),
+    };
+    state.aiBoundaryCheckedAtMs = Date.now();
     elements.workspaceStatus.textContent = "AI 编译接口暂不可用，已退回本地知识页生成。";
     compiledDraft = {
       ...buildAiWikiCompileFromPayload(compilePayload),
@@ -7323,6 +7378,7 @@ startBridgeStatusPolling({
     renderBridgeStatus();
   },
 });
+requestAiBoundaryStatus().catch(() => {});
 loadInitialSession().catch(async (error) => {
   try {
     state.workspaceShell = null;

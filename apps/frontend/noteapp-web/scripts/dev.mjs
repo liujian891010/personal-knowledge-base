@@ -274,6 +274,16 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/ai/status") {
+    writeJson(response, 200, {
+      available: true,
+      mode: "dev-server-local",
+      checkedAtMs: Date.now(),
+      capabilities: ["copilot-answer", "compile-wiki"],
+    });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/app-session/refresh") {
     try {
       const body = await readJsonBody(request);
