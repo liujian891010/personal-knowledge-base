@@ -2056,7 +2056,7 @@ function renderSettingsSurface() {
   elements.viewDetailGrid.hidden = false;
   elements.viewDetailGrid.innerHTML = `
     <article class="view-detail-card">
-      <p class="card-section-label">Workspace</p>
+      <p class="card-section-label">工作区</p>
       <h3>继续当前工作区</h3>
       <div class="detail-metric-grid">
         <div class="detail-metric">
@@ -2108,7 +2108,7 @@ function renderSettingsSurface() {
       </div>
     </article>
     <article class="view-detail-card">
-      <p class="card-section-label">Recovery</p>
+      <p class="card-section-label">恢复</p>
       <h3>本机会话恢复</h3>
       <div class="detail-metric-grid">
         <div class="detail-metric">
@@ -2175,7 +2175,7 @@ function renderSettingsSurface() {
       </div>
     </article>
     <article class="view-detail-card">
-      <p class="card-section-label">Status</p>
+      <p class="card-section-label">状态</p>
       <h3>系统状态</h3>
       <div class="detail-metric-grid">
         <div class="detail-metric">
@@ -2208,7 +2208,7 @@ function renderSettingsSurface() {
       </div>
     </article>
     <article class="view-detail-card">
-      <p class="card-section-label">Flow</p>
+      <p class="card-section-label">流程</p>
       <h3>整理偏好</h3>
       <div class="view-stack">
         <div class="detail-row detail-row-block">
@@ -2242,7 +2242,7 @@ function renderDebugSurface() {
   elements.viewDetailGrid.hidden = false;
   elements.viewDetailGrid.innerHTML = `
     <article class="view-detail-card">
-      <p class="card-section-label">Mode</p>
+      <p class="card-section-label">模式</p>
       <h3>调试模式</h3>
       <div class="detail-metric-grid">
         <div class="detail-metric">
@@ -2270,7 +2270,7 @@ function renderDebugSurface() {
       </div>
     </article>
     <article class="view-detail-card">
-      <p class="card-section-label">Bridge</p>
+      <p class="card-section-label">桥接</p>
       <h3>桌面桥接状态</h3>
       <div class="detail-metric-grid">
         <div class="detail-metric">
@@ -2317,7 +2317,7 @@ function renderDebugSurface() {
       </div>
     </article>
     <article class="view-detail-card">
-      <p class="card-section-label">AI Boundary</p>
+      <p class="card-section-label">AI 边界</p>
       <h3>${escapeHtml(settings.aiBoundary.headline)}</h3>
       <div class="detail-metric-grid">
         <div class="detail-metric">
@@ -2358,7 +2358,7 @@ function renderDebugSurface() {
       </div>
     </article>
     <article class="view-detail-card">
-      <p class="card-section-label">Session</p>
+      <p class="card-section-label">会话</p>
       <h3>调试会话入口</h3>
       <div class="view-stack">
         <div class="detail-row detail-row-block">
@@ -2397,7 +2397,7 @@ function renderDebugSurface() {
       </div>
     </article>
     <article class="view-detail-card">
-      <p class="card-section-label">AI Raw</p>
+      <p class="card-section-label">AI 原始产物</p>
       <h3>`.ai/raw` 本地策略</h3>
       <div class="editor-sync-checklist">
         <div class="editor-sync-item">
@@ -2445,7 +2445,7 @@ function renderDebugSurface() {
       </div>
     </article>
     <article class="view-detail-card">
-      <p class="card-section-label">Execution</p>
+      <p class="card-section-label">执行</p>
       <h3>最近执行与恢复</h3>
       <div class="view-stack">
         ${
