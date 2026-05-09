@@ -355,6 +355,18 @@ pre {
   font-size: 0.82rem;
 }
 
+.tree-node-signals,
+.editor-signal-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.workspace-signal-pill {
+  font-size: 0.72rem;
+}
+
 .editor-pane,
 .ai-pane {
   display: grid;
@@ -389,6 +401,21 @@ pre {
   white-space: pre-wrap;
   line-height: 1.65;
   color: var(--muted);
+}
+
+.editor-sync-box,
+.ai-sync-box {
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.56);
+  border: 1px solid rgba(24, 42, 49, 0.08);
+}
+
+.editor-sync-box h3,
+.ai-sync-box h3 {
+  margin: 0 0 8px;
+  font-size: 0.92rem;
+  font-family: var(--display);
 }
 
 .editor-tags {

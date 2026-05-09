@@ -62,6 +62,11 @@ const WORKSPACE_SAMPLE = {
       statusLabel: "Modified locally",
       lastSaved: "Saved 6 minutes ago",
       tags: ["sync", "desktop", "bridge", "noteapp-web"],
+      syncContext: {
+        watchActionIds: ["pull", "show-vault-summary"],
+        watchCardKinds: ["baseline", "activity"],
+        watchBlockingReasons: ["requires_full_pull"],
+      },
       body: `# Desktop Bridge Rollout
 
 ## Current slice
@@ -91,6 +96,11 @@ const WORKSPACE_SAMPLE = {
       statusLabel: "Needs conflict audit",
       lastSaved: "Saved yesterday",
       tags: ["sync", "recovery", "conflicts"],
+      syncContext: {
+        watchActionIds: ["pull", "submit-detected-commit"],
+        watchCardKinds: ["baseline", "local-changes", "activity"],
+        watchBlockingReasons: ["requires_full_pull"],
+      },
       body: `# Sync Recovery Checklist
 
 ## Before retry
@@ -121,6 +131,11 @@ Do not resume a commit from stale plaintext snapshots. The next round must rebui
       statusLabel: "Ready",
       lastSaved: "Saved this morning",
       tags: ["product", "delivery", "weekly"],
+      syncContext: {
+        watchActionIds: ["show-vault-summary"],
+        watchCardKinds: ["local-changes"],
+        watchBlockingReasons: [],
+      },
       body: `# Release Cadence
 
 ## Shipping rule
@@ -147,6 +162,11 @@ Friday: workspace UX refinement`,
       statusLabel: "AI draft",
       lastSaved: "Compiled 18 minutes ago",
       tags: ["ai", "shell", "spec"],
+      syncContext: {
+        watchActionIds: ["sync-activity"],
+        watchCardKinds: ["activity"],
+        watchBlockingReasons: [],
+      },
       body: `# Desktop Shell Spec
 
 ## Intent
@@ -177,6 +197,11 @@ The current web shell still needs a first-class file tree and editor contract.`,
       statusLabel: "Needs accept",
       lastSaved: "Compiled 2 hours ago",
       tags: ["ai", "ops", "diagnostics"],
+      syncContext: {
+        watchActionIds: ["pull", "sync-activity"],
+        watchCardKinds: ["activity", "baseline"],
+        watchBlockingReasons: ["requires_full_pull"],
+      },
       body: `# Bridge Diagnostics
 
 ## Captured signals
@@ -237,6 +262,7 @@ const elements = {
   executeSelectedButton: document.getElementById("execute-selected-button"),
   actionExecutionStatus: document.getElementById("action-execution-status"),
   actionChipTemplate: document.getElementById("action-chip-template"),
+  workspaceSignalTemplate: document.getElementById("workspace-signal-template"),
   loadWorkspaceSampleButton: document.getElementById("load-workspace-sample-button"),
   workspaceFileInput: document.getElementById("workspace-file-input"),
   workspaceStatus: document.getElementById("workspace-status"),
@@ -486,6 +512,102 @@ function resolveTone(level) {
   return ["success", "warning", "danger", "info"].includes(level) ? level : "info";
 }
 
+function createSignal(level, label) {
+  return {
+    level: resolveTone(level),
+    label,
+  };
+}
+
+function deriveWorkspaceSyncContext(note) {
+  const signals = [];
+  const summary = state.syncCenter?.summary || null;
+  const panel = state.syncCenter?.panel || null;
+  const cards = Array.isArray(state.syncCenter?.cards) ? state.syncCenter.cards : [];
+  const activityRecords = Array.isArray(state.activityFeed?.records) ? state.activityFeed.records : [];
+  const syncContext = note.syncContext || {};
+  const watchActionIds = Array.isArray(syncContext.watchActionIds) ? syncContext.watchActionIds : [];
+  const watchCardKinds = Array.isArray(syncContext.watchCardKinds) ? syncContext.watchCardKinds : [];
+  const watchBlockingReasons = Array.isArray(syncContext.watchBlockingReasons)
+    ? syncContext.watchBlockingReasons
+    : [];
+
+  if (!summary || !panel) {
+    return {
+      headline: "Workspace note is not linked to a sync payload yet.",
+      signals: [createSignal("info", "No sync payload")],
+      actions: ["Load a sync-shell-snapshot or sync-center payload to enrich this workspace note."],
+      relatedActivity: [],
+    };
+  }
+
+  if (summary.changes?.change_count > 0) {
+    signals.push(createSignal("warning", `${summary.changes.change_count} local changes`));
+  }
+  if (summary.commit_gate?.requires_full_pull) {
+    signals.push(createSignal("danger", "Full pull required"));
+  }
+  if (summary.conflicts?.actual_has_unresolved_conflicts) {
+    signals.push(createSignal("danger", "Unresolved conflicts"));
+  }
+  if (summary.worker_health?.status) {
+    signals.push(createSignal(summary.worker_health.status === "healthy" ? "success" : "warning", summary.worker_health.status));
+  }
+
+  const matchedCards = cards.filter((card) => watchCardKinds.includes(card.kind));
+  const matchedActivity = activityRecords.filter((record) => watchActionIds.includes(record.action_id));
+  const matchedBlockingReasons = (summary.commit_gate?.blocking_reasons || []).filter((reason) =>
+    watchBlockingReasons.includes(reason),
+  );
+
+  for (const card of matchedCards) {
+    signals.push(createSignal(card.level, `${card.kind}: ${card.title}`));
+  }
+
+  for (const reason of matchedBlockingReasons) {
+    signals.push(createSignal("danger", `Gate: ${reason}`));
+  }
+
+  const dedupedSignals = [];
+  const seenSignalLabels = new Set();
+  for (const signal of signals) {
+    const key = `${signal.level}:${signal.label}`;
+    if (seenSignalLabels.has(key)) {
+      continue;
+    }
+    seenSignalLabels.add(key);
+    dedupedSignals.push(signal);
+  }
+
+  const actions = [];
+  if (matchedBlockingReasons.includes("requires_full_pull")) {
+    actions.push("Run Pull before attempting a new submit.");
+  }
+  if (matchedActivity.some((record) => record.status === "failed")) {
+    actions.push("Inspect the failed sync activity details and retry after fixing the local condition.");
+  }
+  if (summary.changes?.change_count > 0) {
+    actions.push("Keep this note aligned with the pending local changes before the next sync cycle.");
+  }
+  if (!actions.length) {
+    actions.push("No immediate sync follow-up is required for this note.");
+  }
+
+  const latestRelated = matchedActivity.slice(-2).reverse();
+  const headlineParts = [
+    panel.headline,
+    matchedCards[0]?.title || null,
+    latestRelated[0]?.message || latestRelated[0]?.status || null,
+  ].filter(Boolean);
+
+  return {
+    headline: headlineParts.join(" | "),
+    signals: dedupedSignals.length ? dedupedSignals : [createSignal("info", "No matched sync signals")],
+    actions,
+    relatedActivity: latestRelated,
+  };
+}
+
 function getSelectedWorkspaceNote() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
   return workspaceShell.notes[state.selectedWorkspaceNoteId] || workspaceShell.notes["desktop-bridge"];
@@ -510,6 +632,7 @@ function renderWorkspaceTree() {
                     <span class="tree-node-title">${escapeHtml(item.title)}</span>
                     <span class="tree-node-path">${escapeHtml(item.path)}</span>
                     <span class="tree-node-path">${escapeHtml(item.status)}</span>
+                    <span class="tree-node-signals" data-signal-host="${escapeHtml(item.id)}"></span>
                   </button>
                 `,
               )
@@ -526,10 +649,26 @@ function renderWorkspaceTree() {
       renderWorkspaceChrome();
     });
   }
+
+  for (const host of elements.workspaceTree.querySelectorAll("[data-signal-host]")) {
+    const note = workspaceShell.notes[host.dataset.signalHost];
+    if (!note) {
+      continue;
+    }
+    const syncContext = deriveWorkspaceSyncContext(note);
+    for (const signal of syncContext.signals.slice(0, 2)) {
+      const fragment = elements.workspaceSignalTemplate.content.cloneNode(true);
+      const pill = fragment.querySelector(".workspace-signal-pill");
+      pill.className = `mini-pill tone-${signal.level} workspace-signal-pill`;
+      pill.textContent = signal.label;
+      host.appendChild(fragment);
+    }
+  }
 }
 
 function renderWorkspaceEditor() {
   const note = getSelectedWorkspaceNote();
+  const syncContext = deriveWorkspaceSyncContext(note);
   elements.workspaceEditor.innerHTML = `
     <div class="editor-toolbar">
       <div>
@@ -545,12 +684,25 @@ function renderWorkspaceEditor() {
     <ul class="editor-tags">
       ${note.tags.map((tag) => `<li>${escapeHtml(tag)}</li>`).join("")}
     </ul>
+    <section class="editor-sync-box">
+      <h3>Sync Signals</h3>
+      <p class="summary-copy">${escapeHtml(syncContext.headline)}</p>
+      <div class="editor-signal-row">
+        ${syncContext.signals
+          .map(
+            (signal) =>
+              `<span class="mini-pill tone-${escapeHtml(signal.level)} workspace-signal-pill">${escapeHtml(signal.label)}</span>`,
+          )
+          .join("")}
+      </div>
+    </section>
     <pre class="editor-body">${escapeHtml(note.body)}</pre>
   `;
 }
 
 function renderWorkspaceAiPanel() {
   const note = getSelectedWorkspaceNote();
+  const syncContext = deriveWorkspaceSyncContext(note);
   elements.workspaceAiPanel.innerHTML = `
     <div class="pane-heading">
       <div>
@@ -569,6 +721,12 @@ function renderWorkspaceAiPanel() {
         <strong>${escapeHtml(note.ai.warnings)}</strong>
       </article>
     </div>
+    <section class="ai-sync-box">
+      <h3>Operator Next Steps</h3>
+      <ul class="ai-list">
+        ${syncContext.actions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
+    </section>
     <section class="ai-section">
       <h3>Related Entities</h3>
       <div class="editor-tags">
@@ -587,6 +745,19 @@ function renderWorkspaceAiPanel() {
         note.ai.lint.length
           ? `<ul class="ai-list">${note.ai.lint.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
           : '<p class="ai-copy">No lint warnings for this note.</p>'
+      }
+    </section>
+    <section class="ai-section">
+      <h3>Related Sync Activity</h3>
+      ${
+        syncContext.relatedActivity.length
+          ? `<ul class="ai-list">${syncContext.relatedActivity
+              .map(
+                (record) =>
+                  `<li>${escapeHtml(record.action_id)} / ${escapeHtml(record.status)} / ${escapeHtml(record.message || "no message")}</li>`,
+              )
+              .join("")}</ul>`
+          : '<p class="ai-copy">No matching sync activity for this note.</p>'
       }
     </section>
   `;
