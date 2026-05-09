@@ -1,8 +1,10 @@
+import { runAiBoundaryTests } from "../tests/ai-boundary.test.mjs";
 import { runBridgeClientTests } from "../tests/bridge-client.test.mjs";
 import { runDesktopCliBridgeTests } from "../tests/desktop-cli-bridge.test.mjs";
 import { runDraftRecoveryTests } from "../tests/draft-recovery.test.mjs";
 
 const suites = [
+  ["ai-boundary", runAiBoundaryTests],
   ["desktop-cli-bridge", runDesktopCliBridgeTests],
   ["bridge-client", runBridgeClientTests],
   ["draft-recovery", runDraftRecoveryTests],

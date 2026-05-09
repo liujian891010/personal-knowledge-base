@@ -9,6 +9,10 @@ import {
   startBridgeStatusPolling,
 } from "./bridge-client.js";
 import {
+  buildAiCopilotAnswerFromPayload,
+  buildAiWikiCompileFromPayload,
+} from "./ai-boundary.js";
+import {
   buildDraftRecoveryEntry,
   createRuntimeSessionId,
   DRAFT_RECOVERY_STORAGE_KEY,
@@ -4426,22 +4430,23 @@ function buildAiWikiCompileRequestPayload({ note, syncContext, aiBriefing }) {
 }
 
 async function generateAiCopilotAnswer({ note, noteBody, syncContext, draftInsight, aiBriefing }) {
+  const payload = buildAiCopilotAnswerRequestPayload({
+    note,
+    syncContext,
+    draftInsight,
+    aiBriefing,
+  });
   try {
     return {
       ...(await requestAiCopilotAnswer(
-        buildAiCopilotAnswerRequestPayload({
-          note,
-          syncContext,
-          draftInsight,
-          aiBriefing,
-        }),
+        payload,
       )),
       source: "api",
     };
   } catch (error) {
     elements.workspaceStatus.textContent = "AI 调用边界暂不可用，已退回本地回答生成。";
     return {
-      ...buildAiCopilotAnswer({ note, noteBody, syncContext, draftInsight, aiBriefing }),
+      ...buildAiCopilotAnswerFromPayload(payload),
       source: "local-fallback",
     };
   }
@@ -6947,37 +6952,23 @@ async function compileCurrentScopeToAiWiki() {
     syncContext,
     draftInsight: buildEditorDraftInsight(currentNote, getActiveEditorDraft()),
   });
+  const compilePayload = buildAiWikiCompileRequestPayload({
+    note: currentNote,
+    syncContext,
+    aiBriefing,
+  });
   let compiledDraft = null;
   try {
     compiledDraft = {
       ...(await requestAiWikiCompile(
-        buildAiWikiCompileRequestPayload({
-          note: currentNote,
-          syncContext,
-          aiBriefing,
-        }),
+        compilePayload,
       )),
       source: "api",
     };
   } catch (error) {
     elements.workspaceStatus.textContent = "AI 编译接口暂不可用，已退回本地知识页生成。";
-    const fallbackDraft = buildAiCompileDraftBody({
-      note: currentNote,
-      syncContext,
-      aiBriefing,
-    });
     compiledDraft = {
-      title: state.aiCompile.targetTitle.trim() || buildAiCompileTargetTitle(currentNote),
-      body: fallbackDraft.body,
-      sourceNoteIds: fallbackDraft.scopeContext.notes.map((entry) => entry.id).slice(0, 12),
-      sourceScopeLabel: fallbackDraft.scopeContext.label,
-      topEntities: fallbackDraft.topEntities,
-      warnings: fallbackDraft.topEntities.length ? 0 : 1,
-      suggestions: [
-        "先人工核对这篇知识页，再决定是否继续补结构或进入正式同步。",
-        "如果范围过大，可切回单篇笔记或分区后重新编译。",
-      ],
-      lint: fallbackDraft.topEntities.length ? [] : ["当前实体提取较弱，建议补充正文后重新编译。"],
+      ...buildAiWikiCompileFromPayload(compilePayload),
       generatedAtMs: Date.now(),
       source: "local-fallback",
     };
