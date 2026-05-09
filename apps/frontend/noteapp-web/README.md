@@ -13,6 +13,7 @@ Current scope:
 7. Includes a prototype workspace shell with file tree, editor, and AI side panel chrome above the sync dock.
 8. Can auto-load a custom workspace shell contract through `?workspace=...`.
 9. Derives workspace note-level sync signals from the loaded sync payload so the tree, editor, and AI panel react to current sync state.
+10. Exposes sample and live app-session endpoints so the browser shell can load workspace chrome and sync state together.
 
 Local usage:
 
@@ -26,6 +27,8 @@ Then open:
 ```text
 http://127.0.0.1:4173/
 ```
+
+Inside the page you can now use `Load App Session` for the bundled end-to-end shell state, or `Refresh App Session` to pull a fresh desktop snapshot plus the workspace shell in one step.
 
 You can also pass bridge config directly on the dev command line:
 

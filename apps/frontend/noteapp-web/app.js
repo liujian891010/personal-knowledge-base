@@ -1,6 +1,8 @@
 import {
   executeBridgeAction,
+  fetchSampleAppSession,
   fetchBridgeStatus,
+  refreshAppSession,
   refreshBridgeSnapshot,
   startBridgeStatusPolling,
 } from "./bridge-client.js";
@@ -249,6 +251,8 @@ const elements = {
   actionContractHelp: document.getElementById("action-contract-help"),
   actionResultOutput: document.getElementById("action-result-output"),
   payloadInput: document.getElementById("payload-input"),
+  loadAppSessionButton: document.getElementById("load-app-session-button"),
+  refreshAppSessionButton: document.getElementById("refresh-app-session-button"),
   loadSampleButton: document.getElementById("load-sample-button"),
   loadLiveButton: document.getElementById("load-live-button"),
   refreshLocalButton: document.getElementById("refresh-local-button"),
@@ -342,6 +346,20 @@ function validateWorkspaceShell(payload) {
   }
 
   throw new Error("Unsupported workspace shell shape. Expected { sections: [], notes: {} }.");
+}
+
+function validateAppSession(payload) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    payload.syncPayload &&
+    payload.workspaceShell &&
+    typeof payload.source === "string"
+  ) {
+    return payload;
+  }
+
+  throw new Error("Unsupported app session shape.");
 }
 
 function renderExecutionResult(execution) {
@@ -1078,12 +1096,30 @@ function applyWorkspaceShell(payload, sourceLabel) {
   elements.actionExecutionStatus.textContent = `Workspace shell source: ${sourceLabel}.`;
 }
 
+function applyAppSession(payload, sourceLabel) {
+  const session = validateAppSession(payload);
+  applyWorkspaceShell(session.workspaceShell, `${sourceLabel} / workspace`);
+  applyPayload(session.syncPayload, `${sourceLabel} / sync`);
+  state.lastBridgeError = null;
+  elements.actionExecutionStatus.textContent = `App session source: ${session.source} at ${formatDateTime(session.loadedAtMs)}.`;
+}
+
 async function refreshFromDesktop() {
   const json = await refreshBridgeSnapshot({});
   state.lastBridgeError = null;
   state.lastExecution = null;
   elements.payloadInput.value = JSON.stringify(json.snapshot, null, 2);
   applyPayload(json.snapshot, "Refreshed from local desktop bridge");
+}
+
+async function loadSampleAppSession() {
+  const session = await fetchSampleAppSession();
+  applyAppSession(session, "Bundled app session");
+}
+
+async function refreshFullAppSession() {
+  const session = await refreshAppSession({});
+  applyAppSession(session, "Desktop bridge app session");
 }
 
 async function executeSelectedAction() {
@@ -1158,6 +1194,24 @@ elements.loadSampleButton.addEventListener("click", async () => {
     await loadSample();
   } catch (error) {
     renderEmptyDashboard(error instanceof Error ? error.message : String(error));
+  }
+});
+
+elements.loadAppSessionButton.addEventListener("click", async () => {
+  try {
+    await loadSampleAppSession();
+  } catch (error) {
+    renderEmptyDashboard(error instanceof Error ? error.message : String(error));
+  }
+});
+
+elements.refreshAppSessionButton.addEventListener("click", async () => {
+  try {
+    await refreshFullAppSession();
+  } catch (error) {
+    state.lastBridgeError = normalizeBridgeError(error);
+    elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
+    renderBridgeError(state.lastBridgeError);
   }
 });
 
