@@ -431,6 +431,18 @@ function readLocalWorkspaceSession() {
   }
 }
 
+function summarizeLocalWorkspaceSession() {
+  const session = readLocalWorkspaceSession();
+  if (!session) {
+    return null;
+  }
+  return {
+    ...session,
+    noteCount: Object.keys(session.workspaceShell.notes || {}).length,
+    sectionCount: Array.isArray(session.workspaceShell.sections) ? session.workspaceShell.sections.length : 0,
+  };
+}
+
 function clearLocalWorkspaceSession() {
   try {
     window.localStorage.removeItem(LOCAL_WORKSPACE_SESSION_STORAGE_KEY);
@@ -1308,6 +1320,7 @@ function buildSettingsSnapshot() {
   const status = state.bridgeStatus;
   const workspaceShell = getCurrentWorkspaceShell();
   const selectedNote = getSelectedWorkspaceNote();
+  const localWorkspaceSession = summarizeLocalWorkspaceSession();
   return {
     appSession: state.appSession,
     bridgeAvailable: Boolean(status?.available),
@@ -1325,6 +1338,7 @@ function buildSettingsSnapshot() {
     lastExecution: buildLastExecutionSummary(),
     localUiSettings: state.localUiSettings,
     expertMode: Boolean(state.localUiSettings.expertMode),
+    localWorkspaceSession,
   };
 }
 
@@ -2473,6 +2487,37 @@ function renderViewDetailGrid() {
         </div>
       </article>
       <article class="view-detail-card">
+        <p class="card-section-label">本机工作区会话</p>
+        <h3>自动恢复入口</h3>
+        <div class="detail-metric-grid">
+          <div class="detail-metric">
+            <span class="metric-label">恢复状态</span>
+            <strong>${settings.localWorkspaceSession ? "已保存" : "未保存"}</strong>
+          </div>
+          <div class="detail-metric">
+            <span class="metric-label">会话内容</span>
+            <strong>${escapeHtml(settings.localWorkspaceSession ? `${settings.localWorkspaceSession.sectionCount} 个分区 / ${settings.localWorkspaceSession.noteCount} 篇文档` : "无")}</strong>
+          </div>
+        </div>
+        <div class="view-stack">
+          <div class="detail-row">
+            <span>最后保存</span>
+            <strong>${escapeHtml(settings.localWorkspaceSession ? formatDateTime(settings.localWorkspaceSession.savedAtMs) : "无")}</strong>
+          </div>
+          <div class="detail-row">
+            <span>焦点文档</span>
+            <strong>${escapeHtml(settings.localWorkspaceSession?.workspaceShell?.notes?.[settings.localWorkspaceSession?.selectedWorkspaceNoteId]?.title || "无")}</strong>
+          </div>
+        </div>
+        <div class="detail-actions">
+          ${
+            settings.localWorkspaceSession
+              ? '<button class="ghost detail-inline-button" data-settings-command="clear-local-workspace-session" type="button">清除本机工作区会话</button>'
+              : ""
+          }
+        </div>
+      </article>
+      <article class="view-detail-card">
         <p class="card-section-label">常用接入</p>
         <h3>本地操作入口</h3>
         <div class="view-stack">
@@ -2626,6 +2671,12 @@ function renderViewDetailGrid() {
           elements.workspaceStatus.textContent = state.localUiSettings.expertMode
             ? "已开启高级调试模式。"
             : "已切回普通工作台模式。";
+          render();
+          return;
+        }
+        if (command === "clear-local-workspace-session") {
+          clearLocalWorkspaceSession();
+          elements.workspaceStatus.textContent = "已清除本机自动恢复的工作区会话。";
           render();
           return;
         }
