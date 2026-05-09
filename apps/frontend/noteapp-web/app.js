@@ -1409,6 +1409,17 @@ function getActiveEditorDraft() {
   return null;
 }
 
+function isEditorDraftDirty(note, draft) {
+  if (!note || !draft) {
+    return false;
+  }
+  return draft.title !== note.title || draft.body !== note.body;
+}
+
+function countDraftCharacters(text) {
+  return String(text || "").replace(/\s+/g, "").length;
+}
+
 function countWorkspaceNotes(workspaceShell) {
   return workspaceShell.sections.reduce(
     (total, section) => total + (Array.isArray(section.items) ? section.items.length : 0),
@@ -1567,6 +1578,8 @@ function renderWorkspaceEditor() {
   }
   const syncContext = deriveWorkspaceSyncContext(note);
   const editorDraft = getActiveEditorDraft();
+  const draftDirty = isEditorDraftDirty(note, editorDraft);
+  const draftWordCount = editorDraft ? countDraftCharacters(editorDraft.body) : 0;
   elements.workspaceEditor.innerHTML = `
     <div class="editor-toolbar">
       <div>
@@ -1578,6 +1591,7 @@ function renderWorkspaceEditor() {
         ${
           editorDraft
             ? `
+              <span id="editor-dirty-indicator" class="mini-pill ${draftDirty ? "tone-warning" : "tone-success"}">${draftDirty ? "未保存修改" : "已同步草稿"}</span>
               <button class="ghost editor-action-button" data-editor-command="cancel" type="button">取消</button>
               <button class="solid editor-action-button" data-editor-command="save" type="button">保存草稿</button>
             `
@@ -1627,6 +1641,10 @@ function renderWorkspaceEditor() {
                 placeholder="输入正文内容"
               >${escapeHtml(editorDraft.body)}</textarea>
             </label>
+            <div class="editor-draft-meta">
+              <span id="editor-word-count" class="mini-pill tone-info">字数 ${escapeHtml(draftWordCount)}</span>
+              <span class="mini-pill tone-info">快捷键 Ctrl+S 保存</span>
+            </div>
             <p class="summary-copy">当前保存到浏览器本地草稿工作区，不会直接写回桌面仓库。</p>
           </section>
         `
@@ -1636,13 +1654,29 @@ function renderWorkspaceEditor() {
 
   const titleInput = elements.workspaceEditor.querySelector("#editor-title-input");
   const bodyInput = elements.workspaceEditor.querySelector("#editor-body-input");
+  const dirtyIndicator = elements.workspaceEditor.querySelector("#editor-dirty-indicator");
+  const wordCount = elements.workspaceEditor.querySelector("#editor-word-count");
   if (titleInput && bodyInput && editorDraft) {
+    const updateDraftMeta = () => {
+      const currentNote = getSelectedWorkspaceNote();
+      const currentDraft = state.editorDraft;
+      const isDirty = isEditorDraftDirty(currentNote, currentDraft);
+      if (dirtyIndicator) {
+        dirtyIndicator.className = `mini-pill ${isDirty ? "tone-warning" : "tone-success"}`;
+        dirtyIndicator.textContent = isDirty ? "未保存修改" : "已同步草稿";
+      }
+      if (wordCount) {
+        const count = countDraftCharacters(currentDraft.body);
+        wordCount.textContent = `字数 ${count}`;
+      }
+    };
     titleInput.addEventListener("input", (event) => {
       state.editorDraft = {
         ...editorDraft,
         title: event.target.value,
         body: bodyInput.value,
       };
+      updateDraftMeta();
     });
     bodyInput.addEventListener("input", (event) => {
       state.editorDraft = {
@@ -1650,6 +1684,18 @@ function renderWorkspaceEditor() {
         title: titleInput.value,
         body: event.target.value,
       };
+      updateDraftMeta();
+    });
+    const saveOnShortcut = (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        saveEditingSelectedNote();
+      }
+    };
+    titleInput.addEventListener("keydown", saveOnShortcut);
+    bodyInput.addEventListener("keydown", saveOnShortcut);
+    bodyInput.addEventListener("focus", () => {
+      bodyInput.setSelectionRange(bodyInput.value.length, bodyInput.value.length);
     });
   }
 
