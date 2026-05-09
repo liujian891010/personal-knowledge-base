@@ -30,6 +30,12 @@ const DEFAULT_LOCAL_UI_SETTINGS = {
   includeAiRawInExport: false,
   expertMode: false,
 };
+const DEFAULT_AI_COPILOT_STATE = {
+  anchorNoteId: null,
+  scope: "current-note",
+  question: "",
+  lastAnswer: null,
+};
 const draftAutosaveTimers = new Map();
 const WORKSPACE_SAMPLE = {
   sections: [
@@ -266,12 +272,7 @@ const state = {
   draftRecoveryMeta: {},
   recoveryDrafts: [],
   localUiSettings: DEFAULT_LOCAL_UI_SETTINGS,
-  aiCopilot: {
-    anchorNoteId: null,
-    scope: "current-note",
-    question: "",
-    lastAnswer: null,
-  },
+  aiCopilot: { ...DEFAULT_AI_COPILOT_STATE },
   runtimeSessionId: createRuntimeSessionId(),
 };
 
@@ -416,6 +417,43 @@ function loadLocalUiSettings() {
   }
 }
 
+function parseAiCopilotState(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ...DEFAULT_AI_COPILOT_STATE };
+  }
+
+  const allowedScopes = new Set(["current-note", "current-section", "search-results", "workspace"]);
+  const lastAnswer =
+    raw.lastAnswer && typeof raw.lastAnswer === "object" && !Array.isArray(raw.lastAnswer)
+      ? {
+          anchorNoteId: typeof raw.lastAnswer.anchorNoteId === "string" ? raw.lastAnswer.anchorNoteId : null,
+          question: typeof raw.lastAnswer.question === "string" ? raw.lastAnswer.question : "",
+          scopeLabel: typeof raw.lastAnswer.scopeLabel === "string" ? raw.lastAnswer.scopeLabel : "当前笔记",
+          headline: typeof raw.lastAnswer.headline === "string" ? raw.lastAnswer.headline : "",
+          summary: typeof raw.lastAnswer.summary === "string" ? raw.lastAnswer.summary : "",
+          bullets: Array.isArray(raw.lastAnswer.bullets)
+            ? raw.lastAnswer.bullets.filter((item) => typeof item === "string").slice(0, 6)
+            : [],
+          sources: Array.isArray(raw.lastAnswer.sources)
+            ? raw.lastAnswer.sources
+                .filter((item) => item && typeof item.id === "string" && typeof item.title === "string")
+                .slice(0, 6)
+            : [],
+          entities: Array.isArray(raw.lastAnswer.entities)
+            ? raw.lastAnswer.entities.filter((item) => typeof item === "string").slice(0, 8)
+            : [],
+          generatedAtMs: typeof raw.lastAnswer.generatedAtMs === "number" ? raw.lastAnswer.generatedAtMs : Date.now(),
+        }
+      : null;
+
+  return {
+    anchorNoteId: typeof raw.anchorNoteId === "string" ? raw.anchorNoteId : null,
+    scope: allowedScopes.has(raw.scope) ? raw.scope : DEFAULT_AI_COPILOT_STATE.scope,
+    question: typeof raw.question === "string" ? raw.question : "",
+    lastAnswer,
+  };
+}
+
 function readLocalWorkspaceSession() {
   try {
     const raw = window.localStorage.getItem(LOCAL_WORKSPACE_SESSION_STORAGE_KEY);
@@ -430,6 +468,7 @@ function readLocalWorkspaceSession() {
         typeof parsed.selectedWorkspaceNoteId === "string" ? parsed.selectedWorkspaceNoteId : "desktop-bridge",
       workspaceSourceLabel:
         typeof parsed.workspaceSourceLabel === "string" ? parsed.workspaceSourceLabel : "浏览器本地草稿",
+      aiCopilot: parseAiCopilotState(parsed.aiCopilot),
       savedAtMs: typeof parsed.savedAtMs === "number" ? parsed.savedAtMs : Date.now(),
     };
   } catch {
@@ -446,6 +485,9 @@ function summarizeLocalWorkspaceSession() {
     ...session,
     noteCount: Object.keys(session.workspaceShell.notes || {}).length,
     sectionCount: Array.isArray(session.workspaceShell.sections) ? session.workspaceShell.sections.length : 0,
+    aiQuestion: session.aiCopilot?.lastAnswer?.question || session.aiCopilot?.question || "",
+    aiHeadline: session.aiCopilot?.lastAnswer?.headline || "",
+    aiGeneratedAtMs: session.aiCopilot?.lastAnswer?.generatedAtMs || null,
   };
 }
 
@@ -470,6 +512,7 @@ function persistLocalWorkspaceSession() {
         workspaceShell: state.workspaceShell,
         selectedWorkspaceNoteId: state.selectedWorkspaceNoteId,
         workspaceSourceLabel: state.workspaceSourceLabel,
+        aiCopilot: state.aiCopilot,
         savedAtMs: Date.now(),
       }),
     );
@@ -486,6 +529,7 @@ function restoreLocalWorkspaceSession(options = {}) {
   }
 
   state.selectedWorkspaceNoteId = session.selectedWorkspaceNoteId;
+  state.aiCopilot = parseAiCopilotState(session.aiCopilot);
   applyWorkspaceShell(session.workspaceShell, session.workspaceSourceLabel);
 
   if (options.pushHistory !== false) {
@@ -1843,9 +1887,19 @@ function renderViewDetailGrid() {
                       <strong>已保存本机工作区</strong>
                       <span>${escapeHtml(`${localWorkspaceSession.sectionCount} 个分区 · ${localWorkspaceSession.noteCount} 篇文档`)}</span>
                       <span>${escapeHtml(`最后保存于 ${formatDateTime(localWorkspaceSession.savedAtMs)}`)}</span>
+                      ${
+                        localWorkspaceSession.aiHeadline
+                          ? `<span>${escapeHtml(`最近 AI 结论：${localWorkspaceSession.aiHeadline}`)}</span>`
+                          : ""
+                      }
                     </div>
                     <div class="overview-row-meta">
                       <span class="mini-pill tone-success">可自动恢复</span>
+                      ${
+                        localWorkspaceSession.aiGeneratedAtMs
+                          ? `<span class="mini-pill tone-info">${escapeHtml(`AI ${formatDateTime(localWorkspaceSession.aiGeneratedAtMs)}`)}</span>`
+                          : ""
+                      }
                     </div>
                   </div>
                   <div class="detail-actions overview-row-actions">
@@ -2808,6 +2862,17 @@ function renderViewDetailGrid() {
             <span>焦点文档</span>
             <strong>${escapeHtml(settings.localWorkspaceSession?.workspaceShell?.notes?.[settings.localWorkspaceSession?.selectedWorkspaceNoteId]?.title || "无")}</strong>
           </div>
+          ${
+            settings.localWorkspaceSession?.aiQuestion
+              ? `
+                <div class="detail-row detail-row-block">
+                  <strong>最近 AI 问答</strong>
+                  <span>${escapeHtml(settings.localWorkspaceSession.aiQuestion)}</span>
+                  ${settings.localWorkspaceSession.aiHeadline ? `<span>${escapeHtml(settings.localWorkspaceSession.aiHeadline)}</span>` : ""}
+                </div>
+              `
+              : ""
+          }
         </div>
         <div class="detail-actions">
           ${
@@ -4561,6 +4626,11 @@ function renderWorkspaceRail() {
               <span class="session-rail-title">本机工作区会话</span>
               <strong>${escapeHtml(`已自动保存 · ${localWorkspaceSession.noteCount} 篇文档`)}</strong>
               <p class="session-rail-copy">${escapeHtml(`最后保存于 ${formatDateTime(localWorkspaceSession.savedAtMs)}，刷新页面后会优先恢复这份本机工作区。`)}</p>
+              ${
+                localWorkspaceSession.aiHeadline
+                  ? `<p class="session-rail-copy">${escapeHtml(`最近 AI 结论：${localWorkspaceSession.aiHeadline}`)}</p>`
+                  : ""
+              }
               <div class="detail-actions rail-action-row">
                 <button class="ghost detail-inline-button" data-rail-command="clear-local-workspace-session" type="button">清除恢复入口</button>
               </div>
@@ -4978,6 +5048,7 @@ function renderWorkspaceAiPanel() {
       anchorNoteId: note.id,
       lastAnswer: null,
     };
+    persistLocalWorkspaceSession();
   }
   const syncContext = deriveWorkspaceSyncContext(note);
   const editorDraft = getActiveEditorDraft();
@@ -5250,12 +5321,14 @@ function renderWorkspaceAiPanel() {
   if (aiQuestionInput) {
     aiQuestionInput.addEventListener("input", (event) => {
       state.aiCopilot.question = event.target.value;
+      persistLocalWorkspaceSession();
     });
   }
   for (const button of elements.workspaceAiPanel.querySelectorAll("[data-ai-scope]")) {
     button.addEventListener("click", () => {
       state.aiCopilot.scope = button.dataset.aiScope || "current-note";
       state.aiCopilot.lastAnswer = null;
+      persistLocalWorkspaceSession();
       render();
     });
   }
@@ -5263,6 +5336,7 @@ function renderWorkspaceAiPanel() {
     button.addEventListener("click", () => {
       state.aiCopilot.question = button.dataset.aiQuestionSuggestion || "";
       state.aiCopilot.lastAnswer = null;
+      persistLocalWorkspaceSession();
       render();
     });
   }
@@ -5283,6 +5357,7 @@ function renderWorkspaceAiPanel() {
           aiBriefing,
         });
         state.aiCopilot.lastAnswer = answer;
+        persistLocalWorkspaceSession();
         elements.workspaceStatus.textContent = `已生成 AI 回答：${answer.scopeLabel}`;
         pushSessionHistory({
           type: "ai_answer_generated",
@@ -5847,6 +5922,9 @@ function applyWorkspaceShell(payload, sourceLabel) {
   state.workspaceShell = workspaceShell;
   state.workspaceSourceLabel = sourceLabel;
   state.appSession = null;
+  if (sourceLabel !== "浏览器本地草稿") {
+    state.aiCopilot = { ...DEFAULT_AI_COPILOT_STATE };
+  }
   pruneEditorDrafts(workspaceShell);
   refreshRecoveryDrafts();
   if (!workspaceShell.notes[state.selectedWorkspaceNoteId]) {
