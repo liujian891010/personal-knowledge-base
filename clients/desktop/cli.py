@@ -191,6 +191,11 @@ def create_parser() -> argparse.ArgumentParser:
     execute_action_parser = subparsers.add_parser("execute-sync-action")
     execute_action_parser.add_argument("--action-id", required=True)
     execute_action_parser.add_argument("--now-ms", type=int)
+    execute_action_snapshot_parser = subparsers.add_parser("execute-sync-action-and-snapshot")
+    execute_action_snapshot_parser.add_argument("--action-id", required=True)
+    execute_action_snapshot_parser.add_argument("--now-ms", type=int)
+    execute_action_snapshot_parser.add_argument("--activity-limit", type=int, default=20)
+    execute_action_snapshot_parser.add_argument("--output-json")
     inspect_vault_parser = subparsers.add_parser("inspect-vault-package")
     inspect_vault_parser.add_argument("--input-package", required=True)
     subparsers.add_parser("list-conflicts")
@@ -372,6 +377,12 @@ def run_cli(
         result = service.list_sync_activity(limit=args.limit)
     elif args.command == "execute-sync-action":
         result = service.execute_sync_action(args.action_id, now_ms=args.now_ms)
+    elif args.command == "execute-sync-action-and-snapshot":
+        result = service.execute_sync_action_and_snapshot(
+            args.action_id,
+            now_ms=args.now_ms,
+            activity_limit=args.activity_limit,
+        )
     elif args.command == "export-vault":
         result = service.export_vault_package(
             Path(args.output_package),
