@@ -237,14 +237,18 @@ const state = {
   lastExecution: null,
   sourceLabel: "未加载",
   searchQuery: "",
+  activeNavView: "overview",
 };
 
 const elements = {
   searchInput: document.getElementById("search-input"),
   quickCaptureButton: document.getElementById("quick-capture-button"),
   newNoteButton: document.getElementById("new-note-button"),
+  navButtons: Array.from(document.querySelectorAll("[data-nav-view]")),
   payloadKind: document.getElementById("payload-kind"),
   payloadDetail: document.getElementById("payload-detail"),
+  workspaceShellRoot: document.getElementById("workspace-shell-root"),
+  viewModeCard: document.getElementById("view-mode-card"),
   panelCard: document.getElementById("panel-card"),
   summaryGrid: document.getElementById("summary-grid"),
   cardsGrid: document.getElementById("cards-grid"),
@@ -651,11 +655,88 @@ function formatSessionSourceLabel(source) {
   }[source] || source;
 }
 
+function formatNavViewLabel(view) {
+  return {
+    overview: "总览",
+    graph: "知识图谱",
+    repository: "仓库浏览",
+    conflicts: "冲突处理",
+    settings: "设置",
+  }[view] || view;
+}
+
 function createSignal(level, label) {
   return {
     level: resolveTone(level),
     label,
   };
+}
+
+function renderNavigation() {
+  for (const button of elements.navButtons) {
+    button.classList.toggle("is-active", button.dataset.navView === state.activeNavView);
+  }
+}
+
+function renderViewModeCard() {
+  renderNavigation();
+
+  if (state.activeNavView === "overview") {
+    elements.viewModeCard.hidden = true;
+    elements.viewModeCard.innerHTML = "";
+    return;
+  }
+
+  const summary = state.syncCenter?.summary || null;
+  const conflictCount = summary
+    ? (summary.conflicts?.conflict_copies?.length || 0) + (summary.conflicts?.conflict_orphans?.length || 0)
+    : 0;
+  const viewConfigs = {
+    repository: {
+      tone: "info",
+      title: "仓库浏览视图",
+      detail: "当前聚焦文档树、编辑区和 AI 侧栏，同步看板暂时收起，适合连续整理笔记内容。",
+      pills: [`搜索：${state.searchQuery ? `“${state.searchQuery}”` : "未启用"}`, "主区：编辑与 AI"],
+    },
+    conflicts: {
+      tone: "warning",
+      title: "冲突处理视图",
+      detail: "当前优先显示同步冲突与相关活动，便于在进入下一次提交前先消化阻塞项。",
+      pills: [`冲突工件：${conflictCount}`, `阻塞项：${summary?.commit_gate?.blocking_reasons?.length || 0}`],
+    },
+    graph: {
+      tone: "info",
+      title: "知识图谱视图",
+      detail: "这一视图先承接知识连接的方向说明，后续会把实体关系、来源链接和 AI 编译结果汇总到这里。",
+      pills: ["后续接入实体图", "对齐 phb-ui 主壳"],
+    },
+    settings: {
+      tone: "info",
+      title: "本地设置视图",
+      detail: "这里先展示当前前端会话来源和桥接状态，后续会收敛成真正的本地优先设置中心。",
+      pills: [`工作区：${state.workspaceSourceLabel}`, `同步：${state.sourceLabel}`],
+    },
+  };
+  const config = viewConfigs[state.activeNavView];
+
+  elements.viewModeCard.hidden = false;
+  elements.viewModeCard.innerHTML = `
+    <div class="panel-topline">
+      <span class="level-pill tone-${config.tone}">${formatNavViewLabel(state.activeNavView)}</span>
+      ${config.pills.map((pill) => `<span class="mini-pill tone-info">${escapeHtml(pill)}</span>`).join("")}
+    </div>
+    <h2 class="panel-headline">${escapeHtml(config.title)}</h2>
+    <p class="summary-copy">${escapeHtml(config.detail)}</p>
+  `;
+}
+
+function renderNavViewVisibility() {
+  const showSyncSections = ["overview", "conflicts"].includes(state.activeNavView);
+  elements.panelCard.hidden = !showSyncSections;
+  elements.summaryGrid.hidden = !showSyncSections;
+  elements.cardsGrid.hidden = !showSyncSections;
+  elements.activityCard.hidden = !showSyncSections;
+  elements.workspaceShellRoot.hidden = state.activeNavView === "settings";
 }
 
 function deriveWorkspaceSyncContext(note) {
@@ -1154,9 +1235,25 @@ function renderSummary(syncCenter) {
 
 function renderCards(syncCenter) {
   const query = normalizeSearchQuery(state.searchQuery);
-  const visibleCards = syncCenter.cards.filter((card) =>
-    matchesSearchQuery(query, card.card_id, card.kind, card.title, card.body, card.actions?.map((action) => action.label).join(" ")),
-  );
+  const visibleCards = syncCenter.cards.filter((card) => {
+    const matchesView =
+      state.activeNavView !== "conflicts" ||
+      card.kind === "conflicts" ||
+      card.kind === "activity" ||
+      card.card_id.includes("conflict");
+
+    return (
+      matchesView &&
+      matchesSearchQuery(
+        query,
+        card.card_id,
+        card.kind,
+        card.title,
+        card.body,
+        card.actions?.map((action) => action.label).join(" "),
+      )
+    );
+  });
 
   if (!visibleCards.length) {
     elements.cardsGrid.innerHTML = `
@@ -1252,6 +1349,8 @@ function renderActivity(feed) {
 }
 
 function renderEmptyDashboard(message) {
+  renderViewModeCard();
+  renderNavViewVisibility();
   elements.payloadKind.textContent = "未加载";
   elements.payloadDetail.textContent = message;
   elements.panelCard.innerHTML = `<div class="empty-state"><p>${escapeHtml(message)}</p></div>`;
@@ -1267,6 +1366,8 @@ function renderEmptyDashboard(message) {
 }
 
 function render() {
+  renderViewModeCard();
+  renderNavViewVisibility();
   renderBridgeStatus();
   renderExecutionResult(state.lastExecution);
   renderWorkspaceChrome();
@@ -1622,6 +1723,13 @@ elements.quickCaptureButton.addEventListener("click", () => {
 elements.newNoteButton.addEventListener("click", () => {
   createQuickCaptureNote();
 });
+
+for (const button of elements.navButtons) {
+  button.addEventListener("click", () => {
+    state.activeNavView = button.dataset.navView || "overview";
+    render();
+  });
+}
 
 elements.loadSampleButton.addEventListener("click", async () => {
   try {

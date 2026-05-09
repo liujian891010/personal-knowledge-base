@@ -41,11 +41,11 @@
             </div>
             <button id="new-note-button" class="solid sidebar-primary-button" type="button">新建笔记</button>
             <nav class="sidebar-nav">
-              <button class="sidebar-nav-item is-active" type="button">总览</button>
-              <button class="sidebar-nav-item" type="button">知识图谱</button>
-              <button class="sidebar-nav-item" type="button">仓库浏览</button>
-              <button class="sidebar-nav-item" type="button">冲突处理</button>
-              <button class="sidebar-nav-item" type="button">设置</button>
+              <button class="sidebar-nav-item is-active" data-nav-view="overview" type="button">总览</button>
+              <button class="sidebar-nav-item" data-nav-view="graph" type="button">知识图谱</button>
+              <button class="sidebar-nav-item" data-nav-view="repository" type="button">仓库浏览</button>
+              <button class="sidebar-nav-item" data-nav-view="conflicts" type="button">冲突处理</button>
+              <button class="sidebar-nav-item" data-nav-view="settings" type="button">设置</button>
             </nav>
           </section>
 
@@ -147,7 +147,7 @@
         </aside>
 
         <section class="dashboard">
-          <section class="workspace-shell">
+          <section class="workspace-shell" id="workspace-shell-root">
             <article class="workspace-pane editor-pane">
               <div class="pane-heading pane-heading-inline">
                 <div>
@@ -171,6 +171,7 @@
             </article>
           </section>
 
+          <div class="panel-card" id="view-mode-card" hidden></div>
           <div class="panel-card" id="panel-card"></div>
           <div class="summary-grid" id="summary-grid"></div>
           <div class="cards-grid" id="cards-grid"></div>
