@@ -820,7 +820,7 @@ function formatBridgeConfigSource(source) {
     cli: "命令行",
     local_file: "本地配置文件",
     desktop_bridge: "桌面桥接",
-    sample: "内置样例",
+    sample: "演示数据",
   }[source] || source;
 }
 
@@ -898,7 +898,7 @@ function formatActivityMessage(message) {
 
 function formatSessionSourceLabel(source) {
   return {
-    sample: "内置样例",
+    sample: "演示会话",
     "desktop-bridge": "桌面桥接",
   }[source] || source;
 }
@@ -2064,7 +2064,7 @@ function renderViewDetailGrid() {
                     `,
                   )
                   .join("")
-              : '<div class="empty-state"><p>当前样例还没有足够的共享实体来生成连接。</p></div>'
+              : '<div class="empty-state"><p>当前数据里还没有足够的共享实体来生成连接。</p></div>'
           }
         </div>
       </article>
@@ -2425,16 +2425,16 @@ function renderViewDetailGrid() {
         <div class="view-stack">
           <div class="detail-row detail-row-block">
             <strong>当前建议</strong>
-            <span>${escapeHtml(settings.bridgeAvailable ? "桥接可用，优先刷新实时会话并在工作区中继续推进。" : "桥接暂不可用，可先加载样例会话或整理本地草稿。")}</span>
+            <span>${escapeHtml(settings.bridgeAvailable ? "桥接可用，优先刷新实时会话并在工作区中继续推进。" : "桥接暂不可用，可先加载演示会话或整理本地草稿。")}</span>
           </div>
           <div class="detail-row detail-row-block">
-            <strong>工作区样例</strong>
-            <span>用于快速确认当前壳层 UI、树形结构、编辑区与 AI 面板是否都能联动。</span>
+            <strong>演示工作区</strong>
+            <span>用于快速确认当前工作台、树形结构、编辑区与 AI 面板是否都能联动。</span>
           </div>
         </div>
         <div class="detail-actions">
-          <button class="ghost detail-inline-button" data-settings-command="load-sample-session" type="button">加载样例会话</button>
-          <button class="ghost detail-inline-button" data-settings-command="load-workspace-sample" type="button">加载工作区样例</button>
+          <button class="ghost detail-inline-button" data-settings-command="load-sample-session" type="button">加载演示会话</button>
+          <button class="ghost detail-inline-button" data-settings-command="load-workspace-sample" type="button">加载演示工作区</button>
           <button class="solid detail-inline-button" data-settings-command="quick-capture" type="button">新建快速记录</button>
         </div>
       </article>
@@ -2555,7 +2555,7 @@ function renderViewDetailGrid() {
         }
         if (command === "load-workspace-sample") {
           try {
-            await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "内置工作区样例");
+            await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "演示工作区");
           } catch (error) {
             elements.workspaceStatus.textContent = error instanceof Error ? error.message : String(error);
           }
@@ -4867,7 +4867,7 @@ function renderEmptyDashboard(message) {
       <p>${escapeHtml(message)}</p>
       <p>${escapeHtml(state.localUiSettings.expertMode ? "你也可以继续留在高级调试模式下手动导入契约，但普通使用建议先从内置会话开始。" : "建议先加载一个工作会话，再进入仓库浏览、编辑器和同步工作台。")}</p>
       <div class="detail-actions">
-        <button class="solid detail-inline-button" data-empty-command="load-sample-session" type="button">加载内置会话</button>
+        <button class="solid detail-inline-button" data-empty-command="load-sample-session" type="button">加载演示会话</button>
         <button class="ghost detail-inline-button" data-empty-command="refresh-session" type="button">刷新本地会话</button>
         <button class="ghost detail-inline-button" data-empty-command="open-settings" type="button">打开设置</button>
       </div>
@@ -5032,7 +5032,7 @@ function resolveInitialPayloadPath() {
 }
 
 async function loadSample() {
-  await loadPayloadFromPath(SAMPLE_PATH, "内置同步快照样例");
+  await loadPayloadFromPath(SAMPLE_PATH, "演示同步快照");
 }
 
 async function loadLiveSnapshot() {
@@ -5163,7 +5163,7 @@ async function loadInitialSession() {
     if (explicitWorkspacePath) {
       await loadWorkspaceShellFromPath(explicitWorkspacePath, explicitWorkspacePath);
     } else {
-      await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "内置工作区样例");
+      await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "演示工作区");
     }
 
     if (explicitPayloadPath) {
@@ -5543,7 +5543,7 @@ elements.loadLiveButton.addEventListener("click", async () => {
 
 elements.loadWorkspaceSampleButton.addEventListener("click", async () => {
   try {
-    await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "内置工作区样例");
+    await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "演示工作区");
   } catch (error) {
     elements.workspaceStatus.textContent = error instanceof Error ? error.message : String(error);
   }
@@ -5678,7 +5678,7 @@ startBridgeStatusPolling({
 loadInitialSession().catch(async (error) => {
   try {
     state.workspaceShell = null;
-    state.workspaceSourceLabel = "内置兜底样例";
+    state.workspaceSourceLabel = "演示工作区";
     elements.workspaceInput.value = JSON.stringify(WORKSPACE_SAMPLE, null, 2);
     renderWorkspaceChrome();
     await loadInitialPayload();
