@@ -689,7 +689,15 @@ function renderBridgeError(error) {
     elements.bridgeErrorOutput.textContent = "当前没有桥接错误。";
     return;
   }
-  elements.bridgeErrorOutput.textContent = JSON.stringify(error, null, 2);
+  elements.bridgeErrorOutput.textContent = JSON.stringify(
+    {
+      code: formatBridgeDiagnosticCode(error.code),
+      message: error.message,
+      details: error.details || null,
+    },
+    null,
+    2,
+  );
 }
 
 function renderBridgeDiagnostics(status) {
@@ -702,9 +710,14 @@ function renderBridgeDiagnostics(status) {
       checkedAt: state.bridgeCheckedAtMs ? formatDateTime(state.bridgeCheckedAtMs) : "尚未检查",
       mode: status.mode || "未知",
       available: Boolean(status.available),
-      missing: status.missing || [],
+      missing: (status.missing || []).map(formatBridgeMissingItem),
       config: status.config || null,
-      diagnostics: Array.isArray(status.diagnostics) ? status.diagnostics : [],
+      diagnostics: Array.isArray(status.diagnostics)
+        ? status.diagnostics.map((item) => ({
+            ...item,
+            code: formatBridgeDiagnosticCode(item.code),
+          }))
+        : [],
     },
     null,
     2,
@@ -735,7 +748,7 @@ function renderBridgeStatus() {
     return;
   }
 
-  elements.bridgeStatus.textContent = `本地桌面桥接不可用：缺少 ${status.missing.join(", ")}`;
+  elements.bridgeStatus.textContent = `本地桌面桥接不可用：缺少 ${(status.missing || []).map(formatBridgeMissingItem).join("、")}`;
   elements.refreshLocalButton.disabled = true;
   elements.executeSelectedButton.disabled = true;
   elements.reloadBridgeStatusButton.disabled = false;
@@ -958,6 +971,26 @@ function formatActivityMessage(message) {
     return "需要先完整拉取，再继续当前动作。";
   }
   return message;
+}
+
+function formatBridgeMissingItem(item) {
+  return {
+    dev_server_bridge: "本地开发桥接服务",
+    "--vault-root": "Vault 根目录",
+    "--base-url": "同步服务地址",
+    "--vault-id": "Vault 标识",
+    "--device-id": "设备标识",
+  }[item] || item;
+}
+
+function formatBridgeDiagnosticCode(code) {
+  return {
+    dev_server_bridge_unreachable: "本地桥接不可达",
+    bridge_not_configured: "本地桥接尚未配置",
+    bridge_empty_response: "本地桥接返回为空",
+    client_error: "本地请求异常",
+    bridge_error: "桥接执行异常",
+  }[code] || code;
 }
 
 function formatSessionSourceLabel(source) {
@@ -2455,7 +2488,7 @@ function renderViewDetailGrid() {
           ${
             settings.missing.length
               ? settings.missing
-                  .map((item) => `<span class="mini-pill tone-warning">${escapeHtml(item)}</span>`)
+                  .map((item) => `<span class="mini-pill tone-warning">${escapeHtml(formatBridgeMissingItem(item))}</span>`)
                   .join("")
               : '<span class="mini-pill tone-success">桥接配置已齐全</span>'
           }
@@ -2463,7 +2496,7 @@ function renderViewDetailGrid() {
             settings.diagnostics.slice(0, 4).length
               ? settings.diagnostics
                   .slice(0, 4)
-                  .map((item) => `<span class="mini-pill tone-${resolveTone(item.level)}">${escapeHtml(item.code)}</span>`)
+                  .map((item) => `<span class="mini-pill tone-${resolveTone(item.level)}">${escapeHtml(formatBridgeDiagnosticCode(item.code))}</span>`)
                   .join("")
               : ""
           }
