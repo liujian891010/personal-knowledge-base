@@ -372,6 +372,32 @@ textarea::placeholder {
   margin-top: 14px;
 }
 
+.control-hero-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.control-status-card {
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.control-status-title {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+}
+
+.control-status-card .bridge-status {
+  margin-top: 8px;
+  color: var(--ink);
+}
+
 .details-block {
   margin-top: 14px;
   border: 1px solid var(--line-soft);
@@ -1258,7 +1284,8 @@ pre {
   }
 
   .editor-brief-metrics,
-  .rail-metric-grid {
+  .rail-metric-grid,
+  .control-hero-grid {
     grid-template-columns: 1fr;
   }
 
