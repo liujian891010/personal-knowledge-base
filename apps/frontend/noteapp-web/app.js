@@ -939,9 +939,10 @@ function renderViewModeCard() {
         <span class="level-pill tone-info">总览</span>
         <span class="mini-pill tone-info">未保存草稿：${escapeHtml(dirtyDraftCount)}</span>
         <span class="mini-pill tone-${recoveryCount ? "warning" : "success"}">恢复队列：${escapeHtml(recoveryCount)}</span>
+        <span class="mini-pill tone-info">同步详情：冲突处理视图</span>
       </div>
       <h2 class="panel-headline">工作台总览</h2>
-      <p class="summary-copy">这里汇总当前会话的编辑、收件箱、同步前准备以及异常恢复入口，作为真实使用时的首页工作台。</p>
+      <p class="summary-copy">这里汇总当前会话的编辑、收件箱、同步前准备以及异常恢复入口；详细同步卡片与活动流收敛到“冲突处理”视图，首页只保留高频动作。</p>
       ${
         recoveryCount
           ? `
@@ -1030,9 +1031,92 @@ function renderViewDetailGrid() {
     const recentNotes = notes.slice(0, 4);
     const actionableDraft = draftNotes.find((entry) => entry.note.statusLabel?.includes("更新")) || draftNotes[0] || null;
     const recommendedDraftAction = actionableDraft ? findRecommendedSyncActionForNote(actionableDraft.note) : null;
+    const summary = state.syncCenter?.summary || null;
+    const recentActivity = state.activityFeed?.records || state.syncCenter?.recent_activity?.records || [];
+    const latestActivity = recentActivity.length ? recentActivity[recentActivity.length - 1] : null;
+    const lastExecution = buildLastExecutionSummary();
+    const conflictCount = summary
+      ? (summary.conflicts?.conflict_copies?.length || 0) + (summary.conflicts?.conflict_orphans?.length || 0)
+      : 0;
+    const blockingReasons = Array.isArray(summary?.commit_gate?.blocking_reasons)
+      ? summary.commit_gate.blocking_reasons.map(formatBlockingReason)
+      : [];
+    const recentSessionEntries = state.sessionHistory.slice(0, 4);
 
     elements.viewDetailGrid.hidden = false;
     elements.viewDetailGrid.innerHTML = `
+      <article class="view-detail-card">
+        <p class="card-section-label">同步速览</p>
+        <h3>当前同步状态</h3>
+        <div class="detail-metric-grid">
+          <div class="detail-metric">
+            <span class="metric-label">本地变更</span>
+            <strong>${escapeHtml(summary?.changes?.change_count ?? 0)}</strong>
+          </div>
+          <div class="detail-metric">
+            <span class="metric-label">冲突工件</span>
+            <strong>${escapeHtml(conflictCount)}</strong>
+          </div>
+        </div>
+        <div class="view-stack">
+          <div class="detail-row detail-row-block">
+            <strong>${escapeHtml(state.bridgeStatus?.available ? "桌面桥接已连接" : "桌面桥接未连接")}</strong>
+            <span>${escapeHtml(state.bridgeStatus?.available ? "当前可以从工作台直接触发同步动作。" : "仍可整理本地草稿，但暂时无法直接执行桥接动作。")}</span>
+          </div>
+          <div class="detail-row detail-row-block">
+            <strong>${escapeHtml(blockingReasons.length ? `存在 ${blockingReasons.length} 个阻塞项` : "当前无提交阻塞项")}</strong>
+            <span>${escapeHtml(blockingReasons.length ? blockingReasons.join("，") : "可以在完成草稿整理后，进入冲突处理视图检查详细卡片。")}</span>
+          </div>
+          ${
+            lastExecution
+              ? `
+                <div class="detail-row detail-row-block">
+                  <strong>${escapeHtml(`最近执行：${lastExecution.actionId}`)}</strong>
+                  <span>${escapeHtml(`${lastExecution.statusLabel} · ${lastExecution.atLabel}`)}</span>
+                </div>
+              `
+              : ""
+          }
+        </div>
+        <div class="detail-actions">
+          <button class="solid detail-inline-button" data-overview-nav="conflicts" type="button">查看同步详情</button>
+          <button class="ghost detail-inline-button" data-overview-command="refresh-session" type="button">刷新实时会话</button>
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">最近处理</p>
+        <h3>会话节奏</h3>
+        <div class="view-stack">
+          ${
+            recentSessionEntries.length
+              ? recentSessionEntries
+                  .map(
+                    (entry) => `
+                      <div class="detail-row detail-row-block">
+                        <strong>${escapeHtml(formatSessionEventLabel(entry.type))}</strong>
+                        <span>${escapeHtml(entry.detail || "无附加说明")}</span>
+                        <span>${escapeHtml(formatDateTime(entry.atMs))}</span>
+                      </div>
+                    `,
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前还没有前端会话记录。</p></div>'
+          }
+          ${
+            latestActivity
+              ? `
+                <div class="detail-row detail-row-block">
+                  <strong>${escapeHtml(`最新同步活动：${latestActivity.action_id}`)}</strong>
+                  <span>${escapeHtml(`${formatStatusLabel(latestActivity.status)} · ${formatDateTime(latestActivity.occurred_at_ms)}`)}</span>
+                </div>
+              `
+              : ""
+          }
+        </div>
+        <div class="detail-actions">
+          <button class="ghost detail-inline-button" data-overview-nav="conflicts" type="button">打开活动流</button>
+        </div>
+      </article>
       <article class="view-detail-card">
         <p class="card-section-label">异常恢复</p>
         <h3>草稿恢复</h3>
@@ -1202,6 +1286,12 @@ function renderViewDetailGrid() {
     for (const button of elements.viewDetailGrid.querySelectorAll("[data-recovery-discard]")) {
       button.addEventListener("click", () => {
         discardRecoveryDraft(button.dataset.recoveryDiscard || "");
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-overview-nav]")) {
+      button.addEventListener("click", () => {
+        state.activeNavView = button.dataset.overviewNav || "overview";
+        render();
       });
     }
     for (const button of elements.viewDetailGrid.querySelectorAll("[data-overview-command]")) {
@@ -1528,7 +1618,7 @@ function renderViewDetailGrid() {
 }
 
 function renderNavViewVisibility() {
-  const showSyncSections = ["overview", "conflicts"].includes(state.activeNavView);
+  const showSyncSections = state.activeNavView === "conflicts";
   elements.panelCard.hidden = !showSyncSections;
   elements.summaryGrid.hidden = !showSyncSections;
   elements.cardsGrid.hidden = !showSyncSections;
