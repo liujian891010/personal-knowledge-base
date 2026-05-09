@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 
 import {
   executeBridgeAction,
+  fetchSampleAppSession,
   fetchBridgeStatus,
+  refreshAppSession,
   refreshBridgeSnapshot,
   startBridgeStatusPolling,
 } from "../bridge-client.js";
@@ -63,6 +65,54 @@ export async function runBridgeClientTests() {
   assert.equal(request.options.headers["content-type"], "application/json");
   assert.equal(request.options.body, JSON.stringify({ activityLimit: 9 }));
   completed.push("refreshBridgeSnapshot posts JSON to refresh endpoint");
+  resetGlobals();
+
+  let sampleRequest = null;
+  globalThis.fetch = async (url, options) => {
+    sampleRequest = { url, options };
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          source: "sample",
+          syncPayload: { generated_at_ms: 1 },
+          workspaceShell: { sections: [], notes: {} },
+        };
+      },
+    };
+  };
+
+  const sampleSession = await fetchSampleAppSession();
+  assert.equal(sampleSession.source, "sample");
+  assert.equal(sampleRequest.url, "/api/app-session/sample");
+  assert.deepEqual(sampleRequest.options, { cache: "no-store" });
+  completed.push("fetchSampleAppSession requests the sample session endpoint");
+  resetGlobals();
+
+  let refreshSessionRequest = null;
+  globalThis.fetch = async (url, options) => {
+    refreshSessionRequest = { url, options };
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          source: "desktop-bridge",
+          loadedAtMs: 1,
+          syncPayload: { generated_at_ms: 1 },
+          workspaceShell: { sections: [], notes: {} },
+        };
+      },
+    };
+  };
+
+  const refreshedSession = await refreshAppSession({ activityLimit: 5 });
+  assert.equal(refreshedSession.source, "desktop-bridge");
+  assert.equal(refreshSessionRequest.url, "/api/app-session/refresh");
+  assert.equal(refreshSessionRequest.options.method, "POST");
+  assert.equal(refreshSessionRequest.options.body, JSON.stringify({ activityLimit: 5 }));
+  completed.push("refreshAppSession posts JSON to the app session refresh endpoint");
   resetGlobals();
 
   globalThis.fetch = async () => ({

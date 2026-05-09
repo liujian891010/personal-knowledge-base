@@ -97,6 +97,24 @@ export async function executeBridgeAction(actionId, payload = {}) {
   return readJsonResponse(response, "bridge_execute_failed");
 }
 
+export async function fetchSampleAppSession() {
+  const response = await fetch("/api/app-session/sample", {
+    cache: "no-store",
+  });
+  return readJsonResponse(response, "app_session_sample_failed");
+}
+
+export async function refreshAppSession(payload = {}) {
+  const response = await fetch("/api/app-session/refresh", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  return readJsonResponse(response, "app_session_refresh_failed");
+}
+
 export function startBridgeStatusPolling({
   intervalMs = 15000,
   onStatus,

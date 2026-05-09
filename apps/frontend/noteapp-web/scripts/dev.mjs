@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { createServer } from "node:http";
 import { dirname } from "node:path";
@@ -24,6 +24,8 @@ if (args.has("--help")) {
 }
 
 const bridgeConfig = resolveBridgeConfig({ args });
+const sampleSyncSnapshotPath = join(root, "fixtures", "sync-shell-snapshot.sample.json");
+const sampleWorkspaceShellPath = join(root, "fixtures", "workspace-shell.sample.json");
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -124,6 +126,20 @@ function buildBridgeStatusPayload() {
   };
 }
 
+function readJsonFile(path) {
+  return JSON.parse(readFileSync(path, "utf-8"));
+}
+
+function buildSampleAppSession() {
+  return {
+    source: "sample",
+    loadedAtMs: Date.now(),
+    bridgeStatus: buildBridgeStatusPayload(),
+    syncPayload: readJsonFile(sampleSyncSnapshotPath),
+    workspaceShell: readJsonFile(sampleWorkspaceShellPath),
+  };
+}
+
 function requireBridgeConfig() {
   const status = buildBridgeStatusPayload();
   if (!status.available) {
@@ -192,6 +208,28 @@ const server = createServer(async (request, response) => {
 
   if (request.method === "GET" && url.pathname === "/api/bridge/status") {
     writeJson(response, 200, buildBridgeStatusPayload());
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/app-session/sample") {
+    writeJson(response, 200, buildSampleAppSession());
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/app-session/refresh") {
+    try {
+      const body = await readJsonBody(request);
+      const snapshot = executeRefreshSnapshot(body.nowMs, body.activityLimit);
+      writeJson(response, 200, {
+        source: "desktop-bridge",
+        loadedAtMs: Date.now(),
+        bridgeStatus: buildBridgeStatusPayload(),
+        syncPayload: snapshot,
+        workspaceShell: readJsonFile(sampleWorkspaceShellPath),
+      });
+    } catch (error) {
+      writeBridgeError(response, error);
+    }
     return;
   }
 
