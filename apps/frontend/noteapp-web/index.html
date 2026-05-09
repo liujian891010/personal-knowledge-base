@@ -3,211 +3,227 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>NoteApp 本地优先工作台</title>
+    <title>NoteAI 本地优先知识库</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="page-shell">
-      <header class="hero">
-        <div class="hero-copy">
-          <div class="brand-mark">N</div>
-          <div class="brand-copy">
-            <p class="eyebrow">本地优先 · 多端同步 · AI 知识库</p>
-            <h1>NoteApp 工作台</h1>
+    <div class="app-shell">
+      <aside class="app-sidebar">
+        <section class="sidebar-brand-panel">
+          <div class="sidebar-brand">
+            <div class="sidebar-brand-mark">N</div>
+            <div>
+              <h1>NoteAI</h1>
+              <p>本地优先的知识工作台</p>
+            </div>
           </div>
-        </div>
-        <div class="hero-search">
-          <input id="search-input" type="text" placeholder="搜索笔记、知识页或同步事件..." />
-        </div>
-        <div class="hero-status" id="hero-status">
-          <button id="quick-capture-button" class="ghost hero-quick-button" type="button">快速记录</button>
-          <div class="hero-status-copy">
-            <span class="hero-status-label">当前会话</span>
-            <strong id="payload-kind">未加载</strong>
-            <span id="payload-detail">可先加载演示会话，再查看工作区、同步区和 AI 面板的联动效果。</span>
+          <button id="new-note-button" class="sidebar-primary-button" type="button">新建笔记</button>
+        </section>
+
+        <nav class="sidebar-nav">
+          <button class="sidebar-nav-item is-active" data-nav-view="overview" type="button">
+            <span class="sidebar-nav-item-icon">仪</span>
+            <span>仪表盘</span>
+          </button>
+          <button class="sidebar-nav-item" data-nav-view="graph" type="button">
+            <span class="sidebar-nav-item-icon">图</span>
+            <span>图谱视图</span>
+          </button>
+          <button class="sidebar-nav-item" data-nav-view="repository" type="button">
+            <span class="sidebar-nav-item-icon">库</span>
+            <span>笔记库</span>
+          </button>
+          <button class="sidebar-nav-item" data-nav-view="conflicts" type="button">
+            <span class="sidebar-nav-item-icon">冲</span>
+            <span>冲突解决</span>
+          </button>
+        </nav>
+
+        <section class="sidebar-block sidebar-tree-card">
+          <div class="sidebar-card-header">
+            <div>
+              <p class="card-section-label">Knowledge Base</p>
+              <h2>当前笔记库</h2>
+            </div>
+            <span class="mini-pill tone-info">本地优先</span>
           </div>
-        </div>
-      </header>
+          <p class="sidebar-helper">左侧只保留用户常用入口，主区域专注编辑、整理、图谱和同步协作。</p>
+          <div id="workspace-tree"></div>
+        </section>
 
-      <main class="workspace">
-        <aside class="control-panel">
-          <section class="sidebar-shell">
-            <div class="sidebar-brand">
-              <div class="sidebar-brand-mark">N</div>
-              <div>
-                <h2>NoteApp</h2>
-                <p>本地优先知识工作台</p>
-              </div>
-            </div>
-            <button id="new-note-button" class="solid sidebar-primary-button" type="button">新建笔记</button>
-            <nav class="sidebar-nav">
-              <button class="sidebar-nav-item is-active" data-nav-view="overview" type="button">总览</button>
-              <button class="sidebar-nav-item" data-nav-view="graph" type="button">知识图谱</button>
-              <button class="sidebar-nav-item" data-nav-view="repository" type="button">仓库浏览</button>
-              <button class="sidebar-nav-item" data-nav-view="conflicts" type="button">冲突处理</button>
-              <button class="sidebar-nav-item" data-nav-view="settings" type="button">设置</button>
-            </nav>
-          </section>
+        <section class="sidebar-block sidebar-session-card" id="workspace-rail"></section>
 
-          <section class="sidebar-tree-card">
-            <div class="sidebar-card-header">
-              <div>
-                <p class="card-section-label">仓库</p>
-                <h2>文件与知识页</h2>
-              </div>
-              <span class="mini-pill tone-info">左侧导航</span>
-            </div>
-            <p class="sidebar-helper">这里承接真实工作台的文档树，主区只保留编辑与 AI 联动。</p>
-            <div id="workspace-tree"></div>
-          </section>
+        <section class="sidebar-footer">
+          <div class="sidebar-footer-label">工具</div>
+          <button class="sidebar-nav-item sidebar-nav-item-secondary" data-nav-view="settings" type="button">
+            <span class="sidebar-nav-item-icon">设</span>
+            <span>设置</span>
+          </button>
+          <button class="sidebar-nav-item sidebar-nav-item-secondary" data-nav-view="debug" type="button">
+            <span class="sidebar-nav-item-icon">调</span>
+            <span>调试中心</span>
+          </button>
+        </section>
+      </aside>
 
-          <section class="sidebar-session-card" id="workspace-rail"></section>
+      <div class="app-main">
+        <header class="topbar">
+          <div class="topbar-search">
+            <input id="search-input" type="text" placeholder="搜索笔记、知识页或同步事项..." />
+          </div>
+          <div class="hero-status" id="hero-status">
+            <div class="hero-status-copy">
+              <span class="hero-status-label">当前工作会话</span>
+              <strong id="payload-kind">未加载</strong>
+              <span id="payload-detail">可先加载演示会话，再查看工作区、同步区和 AI 面板的联动效果。</span>
+            </div>
+            <button id="quick-capture-button" class="ghost topbar-quick-button" type="button">快速记录</button>
+          </div>
+        </header>
 
-          <section class="control-card control-card-secondary" id="control-center-card">
-            <span class="card-section-label">工作台入口</span>
-            <h2>本地会话与连接</h2>
-            <p>这里集中管理会话入口、桌面连接状态和少量低频操作，主工作区只保留整理、同步和 AI 主链路。</p>
-            <div class="control-actions">
-              <button id="toggle-advanced-controls-button" class="ghost" type="button">开启高级调试</button>
-            </div>
-            <p id="control-mode-note" class="sidebar-helper">当前为普通工作台模式，手动导入和桥接诊断默认收起。</p>
-            <div class="control-hero-grid">
-              <article class="control-status-card">
-                <span class="control-status-title">桌面连接</span>
-                <p id="bridge-status" class="bridge-status">正在检查桌面连接状态...</p>
-              </article>
-              <article class="control-status-card">
-                <span class="control-status-title">工作区来源</span>
-                <p id="workspace-status" class="bridge-status">当前工作区尚未加载。</p>
-              </article>
-              <article class="control-status-card">
-                <span class="control-status-title">动作执行</span>
-                <p id="action-execution-status" class="bridge-status">只有桌面连接可用时，才允许执行动作。</p>
-              </article>
-            </div>
-            <details class="details-block" open>
-              <summary>常用入口</summary>
-              <div class="control-group">
-                <div class="control-group-title">工作会话</div>
-                <div class="control-actions">
-                  <button id="load-app-session-button" class="solid">加载演示会话</button>
-                  <button id="refresh-app-session-button" class="ghost">刷新实时会话</button>
+        <main class="content-shell">
+          <section class="dashboard">
+            <div class="panel-card" id="view-mode-card" hidden></div>
+            <div class="view-detail-grid" id="view-detail-grid" hidden></div>
+
+            <section class="workspace-shell" id="workspace-shell-root">
+              <article class="workspace-pane editor-pane">
+                <div class="pane-heading pane-heading-inline">
+                  <div>
+                    <p class="card-meta">Workspace</p>
+                    <h2>编辑器</h2>
+                  </div>
+                  <span class="mini-pill tone-info">内容视图</span>
                 </div>
+                <div id="workspace-editor"></div>
+              </article>
+
+              <article class="workspace-pane ai-pane">
+                <div class="pane-heading pane-heading-inline">
+                  <div>
+                    <p class="card-meta">AI Copilot</p>
+                    <h2>AI 面板</h2>
+                  </div>
+                  <span class="mini-pill tone-warning">辅助</span>
+                </div>
+                <div id="workspace-ai-panel"></div>
+              </article>
+            </section>
+
+            <section class="control-card control-card-secondary" id="control-center-card">
+              <span class="card-section-label">Debug Center</span>
+              <h2>调试中心</h2>
+              <p>所有桥接诊断、手动导入、原始参数和专家调试入口统一收敛在这里，不再混入面向用户的主界面。</p>
+              <div class="control-actions">
+                <button id="toggle-advanced-controls-button" class="ghost" type="button">开启高级调试</button>
               </div>
-              <div class="control-group">
-                <div class="control-group-title">同步连接</div>
+              <p id="control-mode-note" class="sidebar-helper">当前为普通工作台模式，手动导入和连接诊断默认收起。</p>
+              <div class="control-hero-grid">
+                <article class="control-status-card">
+                  <span class="control-status-title">桌面连接</span>
+                  <p id="bridge-status" class="bridge-status">正在检查桌面连接状态...</p>
+                </article>
+                <article class="control-status-card">
+                  <span class="control-status-title">工作区来源</span>
+                  <p id="workspace-status" class="bridge-status">当前工作区尚未加载。</p>
+                </article>
+                <article class="control-status-card">
+                  <span class="control-status-title">动作执行</span>
+                  <p id="action-execution-status" class="bridge-status">只有桌面连接可用时，才允许执行同步动作。</p>
+                </article>
+              </div>
+
+              <details class="details-block" open>
+                <summary>常用入口</summary>
+                <div class="control-group">
+                  <div class="control-group-title">工作会话</div>
+                  <div class="control-actions">
+                    <button id="load-app-session-button" class="solid" type="button">加载演示会话</button>
+                    <button id="refresh-app-session-button" class="ghost" type="button">刷新实时会话</button>
+                  </div>
+                </div>
+                <div class="control-group">
+                  <div class="control-group-title">同步连接</div>
+                  <div class="control-actions">
+                    <button id="refresh-local-button" class="ghost" type="button">刷新本地同步</button>
+                    <button id="reload-bridge-status-button" class="ghost" type="button">检查桌面连接</button>
+                    <button id="load-live-button" class="ghost" type="button" data-advanced-control>加载本地快照</button>
+                    <button id="load-sample-button" class="ghost" type="button" data-advanced-control>加载演示同步数据</button>
+                    <label class="ghost file-picker" data-advanced-control>
+                      导入同步数据
+                      <input id="file-input" type="file" accept="application/json" />
+                    </label>
+                  </div>
+                </div>
+              </details>
+
+              <details class="details-block">
+                <summary>工作区导入</summary>
                 <div class="control-actions">
-                  <button id="refresh-local-button" class="ghost">刷新本地同步</button>
-                  <button id="reload-bridge-status-button" class="ghost">检查桌面连接</button>
-                  <button id="load-live-button" class="ghost" type="button" data-advanced-control>加载本地快照</button>
-                  <button id="load-sample-button" class="ghost" type="button" data-advanced-control>加载演示数据</button>
+                  <button id="load-workspace-sample-button" class="solid" type="button" data-advanced-control>加载演示工作区</button>
                   <label class="ghost file-picker" data-advanced-control>
-                    导入同步数据
-                    <input id="file-input" type="file" accept="application/json" />
+                    导入工作区数据
+                    <input id="workspace-file-input" type="file" accept="application/json" />
                   </label>
                 </div>
-              </div>
-            </details>
-            <details class="details-block">
-              <summary>工作区导入</summary>
-              <div class="control-actions">
-                <button id="load-workspace-sample-button" class="solid" data-advanced-control>加载演示工作区</button>
-                <label class="ghost file-picker" data-advanced-control>
-                  导入工作区数据
-                  <input id="workspace-file-input" type="file" accept="application/json" />
-                </label>
-              </div>
-              <details class="details-block details-block-nested" data-advanced-control>
-                <summary>手动粘贴工作区数据</summary>
-                <textarea
-                  id="workspace-input"
-                  spellcheck="false"
-                  placeholder="可在此粘贴工作区数据"
-                ></textarea>
+                <details class="details-block details-block-nested" data-advanced-control>
+                  <summary>手动粘贴工作区数据</summary>
+                  <textarea id="workspace-input" spellcheck="false" placeholder="可在此粘贴工作区数据"></textarea>
+                  <div class="control-actions">
+                    <button id="apply-workspace-input-button" class="solid" type="button">应用工作区数据</button>
+                  </div>
+                </details>
+              </details>
+
+              <details class="details-block">
+                <summary>本地动作执行</summary>
+                <p id="action-contract-help">在仪表盘、笔记库或冲突解决里选中动作后，这里会显示当前动作、执行条件和最近结果。</p>
+                <div id="action-execution-card" class="session-rail-grid"></div>
                 <div class="control-actions">
-                  <button id="apply-workspace-input-button" class="solid">应用工作区数据</button>
+                  <button id="execute-selected-button" class="solid" type="button">执行当前动作</button>
                 </div>
+                <details class="details-block details-block-nested" data-advanced-control>
+                  <summary>查看动作原始参数</summary>
+                  <pre id="action-contract-output">尚未选择任何动作。</pre>
+                </details>
+                <details class="details-block details-block-nested" data-advanced-control>
+                  <summary>查看动作结果</summary>
+                  <pre id="action-result-output">尚未执行任何动作。</pre>
+                </details>
+                <details class="details-block details-block-nested" data-advanced-control>
+                  <summary>查看连接错误</summary>
+                  <pre id="bridge-error-output" class="compact-output">当前没有连接错误。</pre>
+                </details>
               </details>
-            </details>
-            <details class="details-block">
-              <summary>本地动作执行</summary>
-              <p id="action-contract-help">
-                在总览、冲突处理或仓库浏览里选中动作后，这里会显示当前动作、执行条件和最近结果。
-              </p>
-              <div id="action-execution-card" class="session-rail-grid"></div>
-              <div class="control-actions">
-                <button id="execute-selected-button" class="solid">执行当前动作</button>
-              </div>
-              <details class="details-block details-block-nested" data-advanced-control>
-                <summary>查看动作原始参数</summary>
-                <pre id="action-contract-output">尚未选择任何动作。</pre>
+
+              <details class="details-block" data-advanced-control>
+                <summary>高级调试与手动导入</summary>
+                <details class="details-block details-block-nested">
+                  <summary>查看桌面连接诊断</summary>
+                  <pre id="bridge-diagnostics-output" class="compact-output">等待桥接诊断...</pre>
+                </details>
+                <details class="details-block details-block-nested">
+                  <summary>手动覆盖同步数据</summary>
+                  <textarea
+                    id="payload-input"
+                    spellcheck="false"
+                    placeholder="可在此粘贴 sync-shell-snapshot / sync-center / sync-activity 数据"
+                  ></textarea>
+                  <div class="control-actions">
+                    <button id="apply-input-button" class="solid" type="button">应用同步数据</button>
+                    <button id="clear-input-button" class="ghost" type="button">清空同步区</button>
+                  </div>
+                </details>
               </details>
-              <details class="details-block details-block-nested" data-advanced-control>
-                <summary>查看动作结果</summary>
-                <pre id="action-result-output">尚未执行任何动作。</pre>
-              </details>
-              <details class="details-block details-block-nested" data-advanced-control>
-                <summary>查看连接错误</summary>
-                <pre id="bridge-error-output" class="compact-output">当前没有连接错误。</pre>
-              </details>
-            </details>
-            <details class="details-block" data-advanced-control>
-              <summary>高级调试与手动导入</summary>
-              <details class="details-block details-block-nested">
-                <summary>查看桌面连接诊断</summary>
-                <pre id="bridge-diagnostics-output" class="compact-output">
-等待桥接诊断...
-                </pre>
-              </details>
-              <details class="details-block details-block-nested">
-                <summary>手动覆盖同步数据</summary>
-                <textarea
-                  id="payload-input"
-                  spellcheck="false"
-                  placeholder="可在此粘贴 sync-shell-snapshot / sync-center / sync-activity 数据"
-                ></textarea>
-                <div class="control-actions">
-                  <button id="apply-input-button" class="solid">应用同步数据</button>
-                  <button id="clear-input-button" class="ghost">清空同步区</button>
-                </div>
-              </details>
-            </details>
+            </section>
+
+            <div class="panel-card" id="panel-card"></div>
+            <div class="summary-grid" id="summary-grid"></div>
+            <div class="cards-grid" id="cards-grid"></div>
+            <div class="activity-card" id="activity-card"></div>
           </section>
-        </aside>
-
-        <section class="dashboard">
-          <section class="workspace-shell" id="workspace-shell-root">
-            <article class="workspace-pane editor-pane">
-              <div class="pane-heading pane-heading-inline">
-                <div>
-                  <p class="card-meta">主工作区</p>
-                  <h2>编辑器</h2>
-                </div>
-                <span class="mini-pill tone-info">内容视图</span>
-              </div>
-              <div id="workspace-editor"></div>
-            </article>
-
-            <article class="workspace-pane ai-pane">
-              <div class="pane-heading pane-heading-inline">
-                <div>
-                  <p class="card-meta">智能侧栏</p>
-                  <h2>AI 面板</h2>
-                </div>
-                <span class="mini-pill tone-warning">辅助</span>
-              </div>
-              <div id="workspace-ai-panel"></div>
-            </article>
-          </section>
-
-          <div class="panel-card" id="view-mode-card" hidden></div>
-          <div class="view-detail-grid" id="view-detail-grid" hidden></div>
-          <div class="panel-card" id="panel-card"></div>
-          <div class="summary-grid" id="summary-grid"></div>
-          <div class="cards-grid" id="cards-grid"></div>
-          <div class="activity-card" id="activity-card"></div>
-        </section>
-      </main>
+        </main>
+      </div>
     </div>
 
     <template id="action-chip-template">
