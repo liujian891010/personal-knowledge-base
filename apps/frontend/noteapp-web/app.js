@@ -235,6 +235,7 @@ const state = {
   bridgeCheckedAtMs: null,
   lastBridgeError: null,
   lastExecution: null,
+  lastExecutionAtMs: null,
   sourceLabel: "未加载",
   searchQuery: "",
   activeNavView: "overview",
@@ -516,6 +517,7 @@ function setSelectedAction(action, source = "手动选择") {
     elements.actionExecutionStatus.textContent =
       "只有本地桌面桥接配置完整后，才能真正执行动作。";
     elements.executeSelectedButton.disabled = true;
+    refreshActionChipSelection();
     return;
   }
 
@@ -545,6 +547,7 @@ function setSelectedAction(action, source = "手动选择") {
     level: action.enabled === false ? "warning" : "info",
     detail: `${action.action_id} · ${formatActionSourceLabel(source)}`,
   });
+  refreshActionChipSelection();
 }
 
 function createActionChip(action, source) {
@@ -555,6 +558,7 @@ function createActionChip(action, source) {
 
   label.textContent = action.label;
   command.textContent = [action.command, ...(action.argv || [])].join(" ");
+  button.dataset.actionId = action.action_id;
 
   if (action.enabled === false) {
     button.classList.add("is-disabled");
@@ -562,6 +566,15 @@ function createActionChip(action, source) {
 
   button.addEventListener("click", () => setSelectedAction(action, source));
   return fragment;
+}
+
+function refreshActionChipSelection() {
+  const selectedActionId = state.selectedAction?.action_id || null;
+  const lastExecutedActionId = state.lastExecution?.action?.action_id || null;
+  for (const button of document.querySelectorAll(".action-chip[data-action-id]")) {
+    button.classList.toggle("is-selected", button.dataset.actionId === selectedActionId);
+    button.classList.toggle("is-last-executed", button.dataset.actionId === lastExecutedActionId);
+  }
 }
 
 function resolveTone(level) {
@@ -1434,6 +1447,19 @@ function countDraftLines(text) {
   return normalized.split(/\r?\n/).length;
 }
 
+function resolveExecutionTone(status) {
+  if (status === "executed") {
+    return "success";
+  }
+  if (status === "failed") {
+    return "danger";
+  }
+  if (status === "disabled" || status === "unsupported") {
+    return "warning";
+  }
+  return "info";
+}
+
 function buildEditorDraftInsight(note, draft) {
   if (!note || !draft) {
     return null;
@@ -1459,6 +1485,28 @@ function summaryHasBlockingSyncWork() {
       summary?.conflicts?.actual_has_unresolved_conflicts ||
       summary?.changes?.change_count,
   );
+}
+
+function buildLastExecutionSummary() {
+  if (!state.lastExecution) {
+    return null;
+  }
+
+  const action = state.lastExecution.action || {};
+  const status = state.lastExecution.status || "unknown";
+  const detailParts = [
+    action.command || null,
+    Array.isArray(action.argv) && action.argv.length ? action.argv.join(" ") : null,
+  ].filter(Boolean);
+
+  return {
+    actionId: action.action_id || "unknown",
+    status,
+    statusLabel: formatStatusLabel(status),
+    tone: resolveExecutionTone(status),
+    commandLine: detailParts.join(" "),
+    atLabel: state.lastExecutionAtMs ? formatDateTime(state.lastExecutionAtMs) : "刚刚",
+  };
 }
 
 function collectWorkspaceSyncActions(note) {
@@ -1581,6 +1629,7 @@ function renderWorkspaceRail() {
   const note = getSelectedWorkspaceNote();
   const editorDraft = getActiveEditorDraft();
   const draftInsight = buildEditorDraftInsight(note, editorDraft);
+  const lastExecution = buildLastExecutionSummary();
   const visibleCount = getVisibleWorkspaceNoteIds(workspaceShell).length;
   const summary = state.syncCenter?.summary || null;
   const conflictCount = summary
@@ -1666,6 +1715,18 @@ function renderWorkspaceRail() {
           `
           : ""
       }
+      ${
+        lastExecution
+          ? `
+            <article class="session-rail-item">
+              <span class="session-rail-title">最近执行</span>
+              <strong>${escapeHtml(lastExecution.actionId)}</strong>
+              <p class="session-rail-copy">${escapeHtml(lastExecution.statusLabel)} · ${escapeHtml(lastExecution.atLabel)}</p>
+              <p class="session-rail-copy">${escapeHtml(lastExecution.commandLine || "通过桌面桥接执行")}</p>
+            </article>
+          `
+          : ""
+      }
     </div>
   `;
 }
@@ -1687,6 +1748,7 @@ function renderWorkspaceEditor() {
   const draftInsight = buildEditorDraftInsight(note, editorDraft);
   const workspaceSyncActions = collectWorkspaceSyncActions(note);
   const canEnterSyncFlow = !draftInsight || !draftInsight.dirty;
+  const lastExecution = buildLastExecutionSummary();
   elements.workspaceEditor.innerHTML = `
     <div class="editor-toolbar">
       <div>
@@ -1751,6 +1813,30 @@ function renderWorkspaceEditor() {
       <div class="editor-sync-actions" id="editor-sync-actions"></div>
     </section>
     ${
+      lastExecution
+        ? `
+          <section class="editor-sync-box">
+            <h3>最近执行反馈</h3>
+            <div class="editor-sync-checklist">
+              <div class="editor-sync-item">
+                <span>动作</span>
+                <strong>${escapeHtml(lastExecution.actionId)}</strong>
+              </div>
+              <div class="editor-sync-item">
+                <span>状态</span>
+                <strong class="tone-${lastExecution.tone}-inline">${escapeHtml(lastExecution.statusLabel)}</strong>
+              </div>
+              <div class="editor-sync-item">
+                <span>时间</span>
+                <strong>${escapeHtml(lastExecution.atLabel)}</strong>
+              </div>
+            </div>
+            <p class="summary-copy">${escapeHtml(lastExecution.commandLine || "通过桌面桥接完成执行。")}</p>
+          </section>
+        `
+        : ""
+    }
+    ${
       editorDraft
         ? `
           <section class="editor-draft-panel">
@@ -1800,6 +1886,23 @@ function renderWorkspaceEditor() {
     }
     for (const { action, source } of workspaceSyncActions) {
       editorSyncActions.appendChild(createActionChip(action, source));
+    }
+    if (state.selectedAction) {
+      const executeButton = document.createElement("button");
+      executeButton.type = "button";
+      executeButton.className = "solid editor-action-button";
+      executeButton.textContent = "执行已选动作";
+      executeButton.disabled = !state.bridgeStatus?.available || !canEnterSyncFlow;
+      executeButton.addEventListener("click", async () => {
+        try {
+          await executeSelectedAction();
+        } catch (error) {
+          state.lastBridgeError = normalizeBridgeError(error);
+          elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
+          renderBridgeError(state.lastBridgeError);
+        }
+      });
+      editorSyncActions.appendChild(executeButton);
     }
   }
   if (titleInput && bodyInput && editorDraft) {
@@ -1861,6 +1964,7 @@ function renderWorkspaceEditor() {
       }
     });
   }
+  refreshActionChipSelection();
 }
 
 function renderWorkspaceAiPanel() {
@@ -2151,6 +2255,7 @@ function renderCards(syncCenter) {
 
 function renderActivity(feed) {
   const query = normalizeSearchQuery(state.searchQuery);
+  const lastExecution = buildLastExecutionSummary();
   const records = Array.isArray(feed?.records)
     ? feed.records.filter((record) =>
         matchesSearchQuery(query, record.action_id, record.command, record.status, record.source, record.message),
@@ -2180,6 +2285,11 @@ function renderActivity(feed) {
           已加载 ${escapeHtml(feed.total_count)} 条记录，最近一次发生于
           ${escapeHtml(formatDateTime(latestRecord.occurred_at_ms))}.
         </p>
+        ${
+          lastExecution
+            ? `<p class="summary-copy">最近桥接执行：${escapeHtml(lastExecution.actionId)} · ${escapeHtml(lastExecution.statusLabel)} · ${escapeHtml(lastExecution.atLabel)}</p>`
+            : ""
+        }
       </div>
       <span class="level-pill tone-${resolveTone(latestRecord.level)}">
         ${escapeHtml(formatStatusLabel(latestRecord.status))}
@@ -2265,6 +2375,7 @@ function render() {
     elements.cardsGrid.innerHTML = "";
     renderActivity(state.activityFeed);
   }
+  refreshActionChipSelection();
 }
 
 async function requestBridgeStatus() {
@@ -2387,6 +2498,7 @@ async function refreshFromDesktop() {
   const json = await refreshBridgeSnapshot({});
   state.lastBridgeError = null;
   state.lastExecution = null;
+  state.lastExecutionAtMs = null;
   elements.payloadInput.value = JSON.stringify(json.snapshot, null, 2);
   applyPayload(json.snapshot, "通过本地桌面桥接刷新同步快照");
   pushSessionHistory({
@@ -2416,6 +2528,7 @@ async function executeSelectedAction() {
 
   state.lastBridgeError = null;
   state.lastExecution = json.execution;
+  state.lastExecutionAtMs = Date.now();
   elements.payloadInput.value = JSON.stringify(json.snapshot, null, 2);
   applyPayload(json.snapshot, `通过本地桌面桥接执行动作：${actionId}`);
   elements.actionExecutionStatus.textContent =
@@ -2483,6 +2596,7 @@ function applyTextareaPayload() {
 
   state.lastBridgeError = null;
   state.lastExecution = null;
+  state.lastExecutionAtMs = null;
   applyPayload(JSON.parse(raw), "文本框同步 JSON");
 }
 
@@ -2491,6 +2605,7 @@ async function importLocalFile(file) {
   elements.payloadInput.value = text;
   state.lastBridgeError = null;
   state.lastExecution = null;
+  state.lastExecutionAtMs = null;
   applyPayload(JSON.parse(text), `导入文件：${file.name}`);
 }
 
@@ -2695,6 +2810,7 @@ elements.loadSampleButton.addEventListener("click", async () => {
   try {
     state.lastBridgeError = null;
     state.lastExecution = null;
+    state.lastExecutionAtMs = null;
     await loadSample();
   } catch (error) {
     renderEmptyDashboard(error instanceof Error ? error.message : String(error));
@@ -2723,6 +2839,7 @@ elements.loadLiveButton.addEventListener("click", async () => {
   try {
     state.lastBridgeError = null;
     state.lastExecution = null;
+    state.lastExecutionAtMs = null;
     await loadLiveSnapshot();
   } catch (error) {
     renderEmptyDashboard(error instanceof Error ? error.message : String(error));
@@ -2784,6 +2901,7 @@ elements.clearInputButton.addEventListener("click", () => {
   state.selectedAction = null;
   state.lastBridgeError = null;
   state.lastExecution = null;
+  state.lastExecutionAtMs = null;
   state.sourceLabel = "未加载";
   render();
 });
