@@ -332,6 +332,10 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -828,6 +832,8 @@ function formatSessionEventLabel(type) {
     workspace_draft_autosaved: "恢复草稿已自动保存",
     workspace_draft_restored: "恢复草稿已恢复",
     workspace_draft_discarded: "恢复草稿已放弃",
+    workspace_ai_applied: "AI 建议已写入草稿",
+    workspace_followup_created: "跟进笔记已创建",
   }[type] || type;
 }
 
@@ -2811,6 +2817,97 @@ function buildAiBriefing({ note, noteBody, syncContext, draftInsight }) {
   };
 }
 
+function upsertMarkdownSection(text, heading, content, level = 2) {
+  const normalizedBody = String(text || "").trim();
+  const normalizedContent = String(content || "").trim();
+  const headingLine = `${"#".repeat(level)} ${heading}`;
+  const sectionBlock = `${headingLine}\n${normalizedContent}`;
+  const sectionPattern = new RegExp(
+    `(^|\\n)${escapeRegExp(headingLine)}\\n[\\s\\S]*?(?=\\n#{1,6}\\s+|$)`,
+    "m",
+  );
+
+  if (!normalizedBody) {
+    return `${sectionBlock}\n`;
+  }
+  if (sectionPattern.test(normalizedBody)) {
+    return `${normalizedBody.replace(sectionPattern, `$1${sectionBlock}`)}\n`;
+  }
+  return `${normalizedBody}\n\n${sectionBlock}\n`;
+}
+
+function buildAiOutlineTemplate(note, syncContext) {
+  const sections = [
+    "## 背景",
+    `- 文档目标：${note.title}`,
+    `- 当前状态：${note.statusLabel || "待整理"}`,
+    "",
+    "## 核心信息",
+    "- 在这里补充当前主题的关键事实、结论和上下文。",
+    "",
+    "## 同步关注",
+    `- ${syncContext.signals[0]?.label || "当前没有命中的同步信号。"}`,
+    "",
+    "## 下一步",
+    ...syncContext.actions.slice(0, 3).map((item, index) => `${index + 1}. ${item}`),
+  ];
+  return sections.join("\n");
+}
+
+function ensureEditorDraftSession(noteId = state.selectedWorkspaceNoteId) {
+  const workspaceShell = ensureEditableWorkspaceShell();
+  const note = workspaceShell.notes?.[noteId];
+  if (!note) {
+    return null;
+  }
+  if (!getEditorDraftByNoteId(noteId)) {
+    setEditorDraftForNote(noteId, {
+      noteId,
+      title: note.title,
+      body: note.body,
+    });
+  }
+  state.selectedWorkspaceNoteId = noteId;
+  state.workspaceSourceLabel = "浏览器本地草稿";
+  elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  return {
+    note,
+    draft: getEditorDraftByNoteId(noteId),
+  };
+}
+
+function applyAiDraftMutation(noteId, mutate, options = {}) {
+  const session = ensureEditorDraftSession(noteId);
+  if (!session?.draft || typeof mutate !== "function") {
+    return false;
+  }
+
+  const nextDraft = mutate({
+    note: session.note,
+    draft: session.draft,
+  });
+  if (!nextDraft || typeof nextDraft.body !== "string") {
+    return false;
+  }
+
+  setEditorDraftForNote(noteId, {
+    noteId,
+    title: typeof nextDraft.title === "string" ? nextDraft.title : session.draft.title,
+    body: nextDraft.body,
+  });
+  scheduleRecoveryDraftAutosave(noteId);
+  elements.workspaceStatus.textContent = options.statusMessage || `已更新草稿：${session.note.title}`;
+  if (options.historyDetail) {
+    pushSessionHistory({
+      type: "workspace_ai_applied",
+      level: "info",
+      detail: options.historyDetail,
+    });
+  }
+  render();
+  return true;
+}
+
 function buildDraftRecoveryStatus(noteId) {
   const meta = getDraftRecoveryMeta(noteId);
   if (!meta) {
@@ -3727,6 +3824,33 @@ function renderWorkspaceAiPanel() {
   if (draftInsight && summaryHasBlockingSyncWork()) {
     draftActions.push("当前同步仍有阻塞项，草稿保存后建议先处理同步风险，再考虑提交。");
   }
+  const aiCommands = [
+    {
+      id: "start-edit",
+      label: editorDraft ? "继续编辑草稿" : "进入编辑",
+      kind: "ghost",
+    },
+    {
+      id: "apply-summary",
+      label: "写入 AI 摘要",
+      kind: "solid",
+    },
+    {
+      id: "apply-outline",
+      label: "补结构骨架",
+      kind: "ghost",
+    },
+    {
+      id: "apply-next-steps",
+      label: "写入下一步",
+      kind: "ghost",
+    },
+    {
+      id: "create-followup",
+      label: "生成跟进笔记",
+      kind: "ghost",
+    },
+  ];
   elements.workspaceAiPanel.innerHTML = `
     <div class="pane-heading">
       <div>
@@ -3754,6 +3878,14 @@ function renderWorkspaceAiPanel() {
           ? `<div class="editor-tags">${aiBriefing.entityPreview.map((entity) => `<span class="ai-chip">${escapeHtml(entity)}</span>`).join("")}</div>`
           : ""
       }
+      <div class="detail-actions">
+        ${aiCommands
+          .map(
+            (command) =>
+              `<button class="${command.kind} detail-inline-button" data-ai-command="${escapeHtml(command.id)}" type="button">${escapeHtml(command.label)}</button>`,
+          )
+          .join("")}
+      </div>
     </section>
     <div class="ai-stat-grid">
       <article class="ai-stat">
@@ -3819,10 +3951,13 @@ function renderWorkspaceAiPanel() {
       <div class="ai-action-list">
         ${note.ai.suggestions
           .map(
-            (item) => `
+            (item, index) => `
               <article class="ai-action-card">
                 <strong>${escapeHtml(item)}</strong>
                 <p>${escapeHtml(draftInsight?.dirty ? "建议先处理草稿，再执行这条建议。" : "可作为当前文档的下一步处理动作。")}</p>
+                <div class="detail-actions">
+                  <button class="ghost detail-inline-button" data-ai-command="${index === 0 ? "apply-next-steps" : "apply-summary"}" type="button">${index === 0 ? "写入待办" : "写入摘要"}</button>
+                </div>
               </article>
             `,
           )
@@ -3832,7 +3967,12 @@ function renderWorkspaceAiPanel() {
     <section class="ai-section">
       <h3>相关实体</h3>
       <div class="editor-tags">
-        ${note.ai.relatedEntities.map((entity) => `<span class="ai-chip">${escapeHtml(entity)}</span>`).join("")}
+        ${note.ai.relatedEntities
+          .map(
+            (entity) =>
+              `<button class="ghost detail-inline-button" data-ai-entity="${escapeHtml(entity)}" type="button">${escapeHtml(entity)}</button>`,
+          )
+          .join("")}
       </div>
     </section>
     <section class="ai-section">
@@ -3870,6 +4010,74 @@ function renderWorkspaceAiPanel() {
   for (const button of elements.workspaceAiPanel.querySelectorAll("[data-ai-command]")) {
     button.addEventListener("click", () => {
       const command = button.dataset.aiCommand;
+      if (command === "start-edit") {
+        ensureEditorDraftSession(state.selectedWorkspaceNoteId);
+        render();
+        return;
+      }
+      if (command === "apply-summary") {
+        applyAiDraftMutation(
+          state.selectedWorkspaceNoteId,
+          ({ draft }) => ({
+            ...draft,
+            body: upsertMarkdownSection(
+              draft.body,
+              "AI 摘要",
+              [`- 摘要：${aiBriefing.summary}`, `- 首要信号：${aiBriefing.topSignal}`, `- 当前建议：${aiBriefing.headline}`].join("\n"),
+            ),
+          }),
+          {
+            statusMessage: `已把 AI 摘要写入草稿：${note.title}`,
+            historyDetail: `${note.title} · 写入 AI 摘要`,
+          },
+        );
+        return;
+      }
+      if (command === "apply-outline") {
+        applyAiDraftMutation(
+          state.selectedWorkspaceNoteId,
+          ({ draft }) => ({
+            ...draft,
+            body: buildMarkdownOutline(draft.body).length
+              ? upsertMarkdownSection(
+                  draft.body,
+                  "结构补充",
+                  [
+                    ...aiBriefing.outline.map((item, index) => `${index + 1}. ${item}`),
+                    ...aiBriefing.entityPreview.map((entity) => `- 可补充实体线索：${entity}`),
+                  ].join("\n"),
+                )
+              : `${draft.body.trim()}\n\n${buildAiOutlineTemplate(note, syncContext)}\n`,
+          }),
+          {
+            statusMessage: `已补充结构骨架：${note.title}`,
+            historyDetail: `${note.title} · AI 补结构骨架`,
+          },
+        );
+        return;
+      }
+      if (command === "apply-next-steps") {
+        applyAiDraftMutation(
+          state.selectedWorkspaceNoteId,
+          ({ draft }) => ({
+            ...draft,
+            body: upsertMarkdownSection(
+              draft.body,
+              "下一步行动",
+              syncContext.actions.slice(0, 4).map((item, index) => `${index + 1}. ${item}`).join("\n"),
+            ),
+          }),
+          {
+            statusMessage: `已写入下一步行动：${note.title}`,
+            historyDetail: `${note.title} · 写入下一步行动`,
+          },
+        );
+        return;
+      }
+      if (command === "create-followup") {
+        createFollowUpNoteFromCurrent();
+        return;
+      }
       if (command === "save-draft") {
         saveEditingSelectedNote();
         return;
@@ -3877,6 +4085,13 @@ function renderWorkspaceAiPanel() {
       if (command === "cancel-edit") {
         cancelEditingSelectedNote();
       }
+    });
+  }
+  for (const button of elements.workspaceAiPanel.querySelectorAll("[data-ai-entity]")) {
+    button.addEventListener("click", () => {
+      applySearchQuery(button.dataset.aiEntity || "");
+      state.activeNavView = "graph";
+      render();
     });
   }
 }
@@ -4487,13 +4702,8 @@ function buildQuickCaptureTitle(now = new Date()) {
   return `快速记录 ${timestamp}`;
 }
 
-function createQuickCaptureNote() {
-  const workspaceShell = ensureEditableWorkspaceShell();
-  const draftId = `quick-capture-${Date.now()}`;
-  const title = buildQuickCaptureTitle();
-  const inboxPath = `Inbox/${title}.md`;
+function ensureInboxSection(workspaceShell) {
   let inboxSection = workspaceShell.sections.find((section) => section.id === "inbox");
-
   if (!inboxSection) {
     inboxSection = {
       id: "inbox",
@@ -4502,6 +4712,92 @@ function createQuickCaptureNote() {
     };
     workspaceShell.sections.unshift(inboxSection);
   }
+  return inboxSection;
+}
+
+function createFollowUpNoteFromCurrent() {
+  const currentNote = getSelectedWorkspaceNote();
+  if (!currentNote) {
+    return;
+  }
+  const syncContext = deriveWorkspaceSyncContext(currentNote);
+  const noteBody = getActiveEditorDraft()?.body || currentNote.body;
+  const aiBriefing = buildAiBriefing({
+    note: currentNote,
+    noteBody,
+    syncContext,
+    draftInsight: buildEditorDraftInsight(currentNote, getActiveEditorDraft()),
+  });
+  const workspaceShell = ensureEditableWorkspaceShell();
+  const followUpId = `follow-up-${Date.now()}`;
+  const title = `跟进：${currentNote.title}`;
+  const inboxPath = `Inbox/${title}.md`;
+  const inboxSection = ensureInboxSection(workspaceShell);
+
+  inboxSection.items.unshift({
+    id: followUpId,
+    title,
+    path: inboxPath,
+    status: "跟进草稿",
+  });
+  workspaceShell.notes[followUpId] = {
+    title,
+    path: inboxPath,
+    statusTone: "info",
+    statusLabel: "跟进草稿",
+    lastSaved: "刚刚创建",
+    tags: ["follow-up", "draft", "inbox"],
+    syncContext: {
+      watchActionIds: ["detect-local-changes", "show-vault-summary"],
+      watchCardKinds: ["changes", "activity"],
+      watchBlockingReasons: ["requires_full_pull"],
+    },
+    body: `# ${title}
+
+## 来源文档
+- 标题：${currentNote.title}
+- 路径：${currentNote.path}
+- 首要信号：${aiBriefing.topSignal}
+
+## 跟进摘要
+${aiBriefing.summary}
+
+## 跟进动作
+${syncContext.actions.slice(0, 3).map((item, index) => `${index + 1}. ${item}`).join("\n")}
+`,
+    ai: {
+      queueDepth: 0,
+      warnings: 0,
+      relatedEntities: ["跟进笔记", currentNote.title, ...(currentNote.ai?.relatedEntities || []).slice(0, 2)],
+      suggestions: ["先把跟进项补成可执行清单，再决定是否纳入正式知识页。"],
+      lint: [],
+    },
+  };
+
+  state.selectedWorkspaceNoteId = followUpId;
+  state.workspaceSourceLabel = "浏览器本地草稿";
+  setEditorDraftForNote(followUpId, {
+    noteId: followUpId,
+    title,
+    body: workspaceShell.notes[followUpId].body,
+  });
+  resetSearchQuery();
+  elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  elements.workspaceStatus.textContent = `已创建跟进笔记：${title}`;
+  pushSessionHistory({
+    type: "workspace_followup_created",
+    level: "info",
+    detail: `${title} · 来源 ${currentNote.title}`,
+  });
+  render();
+}
+
+function createQuickCaptureNote() {
+  const workspaceShell = ensureEditableWorkspaceShell();
+  const draftId = `quick-capture-${Date.now()}`;
+  const title = buildQuickCaptureTitle();
+  const inboxPath = `Inbox/${title}.md`;
+  const inboxSection = ensureInboxSection(workspaceShell);
 
   inboxSection.items.unshift({
     id: draftId,

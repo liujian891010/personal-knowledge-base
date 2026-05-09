@@ -15,6 +15,7 @@ Current scope:
 9. Derives workspace note-level sync signals from the loaded sync payload so the tree, editor, and AI panel react to current sync state.
 10. Exposes sample and live app-session endpoints so the browser shell can load workspace chrome and sync state together.
 11. `app-session` now carries structured session metadata such as `sessionId`, payload kind, workspace counts, and bridge status so the UI can render a real session boundary instead of only ad-hoc source labels.
+12. The AI side panel can now write structured summaries, outline scaffolds, next-step checklists, and follow-up notes back into the browser-local draft workspace without crossing the sync boundary.
 
 Local usage:
 
