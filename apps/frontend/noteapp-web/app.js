@@ -354,6 +354,11 @@ function resetSearchQuery() {
   elements.searchInput.value = "";
 }
 
+function applySearchQuery(value = "") {
+  state.searchQuery = String(value || "");
+  elements.searchInput.value = state.searchQuery;
+}
+
 function matchesSearchQuery(query, ...values) {
   if (!query) {
     return true;
@@ -798,13 +803,16 @@ function getCurrentWorkspaceShell() {
 
 function buildGraphSnapshot() {
   const workspaceShell = getCurrentWorkspaceShell();
-  const noteEntries = Object.entries(workspaceShell.notes || {});
-  const notes = noteEntries.map(([id, note]) => ({
-    id,
-    title: note.title,
-    path: note.path,
-    tags: Array.isArray(note.tags) ? note.tags : [],
-    entities: Array.isArray(note.ai?.relatedEntities) ? note.ai.relatedEntities : [],
+  const notes = collectWorkspaceNotes().map((entry) => ({
+    id: entry.id,
+    title: entry.title,
+    path: entry.path,
+    sectionId: entry.sectionId,
+    sectionLabel: entry.sectionLabel,
+    statusTone: entry.note?.statusTone || "info",
+    statusLabel: entry.note?.statusLabel || entry.status,
+    tags: Array.isArray(entry.note?.tags) ? entry.note.tags : [],
+    entities: Array.isArray(entry.note?.ai?.relatedEntities) ? entry.note.ai.relatedEntities : [],
   }));
   const entityUsage = new Map();
 
@@ -848,18 +856,102 @@ function buildGraphSnapshot() {
         continue;
       }
       edges.push({
+        leftId: left.id,
         left: left.title,
+        rightId: right.id,
         right: right.title,
         shared,
+        sharedCount: shared.length,
       });
     }
   }
+
+  const focusNote = notes.find((note) => note.id === state.selectedWorkspaceNoteId) || notes[0] || null;
+  const focusTokens = focusNote ? [...new Set([...focusNote.tags, ...focusNote.entities])] : [];
+  const focusEntities = focusTokens
+    .map((entity) => {
+      const usage = entityUsage.get(entity);
+      return {
+        entity,
+        noteCount: usage?.notes.size || 1,
+        relatedNotes: [...(usage?.notes || [])].filter((title) => title !== focusNote.title).slice(0, 3),
+      };
+    })
+    .sort((left, right) => right.noteCount - left.noteCount || left.entity.localeCompare(right.entity, "zh-CN"))
+    .slice(0, 8);
+
+  const relatedNotes = focusNote
+    ? notes
+        .filter((note) => note.id !== focusNote.id)
+        .map((note) => {
+          const shared = [...new Set([...note.tags, ...note.entities])].filter((token) => focusTokens.includes(token));
+          return {
+            id: note.id,
+            title: note.title,
+            path: note.path,
+            sectionLabel: note.sectionLabel,
+            statusTone: note.statusTone,
+            statusLabel: note.statusLabel,
+            shared,
+          };
+        })
+        .filter((item) => item.shared.length)
+        .sort((left, right) => right.shared.length - left.shared.length || left.title.localeCompare(right.title, "zh-CN"))
+        .slice(0, 6)
+    : [];
 
   return {
     noteCount: notes.length,
     entityCount: entityUsage.size,
     topEntities,
-    topEdges: edges.slice(0, 6),
+    topEdges: edges
+      .sort((left, right) => right.sharedCount - left.sharedCount || left.left.localeCompare(right.left, "zh-CN"))
+      .slice(0, 6),
+    focusNote,
+    focusEntities,
+    relatedNotes,
+    connectionCount: edges.length,
+  };
+}
+
+function buildRepositorySnapshot() {
+  const workspaceShell = getCurrentWorkspaceShell();
+  const visibleIds = new Set(getVisibleWorkspaceNoteIds(workspaceShell));
+  const allEntries = collectWorkspaceNotes().sort((left, right) => right.rank - left.rank);
+  const visibleEntries = allEntries.filter((entry) => visibleIds.has(entry.id));
+  const selectedEntry = visibleEntries.find((entry) => entry.id === state.selectedWorkspaceNoteId) || visibleEntries[0] || null;
+  const draftEntries = visibleEntries.filter((entry) => {
+    const draft = getEditorDraftByNoteId(entry.id);
+    return (
+      entry.note.statusLabel?.includes("草稿") ||
+      entry.note.tags?.includes("draft") ||
+      (draft && isEditorDraftDirty(entry.note, draft))
+    );
+  });
+  const riskEntries = visibleEntries.filter(
+    (entry) => entry.note.statusTone === "warning" || entry.note.statusTone === "danger",
+  );
+  const sectionCards = (workspaceShell.sections || []).map((section) => {
+    const sectionEntries = allEntries.filter((entry) => entry.sectionId === section.id);
+    const sectionVisibleEntries = visibleEntries.filter((entry) => entry.sectionId === section.id);
+    const stats = summarizeSectionActivity(section, workspaceShell);
+    return {
+      id: section.id,
+      label: section.label,
+      totalCount: sectionEntries.length,
+      visibleCount: sectionVisibleEntries.length,
+      draftCount: stats.draftCount,
+      riskCount: stats.riskCount,
+      leadEntry: sectionVisibleEntries[0] || sectionEntries[0] || null,
+    };
+  });
+
+  return {
+    selectedEntry,
+    visibleEntries,
+    draftEntries,
+    riskEntries,
+    sectionCards,
   };
 }
 
@@ -981,12 +1073,16 @@ function renderViewModeCard() {
   const conflictCount = summary
     ? (summary.conflicts?.conflict_copies?.length || 0) + (summary.conflicts?.conflict_orphans?.length || 0)
     : 0;
+  const workspaceShell = getCurrentWorkspaceShell();
+  const visibleCount = getVisibleWorkspaceNoteIds(workspaceShell).length;
+  const totalCount = countWorkspaceNotes(workspaceShell);
+  const graphSnapshot = state.activeNavView === "graph" ? buildGraphSnapshot() : null;
   const viewConfigs = {
     repository: {
       tone: "info",
       title: "仓库浏览视图",
-      detail: "当前聚焦文档树、编辑区和 AI 侧栏，同步看板暂时收起，适合连续整理笔记内容。",
-      pills: [`搜索：${state.searchQuery ? `“${state.searchQuery}”` : "未启用"}`, "主区：编辑与 AI"],
+      detail: "这里围绕工作区目录、处理队列和当前焦点文档展开，适合连续整理内容、切换分区和进入编辑。",
+      pills: [`当前可见：${visibleCount}/${totalCount}`, `搜索：${state.searchQuery ? `“${state.searchQuery}”` : "未启用"}`],
     },
     conflicts: {
       tone: "warning",
@@ -997,13 +1093,13 @@ function renderViewModeCard() {
     graph: {
       tone: "info",
       title: "知识图谱视图",
-      detail: "这一视图先承接知识连接的方向说明，后续会把实体关系、来源链接和 AI 编译结果汇总到这里。",
-      pills: ["后续接入实体图", "对齐 phb-ui 主壳"],
+      detail: "这里收敛当前工作区里的高频实体、关联文档和跨文档线索，可直接反推到搜索、定位或编辑动作。",
+      pills: [`实体：${graphSnapshot?.entityCount || 0}`, `连接：${graphSnapshot?.connectionCount || 0}`],
     },
     settings: {
       tone: "info",
       title: "本地设置视图",
-      detail: "这里先展示当前前端会话来源和桥接状态，后续会收敛成真正的本地优先设置中心。",
+      detail: "这里集中管理本地桥接、工作区来源和调试入口，把低频接入动作与主工作台隔离开。",
       pills: [`工作区：${state.workspaceSourceLabel}`, `同步：${state.sourceLabel}`],
     },
   };
@@ -1323,36 +1419,72 @@ function renderViewDetailGrid() {
   }
 
   if (state.activeNavView === "repository") {
-    const workspaceShell = getCurrentWorkspaceShell();
-    const sections = workspaceShell.sections.map((section) => ({
-      label: section.label,
-      count: Array.isArray(section.items) ? section.items.length : 0,
-    }));
+    const repository = buildRepositorySnapshot();
+    const dirtyDraftCount = collectDirtyEditorDrafts().length;
+    const selectedEntry = repository.selectedEntry;
+    const selectedRecommendation = selectedEntry ? findRecommendedSyncActionForNote(selectedEntry.note) : null;
     elements.viewDetailGrid.hidden = false;
     elements.viewDetailGrid.innerHTML = `
       <article class="view-detail-card">
         <p class="card-section-label">仓库结构</p>
-        <h3>分区概览</h3>
+        <h3>分区入口</h3>
         <div class="view-stack">
-          ${sections
+          ${repository.sectionCards
             .map(
               (section) => `
-                <div class="detail-row">
-                  <span>${escapeHtml(section.label)}</span>
-                  <strong>${escapeHtml(section.count)} 篇</strong>
-                </div>
+                <article class="detail-row detail-row-block overview-row">
+                  <div class="overview-row-main">
+                    <div class="overview-row-copy">
+                      <strong>${escapeHtml(section.label)}</strong>
+                      <span>${escapeHtml(`当前可见 ${section.visibleCount} / 总计 ${section.totalCount} 篇`)}</span>
+                      <span>${escapeHtml(section.leadEntry ? `当前焦点：${section.leadEntry.title}` : "当前分区还没有可展示文档。")}</span>
+                    </div>
+                    <div class="overview-row-meta">
+                      <span class="mini-pill tone-info">${escapeHtml(section.totalCount)} 篇</span>
+                      ${
+                        section.draftCount
+                          ? `<span class="mini-pill tone-warning">${escapeHtml(section.draftCount)} 草稿</span>`
+                          : ""
+                      }
+                      ${
+                        section.riskCount
+                          ? `<span class="mini-pill tone-danger">${escapeHtml(section.riskCount)} 风险</span>`
+                          : ""
+                      }
+                    </div>
+                  </div>
+                  <div class="detail-actions overview-row-actions">
+                    <button class="ghost detail-inline-button" data-section-focus="${escapeHtml(section.label)}" type="button">只看这一分区</button>
+                    ${
+                      section.leadEntry
+                        ? `<button class="solid detail-inline-button" data-note-open="${escapeHtml(section.leadEntry.id)}" type="button">打开焦点文档</button>`
+                        : ""
+                    }
+                  </div>
+                </article>
               `,
             )
             .join("")}
         </div>
       </article>
       <article class="view-detail-card">
-        <p class="card-section-label">当前筛选</p>
-        <h3>检索状态</h3>
+        <p class="card-section-label">当前焦点</p>
+        <h3>仓库处理队列</h3>
         <div class="view-stack">
-          <div class="detail-row">
-            <span>关键词</span>
-            <strong>${escapeHtml(state.searchQuery || "未启用")}</strong>
+          <div class="detail-row detail-row-block">
+            <strong>${escapeHtml(selectedEntry ? selectedEntry.title : "当前没有命中文档")}</strong>
+            <span>${escapeHtml(selectedEntry ? `${selectedEntry.sectionLabel} · ${selectedEntry.path}` : "请调整搜索词或切换分区。")}</span>
+            <span>${escapeHtml(selectedEntry ? selectedEntry.note.statusLabel : "当前搜索结果为空。")}</span>
+          </div>
+          <div class="detail-metric-grid">
+            <div class="detail-metric">
+              <span class="metric-label">可见文档</span>
+              <strong>${escapeHtml(repository.visibleEntries.length)}</strong>
+            </div>
+            <div class="detail-metric">
+              <span class="metric-label">未保存草稿</span>
+              <strong>${escapeHtml(dirtyDraftCount)}</strong>
+            </div>
           </div>
           <div class="detail-row">
             <span>工作区来源</span>
@@ -1364,10 +1496,110 @@ function renderViewDetailGrid() {
           </div>
         </div>
         <div class="detail-actions">
+          ${
+            selectedEntry
+              ? `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(selectedEntry.id)}" type="button">继续编辑当前文档</button>`
+              : ""
+          }
+          ${
+            selectedRecommendation
+              ? `<button class="ghost detail-inline-button" data-note-select-action="${escapeHtml(selectedEntry.id)}" type="button">选中推荐动作</button>`
+              : ""
+          }
           <button class="ghost detail-inline-button" data-view-command="clear-search" type="button">清空搜索</button>
         </div>
       </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">待处理草稿</p>
+        <h3>进入同步前</h3>
+        <div class="view-stack">
+          ${
+            repository.draftEntries.length
+              ? repository.draftEntries
+                  .slice(0, 4)
+                  .map(
+                    (entry) => {
+                      const draft = getEditorDraftByNoteId(entry.id);
+                      const recommendation = findRecommendedSyncActionForNote(entry.note);
+                      return buildOverviewNoteRow(entry, {
+                        summary: draft && isEditorDraftDirty(entry.note, draft)
+                          ? "本地草稿仍有未保存修改，建议先保存。"
+                          : recommendation
+                            ? `推荐动作：${recommendation.action.label}`
+                            : "当前还没有匹配到下一步同步动作。",
+                        pills: [
+                          draft && isEditorDraftDirty(entry.note, draft) ? "未保存修改" : null,
+                          recommendation?.action?.command || null,
+                        ],
+                        buttons: [
+                          `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                          `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">编辑</button>`,
+                        ],
+                      });
+                    },
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前没有挂起的草稿队列，可以继续整理仓库内容。</p></div>'
+          }
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">风险与阻塞</p>
+        <h3>需要优先关注</h3>
+        <div class="view-stack">
+          ${
+            repository.riskEntries.length
+              ? repository.riskEntries
+                  .slice(0, 4)
+                  .map(
+                    (entry) =>
+                      {
+                        const recommendation = findRecommendedSyncActionForNote(entry.note);
+                        return buildOverviewNoteRow(entry, {
+                          summary: `${entry.note.lastSaved || entry.status} · ${entry.note.path || entry.path}`,
+                          pills: [entry.note.statusLabel || entry.status, recommendation?.action?.command || null],
+                          buttons: [
+                            `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                            recommendation
+                              ? `<button class="ghost detail-inline-button" data-note-execute-action="${escapeHtml(entry.id)}" type="button">执行推荐动作</button>`
+                              : "",
+                          ],
+                        });
+                      },
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前可见文档里没有高风险条目。</p></div>'
+          }
+        </div>
+      </article>
     `;
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-section-focus]")) {
+      button.addEventListener("click", () => {
+        applySearchQuery(button.dataset.sectionFocus || "");
+        render();
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-open]")) {
+      button.addEventListener("click", () => {
+        state.selectedWorkspaceNoteId = button.dataset.noteOpen || state.selectedWorkspaceNoteId;
+        render();
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-edit]")) {
+      button.addEventListener("click", () => {
+        focusWorkspaceNoteForEdit(button.dataset.noteEdit || state.selectedWorkspaceNoteId);
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-select-action]")) {
+      button.addEventListener("click", () => {
+        selectRecommendedSyncActionForNote(button.dataset.noteSelectAction || state.selectedWorkspaceNoteId);
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-execute-action]")) {
+      button.addEventListener("click", async () => {
+        await executeRecommendedSyncActionForNote(button.dataset.noteExecuteAction || state.selectedWorkspaceNoteId);
+      });
+    }
     for (const button of elements.viewDetailGrid.querySelectorAll("[data-view-command='clear-search']")) {
       button.addEventListener("click", () => {
         resetSearchQuery();
@@ -1382,8 +1614,8 @@ function renderViewDetailGrid() {
     elements.viewDetailGrid.hidden = false;
     elements.viewDetailGrid.innerHTML = `
       <article class="view-detail-card">
-        <p class="card-section-label">知识连接</p>
-        <h3>实体热区</h3>
+        <p class="card-section-label">当前焦点</p>
+        <h3>关联文档</h3>
         <div class="detail-metric-grid">
           <div class="detail-metric">
             <span class="metric-label">文档数</span>
@@ -1394,6 +1626,52 @@ function renderViewDetailGrid() {
             <strong>${escapeHtml(graph.entityCount)}</strong>
           </div>
         </div>
+        <div class="view-stack">
+          ${
+            graph.focusNote
+              ? `
+                <article class="detail-row detail-row-block overview-row">
+                  <div class="overview-row-main">
+                    <div class="overview-row-copy">
+                      <strong>${escapeHtml(graph.focusNote.title)}</strong>
+                      <span>${escapeHtml(`${graph.focusNote.sectionLabel} · ${graph.focusNote.path}`)}</span>
+                      <span>${escapeHtml(`当前图谱焦点共提取 ${graph.focusEntities.length} 个高频实体线索。`)}</span>
+                    </div>
+                    <div class="overview-row-meta">
+                      <span class="mini-pill tone-${resolveTone(graph.focusNote.statusTone)}">${escapeHtml(graph.focusNote.statusLabel)}</span>
+                      <span class="mini-pill tone-info">${escapeHtml(graph.relatedNotes.length)} 篇关联文档</span>
+                    </div>
+                  </div>
+                  <div class="detail-actions overview-row-actions">
+                    <button class="ghost detail-inline-button" data-note-open="${escapeHtml(graph.focusNote.id)}" type="button">打开文档</button>
+                    <button class="solid detail-inline-button" data-note-edit="${escapeHtml(graph.focusNote.id)}" type="button">进入编辑</button>
+                  </div>
+                </article>
+              `
+              : '<div class="empty-state"><p>当前还没有可分析的文档焦点。</p></div>'
+          }
+          ${
+            graph.focusEntities.length
+              ? `
+                <div class="editor-outline-list">
+                  ${graph.focusEntities
+                    .map(
+                      (entity) => `
+                        <button class="ghost detail-inline-button" data-entity-filter="${escapeHtml(entity.entity)}" type="button">
+                          ${escapeHtml(`${entity.entity} · ${entity.noteCount} 篇`)}
+                        </button>
+                      `,
+                    )
+                    .join("")}
+                </div>
+              `
+              : ""
+          }
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">知识连接</p>
+        <h3>实体热区</h3>
         <div class="token-grid">
           ${graph.topEntities
             .map(
@@ -1409,8 +1687,41 @@ function renderViewDetailGrid() {
         </div>
       </article>
       <article class="view-detail-card">
+        <p class="card-section-label">关系回流</p>
+        <h3>焦点文档带出的关联项</h3>
+        <div class="view-stack">
+          ${
+            graph.relatedNotes.length
+              ? graph.relatedNotes
+                  .map(
+                    (entry) => `
+                      <article class="detail-row detail-row-block overview-row">
+                        <div class="overview-row-main">
+                          <div class="overview-row-copy">
+                            <strong>${escapeHtml(entry.title)}</strong>
+                            <span>${escapeHtml(`${entry.sectionLabel} · ${entry.path}`)}</span>
+                            <span>${escapeHtml(`共享线索：${entry.shared.join(" · ")}`)}</span>
+                          </div>
+                          <div class="overview-row-meta">
+                            <span class="mini-pill tone-${resolveTone(entry.statusTone)}">${escapeHtml(entry.statusLabel)}</span>
+                            <span class="mini-pill tone-info">${escapeHtml(entry.shared.length)} 个重叠点</span>
+                          </div>
+                        </div>
+                        <div class="detail-actions overview-row-actions">
+                          <button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>
+                          <button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">编辑</button>
+                        </div>
+                      </article>
+                    `,
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前焦点文档还没有命中其他关联文档。</p></div>'
+          }
+        </div>
+      </article>
+      <article class="view-detail-card">
         <p class="card-section-label">关系草图</p>
-        <h3>文档连接</h3>
+        <h3>跨文档连接</h3>
         <div class="view-stack">
           ${
             graph.topEdges.length
@@ -1418,10 +1729,13 @@ function renderViewDetailGrid() {
                   .map(
                     (edge) => `
                       <div class="relation-row">
-                        <strong>${escapeHtml(edge.left)}</strong>
-                        <span>↔</span>
-                        <strong>${escapeHtml(edge.right)}</strong>
+                        <strong>${escapeHtml(edge.left)} ↔ ${escapeHtml(edge.right)}</strong>
+                        <span>${escapeHtml(`${edge.sharedCount} 个共享线索`)}</span>
                         <p>${escapeHtml(edge.shared.join(" · "))}</p>
+                        <div class="detail-actions">
+                          <button class="ghost detail-inline-button" data-note-open="${escapeHtml(edge.leftId)}" type="button">打开左侧</button>
+                          <button class="ghost detail-inline-button" data-note-open="${escapeHtml(edge.rightId)}" type="button">打开右侧</button>
+                        </div>
                       </div>
                     `,
                   )
@@ -1431,11 +1745,20 @@ function renderViewDetailGrid() {
         </div>
       </article>
     `;
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-open]")) {
+      button.addEventListener("click", () => {
+        state.selectedWorkspaceNoteId = button.dataset.noteOpen || state.selectedWorkspaceNoteId;
+        render();
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-edit]")) {
+      button.addEventListener("click", () => {
+        focusWorkspaceNoteForEdit(button.dataset.noteEdit || state.selectedWorkspaceNoteId);
+      });
+    }
     for (const button of elements.viewDetailGrid.querySelectorAll("[data-entity-filter]")) {
       button.addEventListener("click", () => {
-        const value = button.dataset.entityFilter || "";
-        state.searchQuery = value;
-        elements.searchInput.value = value;
+        applySearchQuery(button.dataset.entityFilter || "");
         render();
       });
     }
