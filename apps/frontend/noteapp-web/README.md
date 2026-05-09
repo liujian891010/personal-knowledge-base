@@ -24,7 +24,7 @@ When `PKB_VAULT_ROOT` / `PKB_BASE_URL` / `PKB_VAULT_ID` / `PKB_DEVICE_ID` are se
 2. `POST /api/bridge/execute-action`
 3. `GET /api/bridge/status`
 
-The shell uses that bridge for `Refresh Local Snapshot` and `Run Selected Action`.
+The shell uses that bridge for `Refresh Local Snapshot` and `Run Selected Action`. Internally the action path now delegates to the desktop CLI's `execute-sync-action-and-snapshot` boundary instead of stitching two commands together in the browser shell.
 
 Build static output:
 

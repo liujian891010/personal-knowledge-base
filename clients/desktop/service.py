@@ -592,6 +592,12 @@ class DesktopSyncShellSnapshot:
 
 
 @dataclass(frozen=True)
+class DesktopSyncActionSnapshotResult:
+    execution: DesktopSyncActionExecutionResult
+    snapshot: DesktopSyncShellSnapshot
+
+
+@dataclass(frozen=True)
 class DesktopSyncActionExecutionResult:
     action: DesktopSyncPanelAction
     source: str
@@ -2162,6 +2168,28 @@ class DesktopSyncService:
             message=result.message,
         )
         return result
+
+    def execute_sync_action_and_snapshot(
+        self,
+        action_id: str,
+        *,
+        now_ms: Optional[int] = None,
+        activity_limit: int = 20,
+    ) -> DesktopSyncActionSnapshotResult:
+        resolved_now_ms = (
+            int(datetime.now(timezone.utc).timestamp() * 1000)
+            if now_ms is None
+            else now_ms
+        )
+        execution = self.execute_sync_action(action_id, now_ms=resolved_now_ms)
+        snapshot = self.build_sync_shell_snapshot(
+            now_ms=resolved_now_ms,
+            activity_limit=activity_limit,
+        )
+        return DesktopSyncActionSnapshotResult(
+            execution=execution,
+            snapshot=snapshot,
+        )
 
     def _execute_supported_sync_action(
         self,

@@ -324,6 +324,13 @@ class FakeService:
             "message": None,
         }
 
+    def execute_sync_action_and_snapshot(self, action_id: str, *, now_ms=None, activity_limit=20):
+        self.calls.append(("execute-sync-action-and-snapshot", action_id, now_ms, activity_limit))
+        return {
+            "execution": self.execute_sync_action(action_id, now_ms=now_ms),
+            "snapshot": self.build_sync_shell_snapshot(now_ms=now_ms, activity_limit=activity_limit),
+        }
+
     def export_vault_package(self, package_path: Path, *, include_ai_raw: bool = False):
         self.calls.append(("export-vault", str(package_path), include_ai_raw))
         return {
@@ -920,6 +927,43 @@ class DesktopCliTests(unittest.TestCase):
             [
                 ("execute-sync-action", "list-conflicts", 1770000040666),
                 ("list-conflicts", None),
+            ],
+        )
+
+    def test_execute_sync_action_and_snapshot_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "execute-sync-action-and-snapshot",
+            "--action-id",
+            "list-conflicts",
+            "--now-ms",
+            "1770000040777",
+            "--activity-limit",
+            "9",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["execution"]["status"], "executed")
+        self.assertEqual(payload["snapshot"]["generated_at_ms"], 1770000040777)
+        self.assertEqual(payload["snapshot"]["activity_feed"]["total_count"], 1)
+        self.assertEqual(
+            self.service.calls,
+            [
+                ("execute-sync-action-and-snapshot", "list-conflicts", 1770000040777, 9),
+                ("execute-sync-action", "list-conflicts", 1770000040777),
+                ("list-conflicts", None),
+                ("sync-shell-snapshot", 1770000040777, 9),
+                ("sync-center", 1770000040777),
+                ("sync-panel", 1770000040777),
+                ("vault-summary", None),
+                ("vault-summary", None),
             ],
         )
 

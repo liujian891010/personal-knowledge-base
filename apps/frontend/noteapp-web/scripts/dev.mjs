@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  buildExecuteActionArgs,
+  buildExecuteActionAndSnapshotArgs,
   buildSnapshotCommandArgs,
   listMissingBridgeSettings,
   resolveBridgeConfig,
@@ -105,19 +105,16 @@ function executeRefreshSnapshot(nowMs, activityLimit) {
 
 function executeSyncAction(actionId, nowMs, activityLimit) {
   requireBridgeConfig();
-  const execution = runDesktopCliJson(buildExecuteActionArgs(actionId, nowMs), {
-    config: bridgeConfig,
-  });
-  const snapshot = runDesktopCliJson(
-    buildSnapshotCommandArgs(bridgeConfig, {
+  return runDesktopCliJson(
+    buildExecuteActionAndSnapshotArgs(
+      actionId,
       nowMs,
-      activityLimit,
-    }),
+      activityLimit || bridgeConfig.activityLimit,
+    ),
     {
       config: bridgeConfig,
     },
   );
-  return { execution, snapshot };
 }
 
 const server = createServer(async (request, response) => {

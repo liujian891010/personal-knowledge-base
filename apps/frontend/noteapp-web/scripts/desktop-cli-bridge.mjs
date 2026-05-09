@@ -144,4 +144,18 @@ export function buildExecuteActionArgs(actionId, nowMs) {
   return commandArgs;
 }
 
+export function buildExecuteActionAndSnapshotArgs(actionId, nowMs, activityLimit) {
+  const commandArgs = [
+    "execute-sync-action-and-snapshot",
+    "--action-id",
+    actionId,
+    "--activity-limit",
+    String(activityLimit),
+  ];
+  if (nowMs) {
+    commandArgs.push("--now-ms", String(nowMs));
+  }
+  return commandArgs;
+}
+
 export { appRoot, defaultSnapshotPath, repoRoot };

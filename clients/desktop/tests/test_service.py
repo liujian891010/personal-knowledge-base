@@ -828,6 +828,27 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(feed.records[0].level, "danger")
             self.assertEqual(feed.records[0].message, "RuntimeError: network down")
 
+    def test_execute_sync_action_and_snapshot_returns_updated_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            result = service.execute_sync_action_and_snapshot(
+                "show-vault-summary",
+                now_ms=1770000040905,
+                activity_limit=1,
+            )
+
+            self.assertEqual(result.execution.status, "executed")
+            self.assertEqual(result.execution.action.action_id, "show-vault-summary")
+            self.assertEqual(result.snapshot.generated_at_ms, 1770000040905)
+            self.assertEqual(result.snapshot.vault_id, "vault-001")
+            self.assertEqual(result.snapshot.activity_feed.total_count, 1)
+            self.assertEqual(len(result.snapshot.activity_feed.records), 1)
+            self.assertEqual(
+                result.snapshot.activity_feed.records[0].action_id,
+                "show-vault-summary",
+            )
+
     def test_load_workspace_content_rejects_workspace_snapshot_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, payload, _ = self._seed_workspace(Path(tmpdir))
