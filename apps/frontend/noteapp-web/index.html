@@ -35,11 +35,13 @@
             <div class="control-actions">
               <button id="load-sample-button" class="solid">Load Sample</button>
               <button id="load-live-button" class="ghost">Load Live Snapshot</button>
+              <button id="refresh-local-button" class="ghost">Refresh Local Snapshot</button>
               <label class="ghost file-picker">
                 Import JSON
                 <input id="file-input" type="file" accept="application/json" />
               </label>
             </div>
+            <p id="bridge-status" class="bridge-status">Checking local desktop bridge…</p>
             <textarea
               id="payload-input"
               spellcheck="false"
@@ -56,6 +58,12 @@
             <p id="action-contract-help">
               Select an action from the panel, cards, or activity area to preview the shell
               command contract.
+            </p>
+            <div class="control-actions">
+              <button id="execute-selected-button" class="solid">Run Selected Action</button>
+            </div>
+            <p id="action-execution-status" class="bridge-status">
+              Local execution is available only when the desktop bridge is configured.
             </p>
             <pre id="action-contract-output">No action selected.</pre>
           </section>
