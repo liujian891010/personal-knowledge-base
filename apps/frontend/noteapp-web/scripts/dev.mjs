@@ -7,6 +7,8 @@ import {
   buildExecuteActionAndSnapshotArgs,
   buildSnapshotCommandArgs,
   listMissingBridgeSettings,
+  printBridgeUsage,
+  readArgMap,
   resolveBridgeConfig,
   runDesktopCliJson,
 } from "./desktop-cli-bridge.mjs";
@@ -15,7 +17,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || "4173");
-const bridgeConfig = resolveBridgeConfig();
+const args = readArgMap(process.argv.slice(2));
+if (args.has("--help")) {
+  printBridgeUsage();
+  process.exit(0);
+}
+
+const bridgeConfig = resolveBridgeConfig({ args });
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -230,7 +238,9 @@ server.listen(port, host, () => {
   const status = buildBridgeStatusPayload();
   console.log(`noteapp-web static shell running at http://${host}:${port}`);
   if (status.available) {
-    console.log(`desktop bridge ready for vault ${status.config.vaultId} at ${status.config.vaultRoot}`);
+    console.log(
+      `desktop bridge ready for vault ${status.config.vaultId} at ${status.config.vaultRoot} (${status.config.configSource})`,
+    );
   } else {
     console.log(`desktop bridge disabled, missing: ${status.missing.join(", ")}`);
   }

@@ -18,6 +18,12 @@ cd apps\frontend\noteapp-web
 npm run dev
 ```
 
+You can also pass bridge config directly on the dev command line:
+
+```powershell
+npm run dev -- --vault-root C:\vaults\pkb --base-url https://sync.example.com --vault-id vault-001 --device-id desktop-shanghai
+```
+
 When `PKB_VAULT_ROOT` / `PKB_BASE_URL` / `PKB_VAULT_ID` / `PKB_DEVICE_ID` are set, the dev server also enables a local desktop bridge:
 
 1. `POST /api/bridge/refresh-snapshot`
