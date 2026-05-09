@@ -179,6 +179,7 @@ function buildAppSessionPayload({ source, bridgeStatus, syncPayload, workspaceSh
     source,
     loadedAtMs,
     bridgeStatus,
+    aiBoundaryStatus: buildAiBoundaryStatusPayload(),
     syncPayload,
     workspaceShell,
     meta: {
@@ -186,6 +187,15 @@ function buildAppSessionPayload({ source, bridgeStatus, syncPayload, workspaceSh
       payloadKind: detectSyncPayloadKind(syncPayload),
       workspace: summarizeWorkspaceShell(workspaceShell),
     },
+  };
+}
+
+function buildAiBoundaryStatusPayload() {
+  return {
+    available: true,
+    mode: "dev-server-local",
+    checkedAtMs: Date.now(),
+    capabilities: ["copilot-answer", "compile-wiki"],
   };
 }
 
@@ -275,12 +285,7 @@ const server = createServer(async (request, response) => {
   }
 
   if (request.method === "GET" && url.pathname === "/api/ai/status") {
-    writeJson(response, 200, {
-      available: true,
-      mode: "dev-server-local",
-      checkedAtMs: Date.now(),
-      capabilities: ["copilot-answer", "compile-wiki"],
-    });
+    writeJson(response, 200, buildAiBoundaryStatusPayload());
     return;
   }
 
