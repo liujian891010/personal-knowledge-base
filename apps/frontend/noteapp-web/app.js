@@ -22,6 +22,7 @@ const LIVE_SNAPSHOT_PATH = "./fixtures/live-sync-shell.json";
 const WORKSPACE_SAMPLE_PATH = "./fixtures/workspace-shell.sample.json";
 const DEFAULT_ACTION_COMMAND = "pkb-desktop-sync";
 const LOCAL_UI_SETTINGS_STORAGE_KEY = "noteapp.local-ui-settings";
+const LOCAL_WORKSPACE_SESSION_STORAGE_KEY = "noteapp.local-workspace-session";
 const DEFAULT_LOCAL_UI_SETTINGS = {
   aiRawFileLimitMb: 2,
   aiRawTotalLimitMb: 500,
@@ -406,6 +407,57 @@ function loadLocalUiSettings() {
     state.localUiSettings = parseLocalUiSettings(window.localStorage.getItem(LOCAL_UI_SETTINGS_STORAGE_KEY));
   } catch {
     state.localUiSettings = { ...DEFAULT_LOCAL_UI_SETTINGS };
+  }
+}
+
+function readLocalWorkspaceSession() {
+  try {
+    const raw = window.localStorage.getItem(LOCAL_WORKSPACE_SESSION_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    const workspaceShell = validateWorkspaceShell(parsed.workspaceShell);
+    return {
+      workspaceShell,
+      selectedWorkspaceNoteId:
+        typeof parsed.selectedWorkspaceNoteId === "string" ? parsed.selectedWorkspaceNoteId : "desktop-bridge",
+      workspaceSourceLabel:
+        typeof parsed.workspaceSourceLabel === "string" ? parsed.workspaceSourceLabel : "浏览器本地草稿",
+      savedAtMs: typeof parsed.savedAtMs === "number" ? parsed.savedAtMs : Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearLocalWorkspaceSession() {
+  try {
+    window.localStorage.removeItem(LOCAL_WORKSPACE_SESSION_STORAGE_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function persistLocalWorkspaceSession() {
+  if (!state.workspaceShell || state.workspaceSourceLabel !== "浏览器本地草稿") {
+    clearLocalWorkspaceSession();
+    return false;
+  }
+  try {
+    window.localStorage.setItem(
+      LOCAL_WORKSPACE_SESSION_STORAGE_KEY,
+      JSON.stringify({
+        workspaceShell: state.workspaceShell,
+        selectedWorkspaceNoteId: state.selectedWorkspaceNoteId,
+        workspaceSourceLabel: state.workspaceSourceLabel,
+        savedAtMs: Date.now(),
+      }),
+    );
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -958,6 +1010,7 @@ function formatSessionEventLabel(type) {
     workspace_ai_applied: "AI 建议已写入草稿",
     workspace_followup_created: "跟进笔记已创建",
     workspace_note_moved: "工作区文档已归档",
+    workspace_session_restored: "本地工作区已恢复",
   }[type] || type;
 }
 
@@ -2868,6 +2921,7 @@ function moveWorkspaceNoteToSection(noteId, targetSectionId) {
 
   state.workspaceSourceLabel = "浏览器本地草稿";
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  persistLocalWorkspaceSession();
   elements.workspaceStatus.textContent = `已将《${item.title || note.title}》整理到 ${targetSection.label}`;
   pushSessionHistory({
     type: "workspace_note_moved",
@@ -3163,6 +3217,7 @@ function restoreRecoveryDraft(noteId) {
     discardPersistedRecoveryDraft(recoveryEntry.noteId, { refresh: false });
   }
   refreshRecoveryDrafts();
+  persistLocalWorkspaceSession();
   elements.workspaceStatus.textContent = `已恢复草稿：${recoveryEntry.title}`;
   pushSessionHistory({
     type: "workspace_draft_restored",
@@ -3374,6 +3429,7 @@ function ensureEditorDraftSession(noteId = state.selectedWorkspaceNoteId) {
   state.selectedWorkspaceNoteId = noteId;
   state.workspaceSourceLabel = "浏览器本地草稿";
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  persistLocalWorkspaceSession();
   return {
     note,
     draft: getEditorDraftByNoteId(noteId),
@@ -5070,6 +5126,7 @@ function applyWorkspaceShell(payload, sourceLabel) {
     state.selectedWorkspaceNoteId = Object.keys(workspaceShell.notes)[0] || "desktop-bridge";
   }
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  persistLocalWorkspaceSession();
   render();
   elements.actionExecutionStatus.textContent = `工作区契约来源：${sourceLabel}`;
 }
@@ -5158,6 +5215,7 @@ async function loadInitialSession() {
   const explicitPayloadPath = resolveInitialPayloadPath();
   const explicitWorkspacePath = resolveInitialWorkspacePath();
   const sessionMode = resolveInitialSessionMode();
+  const localWorkspaceSession = readLocalWorkspaceSession();
 
   if (explicitPayloadPath || explicitWorkspacePath) {
     if (explicitWorkspacePath) {
@@ -5170,6 +5228,24 @@ async function loadInitialSession() {
       await loadPayloadFromPath(explicitPayloadPath, `从 ${explicitPayloadPath} 加载`);
     } else {
       await loadInitialPayload();
+    }
+    return;
+  }
+
+  if (localWorkspaceSession) {
+    state.selectedWorkspaceNoteId = localWorkspaceSession.selectedWorkspaceNoteId;
+    applyWorkspaceShell(localWorkspaceSession.workspaceShell, localWorkspaceSession.workspaceSourceLabel);
+    elements.workspaceStatus.textContent =
+      `已恢复本地工作区：${formatDateTime(localWorkspaceSession.savedAtMs)} 的浏览器草稿会话`;
+    pushSessionHistory({
+      type: "workspace_session_restored",
+      level: "success",
+      detail: `${localWorkspaceSession.workspaceSourceLabel} · ${formatDateTime(localWorkspaceSession.savedAtMs)}`,
+    });
+    try {
+      await loadInitialPayload();
+    } catch {
+      // Keep the restored local workspace visible even if sync data is unavailable.
     }
     return;
   }
@@ -5288,6 +5364,7 @@ function saveEditingSelectedNote() {
   discardPersistedRecoveryDraft(activeDraft.noteId);
   removeEditorDraftForNote(activeDraft.noteId);
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  persistLocalWorkspaceSession();
   elements.workspaceStatus.textContent = `已保存文档：${trimmedTitle}`;
   pushSessionHistory({
     type: "workspace_note_saved",
@@ -5392,6 +5469,7 @@ ${syncContext.actions.slice(0, 3).map((item, index) => `${index + 1}. ${item}`).
   });
   resetSearchQuery();
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  persistLocalWorkspaceSession();
   elements.workspaceStatus.textContent = `已创建跟进笔记：${title}`;
   pushSessionHistory({
     type: "workspace_followup_created",
@@ -5453,6 +5531,7 @@ function createQuickCaptureNote() {
   });
   resetSearchQuery();
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  persistLocalWorkspaceSession();
   elements.workspaceStatus.textContent = `已创建本地草稿：${title}`;
   pushSessionHistory({
     type: "quick_capture_created",
