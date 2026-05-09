@@ -27,6 +27,7 @@ const DEFAULT_LOCAL_UI_SETTINGS = {
   aiRawTotalLimitMb: 500,
   aiRawCleanupPolicy: "prompt",
   includeAiRawInExport: false,
+  expertMode: false,
 };
 const draftAutosaveTimers = new Map();
 const WORKSPACE_SAMPLE = {
@@ -274,6 +275,8 @@ const elements = {
   payloadKind: document.getElementById("payload-kind"),
   payloadDetail: document.getElementById("payload-detail"),
   controlCenterCard: document.getElementById("control-center-card"),
+  toggleAdvancedControlsButton: document.getElementById("toggle-advanced-controls-button"),
+  controlModeNote: document.getElementById("control-mode-note"),
   workspaceShellRoot: document.getElementById("workspace-shell-root"),
   viewModeCard: document.getElementById("view-mode-card"),
   viewDetailGrid: document.getElementById("view-detail-grid"),
@@ -375,6 +378,7 @@ function parseLocalUiSettings(raw) {
         ? parsed.aiRawCleanupPolicy
         : DEFAULT_LOCAL_UI_SETTINGS.aiRawCleanupPolicy,
       includeAiRawInExport: Boolean(parsed?.includeAiRawInExport),
+      expertMode: Boolean(parsed?.expertMode),
     };
   } catch {
     return { ...DEFAULT_LOCAL_UI_SETTINGS };
@@ -384,6 +388,7 @@ function parseLocalUiSettings(raw) {
 function persistLocalUiSettings(nextSettings) {
   state.localUiSettings = {
     ...DEFAULT_LOCAL_UI_SETTINGS,
+    ...state.localUiSettings,
     ...nextSettings,
   };
   try {
@@ -598,6 +603,25 @@ function renderBridgeStatus() {
   elements.reloadBridgeStatusButton.disabled = false;
   renderBridgeDiagnostics(status);
   renderBridgeError(state.lastBridgeError);
+}
+
+function renderControlCenterMode() {
+  const expertMode = Boolean(state.localUiSettings.expertMode);
+  if (elements.toggleAdvancedControlsButton) {
+    elements.toggleAdvancedControlsButton.textContent = expertMode ? "返回普通工作台模式" : "开启高级调试";
+  }
+  if (elements.controlModeNote) {
+    elements.controlModeNote.textContent = expertMode
+      ? "当前为高级调试模式，原始 JSON、桥接诊断和手动契约覆盖入口已展开到设置页。"
+      : "当前为普通工作台模式，原始 JSON 覆盖和桥接诊断默认收起，只保留主工作链路。";
+  }
+  if (elements.controlCenterCard) {
+    elements.controlCenterCard
+      .querySelectorAll("[data-advanced-control]")
+      .forEach((node) => {
+        node.hidden = !expertMode;
+      });
+  }
 }
 
 function setSelectedAction(action, source = "手动选择") {
@@ -1149,6 +1173,7 @@ function buildSettingsSnapshot() {
     recoveryCount: state.recoveryDrafts.length,
     lastExecution: buildLastExecutionSummary(),
     localUiSettings: state.localUiSettings,
+    expertMode: Boolean(state.localUiSettings.expertMode),
   };
 }
 
@@ -2172,6 +2197,29 @@ function renderViewDetailGrid() {
     elements.viewDetailGrid.hidden = false;
     elements.viewDetailGrid.innerHTML = `
       <article class="view-detail-card">
+        <p class="card-section-label">工作台边界</p>
+        <h3>当前模式</h3>
+        <div class="detail-metric-grid">
+          <div class="detail-metric">
+            <span class="metric-label">当前模式</span>
+            <strong>${settings.expertMode ? "高级调试" : "普通工作台"}</strong>
+          </div>
+          <div class="detail-metric">
+            <span class="metric-label">高级入口</span>
+            <strong>${settings.expertMode ? "已显示" : "已收起"}</strong>
+          </div>
+        </div>
+        <div class="view-stack">
+          <div class="detail-row detail-row-block">
+            <strong>${settings.expertMode ? "当前保留所有调试入口" : "当前只保留主链操作"}</strong>
+            <span>${escapeHtml(settings.expertMode ? "你现在可以直接查看桥接诊断、手动覆盖同步 JSON 和手动粘贴工作区契约。" : "原始 JSON、桥接诊断和手动契约输入已被收起，避免打断普通工作流。")}</span>
+          </div>
+        </div>
+        <div class="detail-actions">
+          <button class="solid detail-inline-button" data-settings-command="toggle-expert-mode" type="button">${settings.expertMode ? "切回普通工作台" : "开启高级调试"}</button>
+        </div>
+      </article>
+      <article class="view-detail-card">
         <p class="card-section-label">本地桥接</p>
         <h3>连接状态</h3>
         <div class="detail-metric-grid">
@@ -2417,6 +2465,17 @@ function renderViewDetailGrid() {
         }
         if (command === "quick-capture") {
           createQuickCaptureNote();
+          return;
+        }
+        if (command === "toggle-expert-mode") {
+          persistLocalUiSettings({
+            ...state.localUiSettings,
+            expertMode: !state.localUiSettings.expertMode,
+          });
+          elements.workspaceStatus.textContent = state.localUiSettings.expertMode
+            ? "已开启高级调试模式。"
+            : "已切回普通工作台模式。";
+          render();
           return;
         }
         if (command === "save-ai-raw-settings") {
@@ -4715,6 +4774,7 @@ function render() {
   renderViewModeCard();
   renderViewDetailGrid();
   renderNavViewVisibility();
+  renderControlCenterMode();
   renderBridgeStatus();
   renderExecutionResult(state.lastExecution);
   renderWorkspaceChrome();
@@ -5258,6 +5318,17 @@ elements.quickCaptureButton.addEventListener("click", () => {
 
 elements.newNoteButton.addEventListener("click", () => {
   createQuickCaptureNote();
+});
+
+elements.toggleAdvancedControlsButton?.addEventListener("click", () => {
+  persistLocalUiSettings({
+    ...state.localUiSettings,
+    expertMode: !state.localUiSettings.expertMode,
+  });
+  elements.workspaceStatus.textContent = state.localUiSettings.expertMode
+    ? "已开启高级调试模式。"
+    : "已切回普通工作台模式。";
+  render();
 });
 
 for (const button of elements.navButtons) {

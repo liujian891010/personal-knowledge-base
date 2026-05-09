@@ -67,6 +67,10 @@
             <span class="card-section-label">接入中心</span>
             <h2>本地设置与接入</h2>
             <p>这里收纳低频接入动作、本地桥接状态和高级调试入口，避免占用主工作台的注意力。</p>
+            <div class="control-actions">
+              <button id="toggle-advanced-controls-button" class="ghost" type="button">开启高级调试</button>
+            </div>
+            <p id="control-mode-note" class="sidebar-helper">当前为普通工作台模式，原始 JSON 覆盖和桥接诊断默认收起。</p>
             <div class="control-hero-grid">
               <article class="control-status-card">
                 <span class="control-status-title">桥接状态</span>
@@ -113,7 +117,7 @@
                   <input id="workspace-file-input" type="file" accept="application/json" />
                 </label>
               </div>
-              <details class="details-block details-block-nested">
+              <details class="details-block details-block-nested" data-advanced-control>
                 <summary>手动粘贴工作区 JSON</summary>
                 <textarea
                   id="workspace-input"
@@ -146,7 +150,7 @@
                 <pre id="bridge-error-output" class="compact-output">当前没有桥接错误。</pre>
               </details>
             </details>
-            <details class="details-block">
+            <details class="details-block" data-advanced-control>
               <summary>高级调试与 JSON 覆盖</summary>
               <details class="details-block details-block-nested">
                 <summary>查看桥接诊断</summary>
