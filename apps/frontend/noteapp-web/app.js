@@ -4756,9 +4756,20 @@ function renderEmptyDashboard(message) {
   renderViewModeCard();
   renderViewDetailGrid();
   renderNavViewVisibility();
+  renderControlCenterMode();
   elements.payloadKind.textContent = "未加载";
   elements.payloadDetail.textContent = message;
-  elements.panelCard.innerHTML = `<div class="empty-state"><p>${escapeHtml(message)}</p></div>`;
+  elements.panelCard.innerHTML = `
+    <div class="empty-state">
+      <p>${escapeHtml(message)}</p>
+      <p>${escapeHtml(state.localUiSettings.expertMode ? "你也可以继续留在高级调试模式下手动导入契约，但普通使用建议先从内置会话开始。" : "建议先加载一个工作会话，再进入仓库浏览、编辑器和同步工作台。")}</p>
+      <div class="detail-actions">
+        <button class="solid detail-inline-button" data-empty-command="load-sample-session" type="button">加载内置会话</button>
+        <button class="ghost detail-inline-button" data-empty-command="refresh-session" type="button">刷新本地会话</button>
+        <button class="ghost detail-inline-button" data-empty-command="open-settings" type="button">打开设置</button>
+      </div>
+    </div>
+  `;
   elements.summaryGrid.innerHTML = "";
   elements.cardsGrid.innerHTML = "";
   elements.activityCard.innerHTML = `
@@ -4768,6 +4779,33 @@ function renderEmptyDashboard(message) {
   `;
   renderExecutionResult(state.lastExecution);
   setSelectedAction(null);
+  for (const button of elements.panelCard.querySelectorAll("[data-empty-command]")) {
+    button.addEventListener("click", async () => {
+      const command = button.dataset.emptyCommand;
+      if (command === "load-sample-session") {
+        try {
+          await loadSampleAppSession();
+        } catch (error) {
+          renderEmptyDashboard(error instanceof Error ? error.message : String(error));
+        }
+        return;
+      }
+      if (command === "refresh-session") {
+        try {
+          await refreshFullAppSession();
+        } catch (error) {
+          state.lastBridgeError = normalizeBridgeError(error);
+          elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
+          renderBridgeError(state.lastBridgeError);
+        }
+        return;
+      }
+      if (command === "open-settings") {
+        state.activeNavView = "settings";
+        render();
+      }
+    });
+  }
 }
 
 function render() {
@@ -4780,7 +4818,7 @@ function render() {
   renderWorkspaceChrome();
 
   if (!state.syncCenter && !state.activityFeed) {
-    renderEmptyDashboard("请先加载样例会话，或手动粘贴同步 JSON。");
+    renderEmptyDashboard("当前还没有进入任何同步工作会话。");
     return;
   }
 
@@ -4802,11 +4840,32 @@ function render() {
     elements.panelCard.innerHTML = `
       <div class="empty-state">
         <p>
-          当前只加载了活动流。若要显示顶部面板、摘要和同步卡片，请继续导入
-          <code>sync-center</code> 或 <code>sync-shell-snapshot</code>。
+          当前只加载了活动流。若要继续查看同步总览、阻塞摘要和下一步动作，建议刷新一次完整会话。
         </p>
+        <div class="detail-actions">
+          <button class="solid detail-inline-button" data-activity-only-command="refresh-session" type="button">刷新完整会话</button>
+          <button class="ghost detail-inline-button" data-activity-only-command="open-settings" type="button">打开设置</button>
+        </div>
       </div>
     `;
+    for (const button of elements.panelCard.querySelectorAll("[data-activity-only-command]")) {
+      button.addEventListener("click", async () => {
+        if (button.dataset.activityOnlyCommand === "refresh-session") {
+          try {
+            await refreshFullAppSession();
+          } catch (error) {
+            state.lastBridgeError = normalizeBridgeError(error);
+            elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
+            renderBridgeError(state.lastBridgeError);
+          }
+          return;
+        }
+        if (button.dataset.activityOnlyCommand === "open-settings") {
+          state.activeNavView = "settings";
+          render();
+        }
+      });
+    }
     elements.summaryGrid.innerHTML = "";
     elements.cardsGrid.innerHTML = "";
     renderActivity(state.activityFeed);
