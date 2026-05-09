@@ -236,9 +236,13 @@ const state = {
   lastBridgeError: null,
   lastExecution: null,
   sourceLabel: "未加载",
+  searchQuery: "",
 };
 
 const elements = {
+  searchInput: document.getElementById("search-input"),
+  quickCaptureButton: document.getElementById("quick-capture-button"),
+  newNoteButton: document.getElementById("new-note-button"),
   payloadKind: document.getElementById("payload-kind"),
   payloadDetail: document.getElementById("payload-detail"),
   panelCard: document.getElementById("panel-card"),
@@ -294,6 +298,22 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeSearchQuery(value = "") {
+  return String(value).trim().toLocaleLowerCase("zh-CN");
+}
+
+function matchesSearchQuery(query, ...values) {
+  if (!query) {
+    return true;
+  }
+
+  return values.some((value) => String(value || "").toLocaleLowerCase("zh-CN").includes(query));
 }
 
 function detectPayloadKind(payload) {
@@ -732,9 +752,63 @@ function deriveWorkspaceSyncContext(note) {
   };
 }
 
+function buildFilteredWorkspaceSections(workspaceShell) {
+  const query = normalizeSearchQuery(state.searchQuery);
+  return workspaceShell.sections
+    .map((section) => {
+      const items = section.items.filter((item) => {
+        const note = workspaceShell.notes[item.id];
+        return matchesSearchQuery(
+          query,
+          section.label,
+          item.title,
+          item.path,
+          item.status,
+          note?.body,
+          note?.tags?.join(" "),
+        );
+      });
+
+      return {
+        ...section,
+        items,
+      };
+    })
+    .filter((section) => section.items.length > 0);
+}
+
+function getVisibleWorkspaceNoteIds(workspaceShell) {
+  const ids = [];
+  for (const section of buildFilteredWorkspaceSections(workspaceShell)) {
+    for (const item of section.items) {
+      ids.push(item.id);
+    }
+  }
+  return ids;
+}
+
+function syncSelectedWorkspaceNoteToSearch(workspaceShell) {
+  const visibleIds = getVisibleWorkspaceNoteIds(workspaceShell);
+  if (!visibleIds.length) {
+    return;
+  }
+  if (!visibleIds.includes(state.selectedWorkspaceNoteId)) {
+    state.selectedWorkspaceNoteId = visibleIds[0];
+  }
+}
+
 function getSelectedWorkspaceNote() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
-  return workspaceShell.notes[state.selectedWorkspaceNoteId] || workspaceShell.notes["desktop-bridge"];
+  const visibleIds = getVisibleWorkspaceNoteIds(workspaceShell);
+  if (normalizeSearchQuery(state.searchQuery) && !visibleIds.length) {
+    return null;
+  }
+
+  const selectedId = visibleIds.includes(state.selectedWorkspaceNoteId)
+    ? state.selectedWorkspaceNoteId
+    : visibleIds[0] || state.selectedWorkspaceNoteId;
+
+  return workspaceShell.notes[selectedId] || workspaceShell.notes["desktop-bridge"] || null;
 }
 
 function countWorkspaceNotes(workspaceShell) {
@@ -746,7 +820,18 @@ function countWorkspaceNotes(workspaceShell) {
 
 function renderWorkspaceTree() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
-  elements.workspaceTree.innerHTML = workspaceShell.sections
+  const filteredSections = buildFilteredWorkspaceSections(workspaceShell);
+
+  if (!filteredSections.length) {
+    elements.workspaceTree.innerHTML = `
+      <div class="empty-state">
+        <p>没有找到与“${escapeHtml(state.searchQuery)}”匹配的文档。</p>
+      </div>
+    `;
+    return;
+  }
+
+  elements.workspaceTree.innerHTML = filteredSections
     .map(
       (section) => `
         <section class="tree-section">
@@ -800,6 +885,7 @@ function renderWorkspaceTree() {
 function renderWorkspaceRail() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
   const note = getSelectedWorkspaceNote();
+  const visibleCount = getVisibleWorkspaceNoteIds(workspaceShell).length;
   const summary = state.syncCenter?.summary || null;
   const conflictCount = summary
     ? (summary.conflicts?.conflict_copies?.length || 0) + (summary.conflicts?.conflict_orphans?.length || 0)
@@ -815,13 +901,29 @@ function renderWorkspaceRail() {
         ? formatPayloadKindLabel("sync-activity")
         : "未加载";
 
+  if (!note) {
+    elements.workspaceRail.innerHTML = `
+      <div class="sidebar-card-header">
+        <div>
+          <p class="card-section-label">当前上下文</p>
+          <h2>工作区概览</h2>
+        </div>
+        <span class="mini-pill tone-warning">搜索中</span>
+      </div>
+      <div class="empty-state">
+        <p>当前搜索没有命中任何工作区文档。</p>
+      </div>
+    `;
+    return;
+  }
+
   elements.workspaceRail.innerHTML = `
     <div class="sidebar-card-header">
       <div>
         <p class="card-section-label">当前上下文</p>
         <h2>工作区概览</h2>
       </div>
-      <span class="mini-pill tone-info">${escapeHtml(countWorkspaceNotes(workspaceShell))} 篇</span>
+      <span class="mini-pill tone-info">${escapeHtml(visibleCount)} / ${escapeHtml(countWorkspaceNotes(workspaceShell))} 篇</span>
     </div>
     <div class="session-rail-grid">
       <article class="session-rail-item">
@@ -857,6 +959,14 @@ function renderWorkspaceRail() {
 
 function renderWorkspaceEditor() {
   const note = getSelectedWorkspaceNote();
+  if (!note) {
+    elements.workspaceEditor.innerHTML = `
+      <div class="empty-state">
+        <p>当前搜索没有命中任何文档，请调整关键词后再查看编辑区。</p>
+      </div>
+    `;
+    return;
+  }
   const syncContext = deriveWorkspaceSyncContext(note);
   elements.workspaceEditor.innerHTML = `
     <div class="editor-toolbar">
@@ -891,6 +1001,14 @@ function renderWorkspaceEditor() {
 
 function renderWorkspaceAiPanel() {
   const note = getSelectedWorkspaceNote();
+  if (!note) {
+    elements.workspaceAiPanel.innerHTML = `
+      <div class="empty-state">
+        <p>当前搜索没有命中任何文档，因此 AI 面板暂时没有上下文可展示。</p>
+      </div>
+    `;
+    return;
+  }
   const syncContext = deriveWorkspaceSyncContext(note);
   elements.workspaceAiPanel.innerHTML = `
     <div class="pane-heading">
@@ -954,6 +1072,7 @@ function renderWorkspaceAiPanel() {
 
 function renderWorkspaceChrome() {
   elements.workspaceStatus.textContent = `工作区契约来源：${state.workspaceSourceLabel}`;
+  syncSelectedWorkspaceNoteToSearch(state.workspaceShell || WORKSPACE_SAMPLE);
   renderWorkspaceTree();
   renderWorkspaceRail();
   renderWorkspaceEditor();
@@ -1034,17 +1153,22 @@ function renderSummary(syncCenter) {
 }
 
 function renderCards(syncCenter) {
-  if (!syncCenter.cards.length) {
+  const query = normalizeSearchQuery(state.searchQuery);
+  const visibleCards = syncCenter.cards.filter((card) =>
+    matchesSearchQuery(query, card.card_id, card.kind, card.title, card.body, card.actions?.map((action) => action.label).join(" ")),
+  );
+
+  if (!visibleCards.length) {
     elements.cardsGrid.innerHTML = `
       <div class="empty-state">
-        <p>当前载荷没有返回同步卡片。</p>
+        <p>${query ? `没有找到与“${escapeHtml(state.searchQuery)}”匹配的同步卡片。` : "当前载荷没有返回同步卡片。"}</p>
       </div>
     `;
     return;
   }
 
   elements.cardsGrid.innerHTML = "";
-  for (const card of syncCenter.cards) {
+  for (const card of visibleCards) {
     const article = document.createElement("article");
     article.className = "sync-card";
     article.innerHTML = `
@@ -1070,14 +1194,21 @@ function renderCards(syncCenter) {
 }
 
 function renderActivity(feed) {
-  const records = Array.isArray(feed?.records) ? feed.records : [];
+  const query = normalizeSearchQuery(state.searchQuery);
+  const records = Array.isArray(feed?.records)
+    ? feed.records.filter((record) =>
+        matchesSearchQuery(query, record.action_id, record.command, record.status, record.source, record.message),
+      )
+    : [];
 
   if (!records.length) {
     elements.activityCard.innerHTML = `
       <div class="activity-header">
         <div>
           <h2>最近活动</h2>
-          <p class="activity-empty">当前还没有加载任何同步活动记录。</p>
+          <p class="activity-empty">
+            ${query ? `没有找到与“${escapeHtml(state.searchQuery)}”匹配的同步活动。` : "当前还没有加载任何同步活动记录。"}
+          </p>
         </div>
       </div>
     `;
@@ -1387,6 +1518,110 @@ async function importWorkspaceFile(file) {
   const text = await file.text();
   applyWorkspaceShell(JSON.parse(text), `导入工作区文件：${file.name}`);
 }
+
+function ensureEditableWorkspaceShell() {
+  if (!state.workspaceShell) {
+    state.workspaceShell = cloneJson(WORKSPACE_SAMPLE);
+    state.workspaceSourceLabel = "浏览器本地草稿";
+  }
+  return state.workspaceShell;
+}
+
+function buildQuickCaptureTitle(now = new Date()) {
+  const timestamp = new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+    .format(now)
+    .replaceAll("/", "-")
+    .replaceAll(":", "-")
+    .replace(" ", "-");
+  return `快速记录 ${timestamp}`;
+}
+
+function createQuickCaptureNote() {
+  const workspaceShell = ensureEditableWorkspaceShell();
+  const draftId = `quick-capture-${Date.now()}`;
+  const title = buildQuickCaptureTitle();
+  const inboxPath = `Inbox/${title}.md`;
+  let inboxSection = workspaceShell.sections.find((section) => section.id === "inbox");
+
+  if (!inboxSection) {
+    inboxSection = {
+      id: "inbox",
+      label: "收件箱",
+      items: [],
+    };
+    workspaceShell.sections.unshift(inboxSection);
+  }
+
+  inboxSection.items.unshift({
+    id: draftId,
+    title,
+    path: inboxPath,
+    status: "本地草稿",
+  });
+  workspaceShell.notes[draftId] = {
+    title,
+    path: inboxPath,
+    statusTone: "info",
+    statusLabel: "本地草稿",
+    lastSaved: "刚刚创建",
+    tags: ["capture", "draft", "inbox"],
+    syncContext: {
+      watchActionIds: ["detect-local-changes", "submit-detected-commit"],
+      watchCardKinds: ["changes", "activity"],
+      watchBlockingReasons: ["requires_full_pull"],
+    },
+    body: `# ${title}
+
+## 记录要点
+- 在这里补充新的笔记内容。
+- 后续可把这条快速记录整理进正式知识页。
+
+## 下一步
+1. 补充上下文。
+2. 决定是否进入同步周期。`,
+    ai: {
+      queueDepth: 0,
+      warnings: 0,
+      relatedEntities: ["快速记录", "收件箱", "同步周期"],
+      suggestions: ["把零散记录整理成结构化笔记，再决定是否提交同步。"],
+      lint: [],
+    },
+  };
+
+  state.selectedWorkspaceNoteId = draftId;
+  state.workspaceSourceLabel = "浏览器本地草稿";
+  state.searchQuery = "";
+  elements.searchInput.value = "";
+  elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  elements.workspaceStatus.textContent = `已创建本地草稿：${title}`;
+  renderWorkspaceChrome();
+}
+
+elements.searchInput.addEventListener("input", (event) => {
+  state.searchQuery = event.target.value;
+  render();
+});
+
+elements.searchInput.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.target.value = "";
+    state.searchQuery = "";
+    render();
+  }
+});
+
+elements.quickCaptureButton.addEventListener("click", () => {
+  createQuickCaptureNote();
+});
+
+elements.newNoteButton.addEventListener("click", () => {
+  createQuickCaptureNote();
+});
 
 elements.loadSampleButton.addEventListener("click", async () => {
   try {
