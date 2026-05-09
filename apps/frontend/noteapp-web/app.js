@@ -849,6 +849,17 @@ function formatCardSourceLabel(cardId) {
   }[cardId] || cardId;
 }
 
+function formatSyncActionLabel(actionId, fallback = "") {
+  return {
+    pull: "执行 Pull",
+    "show-vault-summary": "查看仓库摘要",
+    "submit-detected-commit": "提交本地变更",
+    "detect-local-changes": "查看本地变更",
+    "sync-activity": "打开活动流",
+    "vault-summary": "查看仓库摘要",
+  }[actionId] || fallback || actionId;
+}
+
 function formatActionSourceLabel(source) {
   if (!source) {
     return "未知来源";
@@ -873,6 +884,16 @@ function formatActionReason(reason) {
     .split(",")
     .map((part) => formatBlockingReason(part.trim()))
     .join("，");
+}
+
+function formatActivityMessage(message) {
+  if (!message) {
+    return "";
+  }
+  if (message === "requires_full_pull") {
+    return "需要先完整拉取，再继续当前动作。";
+  }
+  return message;
 }
 
 function formatSessionSourceLabel(source) {
@@ -4741,18 +4762,20 @@ function renderCards(syncCenter) {
 
   elements.cardsGrid.innerHTML = "";
   for (const card of visibleCards) {
+    const availableActions = (card.actions || []).filter((action) => action.enabled !== false).length;
+    const blockedActions = (card.actions || []).filter((action) => action.enabled === false).length;
     const article = document.createElement("article");
     article.className = "sync-card";
     article.innerHTML = `
       <div class="card-title-row">
         <div>
-          <p class="card-meta">${escapeHtml(formatCardKindLabel(card.kind))} / ${escapeHtml(card.card_id)}</p>
+          <p class="card-meta">${escapeHtml(formatCardKindLabel(card.kind))} · ${escapeHtml(formatCardSourceLabel(card.card_id))}</p>
           <h3>${escapeHtml(card.title)}</h3>
         </div>
         <span class="level-pill tone-${resolveTone(card.level)}">${escapeHtml(formatLevelLabel(card.level))}</span>
       </div>
       <p class="card-body">${escapeHtml(card.body)}</p>
-      <p class="summary-kicker">徽标数：${escapeHtml(card.badge_count)}</p>
+      <p class="summary-kicker">${escapeHtml(`可执行动作 ${availableActions} 个${blockedActions ? ` · 暂不可执行 ${blockedActions} 个` : ""} · 提醒 ${card.badge_count} 项`)}</p>
       <div class="card-actions"></div>
     `;
 
@@ -4812,18 +4835,21 @@ function renderActivity(feed) {
 
   const timeline = elements.activityCard.querySelector(".timeline");
   for (const record of [...records].reverse()) {
+    const actionLabel = formatSyncActionLabel(record.action_id, record.command);
+    const sourceLabel = formatActionSourceLabel(record.source);
+    const activityMessage = formatActivityMessage(record.message);
     const item = document.createElement("article");
     item.className = "timeline-item";
     item.innerHTML = `
       <div class="timeline-row">
-        <span class="timeline-title">${escapeHtml(record.action_id)}</span>
+        <span class="timeline-title">${escapeHtml(actionLabel)}</span>
         <span class="timeline-time">${escapeHtml(formatDateTime(record.occurred_at_ms))}</span>
       </div>
       <div class="timeline-row">
-        <span class="mini-pill tone-${resolveTone(record.level)}">${escapeHtml(formatLevelLabel(record.level))}</span>
-        <span class="card-meta">${escapeHtml(record.command)} · 来源 ${escapeHtml(formatActionSourceLabel(record.source))}</span>
+        <span class="mini-pill tone-${resolveTone(record.level)}">${escapeHtml(formatStatusLabel(record.status))}</span>
+        <span class="card-meta">${escapeHtml(`${sourceLabel} · ${formatLevelLabel(record.level)}`)}</span>
       </div>
-      ${record.message ? `<p class="timeline-message">${escapeHtml(record.message)}</p>` : ""}
+      ${activityMessage ? `<p class="timeline-message">${escapeHtml(activityMessage)}</p>` : ""}
     `;
     timeline.appendChild(item);
   }
