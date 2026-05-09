@@ -203,6 +203,7 @@ const state = {
   activityFeed: null,
   snapshotMetadata: null,
   workspaceShell: null,
+  workspaceSourceLabel: "Not loaded",
   selectedWorkspaceNoteId: "desktop-bridge",
   selectedAction: null,
   bridgeStatus: null,
@@ -236,6 +237,11 @@ const elements = {
   executeSelectedButton: document.getElementById("execute-selected-button"),
   actionExecutionStatus: document.getElementById("action-execution-status"),
   actionChipTemplate: document.getElementById("action-chip-template"),
+  loadWorkspaceSampleButton: document.getElementById("load-workspace-sample-button"),
+  workspaceFileInput: document.getElementById("workspace-file-input"),
+  workspaceStatus: document.getElementById("workspace-status"),
+  workspaceInput: document.getElementById("workspace-input"),
+  applyWorkspaceInputButton: document.getElementById("apply-workspace-input-button"),
   workspaceTree: document.getElementById("workspace-tree"),
   workspaceEditor: document.getElementById("workspace-editor"),
   workspaceAiPanel: document.getElementById("workspace-ai-panel"),
@@ -294,6 +300,22 @@ function detectPayloadKind(payload) {
   throw new Error(
     "Unsupported payload shape. Expected sync-shell-snapshot, sync-center, or sync-activity JSON.",
   );
+}
+
+function validateWorkspaceShell(payload) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    Array.isArray(payload.sections) &&
+    payload.notes &&
+    typeof payload.notes === "object" &&
+    !Array.isArray(payload.notes)
+  ) {
+    return payload;
+  }
+
+  throw new Error("Unsupported workspace shell shape. Expected { sections: [], notes: {} }.");
 }
 
 function renderExecutionResult(execution) {
@@ -571,6 +593,7 @@ function renderWorkspaceAiPanel() {
 }
 
 function renderWorkspaceChrome() {
+  elements.workspaceStatus.textContent = `Workspace shell source: ${state.workspaceSourceLabel}`;
   renderWorkspaceTree();
   renderWorkspaceEditor();
   renderWorkspaceAiPanel();
@@ -854,12 +877,8 @@ async function loadWorkspaceShellFromPath(path, sourceLabel) {
     throw new Error(`Unable to load workspace shell ${path}: ${response.status}`);
   }
 
-  state.workspaceShell = await response.json();
-  if (!state.workspaceShell.notes[state.selectedWorkspaceNoteId]) {
-    state.selectedWorkspaceNoteId = Object.keys(state.workspaceShell.notes)[0] || "desktop-bridge";
-  }
-  renderWorkspaceChrome();
-  elements.actionExecutionStatus.textContent = `Workspace shell source: ${sourceLabel}.`;
+  const payload = await response.json();
+  applyWorkspaceShell(payload, sourceLabel);
 }
 
 function resolveInitialWorkspacePath() {
@@ -874,6 +893,18 @@ async function loadInitialWorkspaceShell() {
     return;
   }
   await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "bundled workspace shell sample");
+}
+
+function applyWorkspaceShell(payload, sourceLabel) {
+  const workspaceShell = validateWorkspaceShell(payload);
+  state.workspaceShell = workspaceShell;
+  state.workspaceSourceLabel = sourceLabel;
+  if (!workspaceShell.notes[state.selectedWorkspaceNoteId]) {
+    state.selectedWorkspaceNoteId = Object.keys(workspaceShell.notes)[0] || "desktop-bridge";
+  }
+  elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  renderWorkspaceChrome();
+  elements.actionExecutionStatus.textContent = `Workspace shell source: ${sourceLabel}.`;
 }
 
 async function refreshFromDesktop() {
@@ -936,6 +967,19 @@ async function importLocalFile(file) {
   applyPayload(JSON.parse(text), `Imported file: ${file.name}`);
 }
 
+function applyWorkspaceTextareaPayload() {
+  const raw = elements.workspaceInput.value.trim();
+  if (!raw) {
+    throw new Error("Paste a workspace shell JSON payload first.");
+  }
+  applyWorkspaceShell(JSON.parse(raw), "Workspace textarea JSON payload");
+}
+
+async function importWorkspaceFile(file) {
+  const text = await file.text();
+  applyWorkspaceShell(JSON.parse(text), `Imported workspace file: ${file.name}`);
+}
+
 elements.loadSampleButton.addEventListener("click", async () => {
   try {
     state.lastBridgeError = null;
@@ -953,6 +997,14 @@ elements.loadLiveButton.addEventListener("click", async () => {
     await loadLiveSnapshot();
   } catch (error) {
     renderEmptyDashboard(error instanceof Error ? error.message : String(error));
+  }
+});
+
+elements.loadWorkspaceSampleButton.addEventListener("click", async () => {
+  try {
+    await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "Bundled workspace shell sample");
+  } catch (error) {
+    elements.workspaceStatus.textContent = error instanceof Error ? error.message : String(error);
   }
 });
 
@@ -985,6 +1037,14 @@ elements.applyInputButton.addEventListener("click", () => {
   }
 });
 
+elements.applyWorkspaceInputButton.addEventListener("click", () => {
+  try {
+    applyWorkspaceTextareaPayload();
+  } catch (error) {
+    elements.workspaceStatus.textContent = error instanceof Error ? error.message : String(error);
+  }
+});
+
 elements.clearInputButton.addEventListener("click", () => {
   elements.payloadInput.value = "";
   state.syncCenter = null;
@@ -1007,6 +1067,21 @@ elements.fileInput.addEventListener("change", async (event) => {
     await importLocalFile(file);
   } catch (error) {
     renderEmptyDashboard(error instanceof Error ? error.message : String(error));
+  } finally {
+    event.target.value = "";
+  }
+});
+
+elements.workspaceFileInput.addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  try {
+    await importWorkspaceFile(file);
+  } catch (error) {
+    elements.workspaceStatus.textContent = error instanceof Error ? error.message : String(error);
   } finally {
     event.target.value = "";
   }
@@ -1042,6 +1117,8 @@ startBridgeStatusPolling({
 });
 loadInitialWorkspaceShell().catch(() => {
   state.workspaceShell = null;
+  state.workspaceSourceLabel = "Fallback inline sample";
+  elements.workspaceInput.value = JSON.stringify(WORKSPACE_SAMPLE, null, 2);
   renderWorkspaceChrome();
 });
 loadInitialPayload().catch((error) => {
