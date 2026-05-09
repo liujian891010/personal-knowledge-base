@@ -598,6 +598,14 @@ pre {
   align-items: center;
 }
 
+.editor-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
 .editor-meta-row {
   align-items: center;
 }
@@ -613,6 +621,35 @@ pre {
   white-space: pre-wrap;
   line-height: 1.7;
   color: #d9e2f2;
+}
+
+.editor-draft-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.editor-field {
+  display: grid;
+  gap: 8px;
+}
+
+.editor-title-input,
+.editor-body-input {
+  width: 100%;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-soft);
+  background: rgba(8, 12, 22, 0.72);
+  color: var(--ink);
+}
+
+.editor-title-input {
+  padding: 14px 16px;
+}
+
+.editor-body-input {
+  min-height: 340px;
+  padding: 16px;
+  resize: vertical;
 }
 
 .editor-sync-box,

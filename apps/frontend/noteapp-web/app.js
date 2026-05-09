@@ -240,6 +240,7 @@ const state = {
   activeNavView: "overview",
   appSession: null,
   sessionHistory: [],
+  editorDraft: null,
 };
 
 const elements = {
@@ -710,6 +711,7 @@ function formatSessionEventLabel(type) {
     quick_capture_created: "快速记录已创建",
     sync_payload_loaded: "同步载荷已更新",
     workspace_contract_loaded: "工作区契约已更新",
+    workspace_note_saved: "工作区文档已保存",
   }[type] || type;
 }
 
@@ -1371,6 +1373,17 @@ function syncSelectedWorkspaceNoteToSearch(workspaceShell) {
   }
 }
 
+function findWorkspaceItemById(workspaceShell, noteId) {
+  for (const section of workspaceShell.sections || []) {
+    for (const item of section.items || []) {
+      if (item.id === noteId) {
+        return item;
+      }
+    }
+  }
+  return null;
+}
+
 function getSelectedWorkspaceNote() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
   const visibleIds = getVisibleWorkspaceNoteIds(workspaceShell);
@@ -1383,6 +1396,17 @@ function getSelectedWorkspaceNote() {
     : visibleIds[0] || state.selectedWorkspaceNoteId;
 
   return workspaceShell.notes[selectedId] || workspaceShell.notes["desktop-bridge"] || null;
+}
+
+function getActiveEditorDraft() {
+  const note = getSelectedWorkspaceNote();
+  if (!note) {
+    return null;
+  }
+  if (state.editorDraft?.noteId === state.selectedWorkspaceNoteId) {
+    return state.editorDraft;
+  }
+  return null;
 }
 
 function countWorkspaceNotes(workspaceShell) {
@@ -1542,13 +1566,24 @@ function renderWorkspaceEditor() {
     return;
   }
   const syncContext = deriveWorkspaceSyncContext(note);
+  const editorDraft = getActiveEditorDraft();
   elements.workspaceEditor.innerHTML = `
     <div class="editor-toolbar">
       <div>
         <p class="card-meta">当前文档</p>
-        <h2 class="editor-title">${escapeHtml(note.title)}</h2>
+        <h2 class="editor-title">${escapeHtml(editorDraft ? editorDraft.title || note.title : note.title)}</h2>
       </div>
-      <span class="level-pill tone-${resolveTone(note.statusTone)}">${escapeHtml(note.statusLabel)}</span>
+      <div class="editor-toolbar-actions">
+        <span class="level-pill tone-${resolveTone(note.statusTone)}">${escapeHtml(note.statusLabel)}</span>
+        ${
+          editorDraft
+            ? `
+              <button class="ghost editor-action-button" data-editor-command="cancel" type="button">取消</button>
+              <button class="solid editor-action-button" data-editor-command="save" type="button">保存草稿</button>
+            `
+            : `<button class="ghost editor-action-button" data-editor-command="edit" type="button">编辑笔记</button>`
+        }
+      </div>
     </div>
     <div class="editor-meta-row">
       <span class="mini-pill tone-info">${escapeHtml(note.path)}</span>
@@ -1569,8 +1604,71 @@ function renderWorkspaceEditor() {
           .join("")}
       </div>
     </section>
-    <pre class="editor-body">${escapeHtml(note.body)}</pre>
+    ${
+      editorDraft
+        ? `
+          <section class="editor-draft-panel">
+            <label class="editor-field">
+              <span class="metric-label">标题</span>
+              <input
+                id="editor-title-input"
+                class="editor-title-input"
+                type="text"
+                value="${escapeHtml(editorDraft.title)}"
+                placeholder="输入文档标题"
+              />
+            </label>
+            <label class="editor-field">
+              <span class="metric-label">正文</span>
+              <textarea
+                id="editor-body-input"
+                class="editor-body-input"
+                spellcheck="false"
+                placeholder="输入正文内容"
+              >${escapeHtml(editorDraft.body)}</textarea>
+            </label>
+            <p class="summary-copy">当前保存到浏览器本地草稿工作区，不会直接写回桌面仓库。</p>
+          </section>
+        `
+        : `<pre class="editor-body">${escapeHtml(note.body)}</pre>`
+    }
   `;
+
+  const titleInput = elements.workspaceEditor.querySelector("#editor-title-input");
+  const bodyInput = elements.workspaceEditor.querySelector("#editor-body-input");
+  if (titleInput && bodyInput && editorDraft) {
+    titleInput.addEventListener("input", (event) => {
+      state.editorDraft = {
+        ...editorDraft,
+        title: event.target.value,
+        body: bodyInput.value,
+      };
+    });
+    bodyInput.addEventListener("input", (event) => {
+      state.editorDraft = {
+        ...state.editorDraft,
+        title: titleInput.value,
+        body: event.target.value,
+      };
+    });
+  }
+
+  for (const button of elements.workspaceEditor.querySelectorAll("[data-editor-command]")) {
+    button.addEventListener("click", () => {
+      const command = button.dataset.editorCommand;
+      if (command === "edit") {
+        startEditingSelectedNote();
+        return;
+      }
+      if (command === "cancel") {
+        cancelEditingSelectedNote();
+        return;
+      }
+      if (command === "save") {
+        saveEditingSelectedNote();
+      }
+    });
+  }
 }
 
 function renderWorkspaceAiPanel() {
@@ -1996,6 +2094,7 @@ function applyWorkspaceShell(payload, sourceLabel) {
   state.workspaceShell = workspaceShell;
   state.workspaceSourceLabel = sourceLabel;
   state.appSession = null;
+  state.editorDraft = null;
   if (!workspaceShell.notes[state.selectedWorkspaceNoteId]) {
     state.selectedWorkspaceNoteId = Object.keys(workspaceShell.notes)[0] || "desktop-bridge";
   }
@@ -2157,6 +2256,69 @@ function ensureEditableWorkspaceShell() {
   return state.workspaceShell;
 }
 
+function startEditingSelectedNote() {
+  const workspaceShell = ensureEditableWorkspaceShell();
+  const note = workspaceShell.notes[state.selectedWorkspaceNoteId];
+  if (!note) {
+    return;
+  }
+  state.editorDraft = {
+    noteId: state.selectedWorkspaceNoteId,
+    title: note.title,
+    body: note.body,
+  };
+  elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  renderWorkspaceChrome();
+}
+
+function cancelEditingSelectedNote() {
+  state.editorDraft = null;
+  renderWorkspaceChrome();
+}
+
+function saveEditingSelectedNote() {
+  if (!state.editorDraft) {
+    return;
+  }
+
+  const workspaceShell = ensureEditableWorkspaceShell();
+  const note = workspaceShell.notes[state.editorDraft.noteId];
+  const item = findWorkspaceItemById(workspaceShell, state.editorDraft.noteId);
+  if (!note) {
+    return;
+  }
+
+  const trimmedTitle = state.editorDraft.title.trim() || note.title;
+  const trimmedBody = state.editorDraft.body.trim();
+  note.title = trimmedTitle;
+  note.body = trimmedBody || note.body;
+  note.lastSaved = "刚刚保存";
+  note.statusTone = "info";
+  note.statusLabel = "本地草稿已更新";
+  if (!Array.isArray(note.tags)) {
+    note.tags = [];
+  }
+  if (!note.tags.includes("draft")) {
+    note.tags = [...note.tags, "draft"];
+  }
+
+  if (item) {
+    item.title = trimmedTitle;
+    item.status = "本地草稿已更新";
+  }
+
+  state.workspaceSourceLabel = "浏览器本地草稿";
+  state.editorDraft = null;
+  elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
+  elements.workspaceStatus.textContent = `已保存文档：${trimmedTitle}`;
+  pushSessionHistory({
+    type: "workspace_note_saved",
+    level: "success",
+    detail: `${trimmedTitle} · 本地草稿已更新`,
+  });
+  renderWorkspaceChrome();
+}
+
 function buildQuickCaptureTitle(now = new Date()) {
   const timestamp = new Intl.DateTimeFormat("zh-CN", {
     month: "2-digit",
@@ -2225,6 +2387,11 @@ function createQuickCaptureNote() {
 
   state.selectedWorkspaceNoteId = draftId;
   state.workspaceSourceLabel = "浏览器本地草稿";
+  state.editorDraft = {
+    noteId: draftId,
+    title,
+    body: workspaceShell.notes[draftId].body,
+  };
   resetSearchQuery();
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
   elements.workspaceStatus.textContent = `已创建本地草稿：${title}`;
@@ -2353,6 +2520,7 @@ elements.clearInputButton.addEventListener("click", () => {
   state.activityFeed = null;
   state.snapshotMetadata = null;
   state.appSession = null;
+  state.editorDraft = null;
   state.selectedAction = null;
   state.lastBridgeError = null;
   state.lastExecution = null;
