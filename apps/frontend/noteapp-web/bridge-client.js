@@ -144,11 +144,7 @@ export async function requestAiWikiCompile(payload = {}) {
   return readJsonResponse(response, "ai_wiki_compile_failed");
 }
 
-export function startBridgeStatusPolling({
-  intervalMs = 15000,
-  onStatus,
-  onError,
-} = {}) {
+function startStatusPolling(fetcher, fallbackCode, { intervalMs = 15000, onStatus, onError } = {}) {
   let isActive = true;
   let inFlight = false;
   let timerId = null;
@@ -159,10 +155,10 @@ export function startBridgeStatusPolling({
     }
     inFlight = true;
     try {
-      const status = await fetchBridgeStatus();
+      const status = await fetcher();
       onStatus?.(status);
     } catch (error) {
-      onError?.(normalizeBridgeErrorPayload(error, "bridge_status_failed"));
+      onError?.(normalizeBridgeErrorPayload(error, fallbackCode));
     } finally {
       inFlight = false;
     }
@@ -185,4 +181,12 @@ export function startBridgeStatusPolling({
     }
     document.removeEventListener("visibilitychange", handleVisibilityChange);
   };
+}
+
+export function startBridgeStatusPolling(options = {}) {
+  return startStatusPolling(fetchBridgeStatus, "bridge_status_failed", options);
+}
+
+export function startAiBoundaryStatusPolling(options = {}) {
+  return startStatusPolling(fetchAiBoundaryStatus, "ai_boundary_status_failed", options);
 }
