@@ -454,6 +454,24 @@ function parseAiCopilotState(raw) {
   };
 }
 
+function parsePersistedAction(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || typeof raw.action_id !== "string") {
+    return null;
+  }
+  return cloneJson(raw);
+}
+
+function parsePersistedExecution(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const action = raw.action;
+  if (!action || typeof action !== "object" || Array.isArray(action) || typeof action.action_id !== "string") {
+    return null;
+  }
+  return cloneJson(raw);
+}
+
 function readLocalWorkspaceSession() {
   try {
     const raw = window.localStorage.getItem(LOCAL_WORKSPACE_SESSION_STORAGE_KEY);
@@ -468,6 +486,15 @@ function readLocalWorkspaceSession() {
         typeof parsed.selectedWorkspaceNoteId === "string" ? parsed.selectedWorkspaceNoteId : "desktop-bridge",
       workspaceSourceLabel:
         typeof parsed.workspaceSourceLabel === "string" ? parsed.workspaceSourceLabel : "浏览器本地草稿",
+      activeNavView:
+        typeof parsed.activeNavView === "string" && ["overview", "graph", "repository", "conflicts", "settings"].includes(parsed.activeNavView)
+          ? parsed.activeNavView
+          : "overview",
+      searchQuery: typeof parsed.searchQuery === "string" ? parsed.searchQuery : "",
+      selectedAction: parsePersistedAction(parsed.selectedAction),
+      selectedActionSource: typeof parsed.selectedActionSource === "string" ? parsed.selectedActionSource : null,
+      lastExecution: parsePersistedExecution(parsed.lastExecution),
+      lastExecutionAtMs: typeof parsed.lastExecutionAtMs === "number" ? parsed.lastExecutionAtMs : null,
       aiCopilot: parseAiCopilotState(parsed.aiCopilot),
       savedAtMs: typeof parsed.savedAtMs === "number" ? parsed.savedAtMs : Date.now(),
     };
@@ -485,6 +512,10 @@ function summarizeLocalWorkspaceSession() {
     ...session,
     noteCount: Object.keys(session.workspaceShell.notes || {}).length,
     sectionCount: Array.isArray(session.workspaceShell.sections) ? session.workspaceShell.sections.length : 0,
+    activeNavView: session.activeNavView,
+    searchQuery: session.searchQuery,
+    selectedActionId: session.selectedAction?.action_id || null,
+    lastExecutionActionId: session.lastExecution?.action?.action_id || null,
     aiQuestion: session.aiCopilot?.lastAnswer?.question || session.aiCopilot?.question || "",
     aiHeadline: session.aiCopilot?.lastAnswer?.headline || "",
     aiGeneratedAtMs: session.aiCopilot?.lastAnswer?.generatedAtMs || null,
@@ -512,6 +543,12 @@ function persistLocalWorkspaceSession() {
         workspaceShell: state.workspaceShell,
         selectedWorkspaceNoteId: state.selectedWorkspaceNoteId,
         workspaceSourceLabel: state.workspaceSourceLabel,
+        activeNavView: state.activeNavView,
+        searchQuery: state.searchQuery,
+        selectedAction: state.selectedAction,
+        selectedActionSource: state.selectedActionSource,
+        lastExecution: state.lastExecution,
+        lastExecutionAtMs: state.lastExecutionAtMs,
         aiCopilot: state.aiCopilot,
         savedAtMs: Date.now(),
       }),
@@ -529,6 +566,13 @@ function restoreLocalWorkspaceSession(options = {}) {
   }
 
   state.selectedWorkspaceNoteId = session.selectedWorkspaceNoteId;
+  state.activeNavView = session.activeNavView || "overview";
+  state.searchQuery = session.searchQuery || "";
+  state.selectedAction = session.selectedAction || null;
+  state.selectedActionSource = session.selectedAction ? session.selectedActionSource || "本机工作区续接" : null;
+  state.lastExecution = session.lastExecution || null;
+  state.lastExecutionAtMs = session.lastExecutionAtMs || null;
+  elements.searchInput.value = state.searchQuery;
   state.aiCopilot = parseAiCopilotState(session.aiCopilot);
   applyWorkspaceShell(session.workspaceShell, session.workspaceSourceLabel);
 
@@ -1888,6 +1932,11 @@ function renderViewDetailGrid() {
                       <span>${escapeHtml(`${localWorkspaceSession.sectionCount} 个分区 · ${localWorkspaceSession.noteCount} 篇文档`)}</span>
                       <span>${escapeHtml(`最后保存于 ${formatDateTime(localWorkspaceSession.savedAtMs)}`)}</span>
                       ${
+                        localWorkspaceSession.searchQuery
+                          ? `<span>${escapeHtml(`上次搜索：${localWorkspaceSession.searchQuery}`)}</span>`
+                          : ""
+                      }
+                      ${
                         localWorkspaceSession.aiHeadline
                           ? `<span>${escapeHtml(`最近 AI 结论：${localWorkspaceSession.aiHeadline}`)}</span>`
                           : ""
@@ -1895,6 +1944,7 @@ function renderViewDetailGrid() {
                     </div>
                     <div class="overview-row-meta">
                       <span class="mini-pill tone-success">可自动恢复</span>
+                      <span class="mini-pill tone-info">${escapeHtml(formatNavViewLabel(localWorkspaceSession.activeNavView || "overview"))}</span>
                       ${
                         localWorkspaceSession.aiGeneratedAtMs
                           ? `<span class="mini-pill tone-info">${escapeHtml(`AI ${formatDateTime(localWorkspaceSession.aiGeneratedAtMs)}`)}</span>`
@@ -2863,12 +2913,42 @@ function renderViewDetailGrid() {
             <strong>${escapeHtml(settings.localWorkspaceSession?.workspaceShell?.notes?.[settings.localWorkspaceSession?.selectedWorkspaceNoteId]?.title || "无")}</strong>
           </div>
           ${
+            settings.localWorkspaceSession?.activeNavView
+              ? `
+                <div class="detail-row">
+                  <span>上次停留</span>
+                  <strong>${escapeHtml(formatNavViewLabel(settings.localWorkspaceSession.activeNavView))}</strong>
+                </div>
+              `
+              : ""
+          }
+          ${
+            settings.localWorkspaceSession?.selectedActionId
+              ? `
+                <div class="detail-row">
+                  <span>已选动作</span>
+                  <strong>${escapeHtml(settings.localWorkspaceSession.selectedActionId)}</strong>
+                </div>
+              `
+              : ""
+          }
+          ${
             settings.localWorkspaceSession?.aiQuestion
               ? `
                 <div class="detail-row detail-row-block">
                   <strong>最近 AI 问答</strong>
                   <span>${escapeHtml(settings.localWorkspaceSession.aiQuestion)}</span>
                   ${settings.localWorkspaceSession.aiHeadline ? `<span>${escapeHtml(settings.localWorkspaceSession.aiHeadline)}</span>` : ""}
+                </div>
+              `
+              : ""
+          }
+          ${
+            settings.localWorkspaceSession?.searchQuery
+              ? `
+                <div class="detail-row">
+                  <span>上次搜索</span>
+                  <strong>${escapeHtml(settings.localWorkspaceSession.searchQuery)}</strong>
                 </div>
               `
               : ""
@@ -4626,6 +4706,12 @@ function renderWorkspaceRail() {
               <span class="session-rail-title">本机工作区会话</span>
               <strong>${escapeHtml(`已自动保存 · ${localWorkspaceSession.noteCount} 篇文档`)}</strong>
               <p class="session-rail-copy">${escapeHtml(`最后保存于 ${formatDateTime(localWorkspaceSession.savedAtMs)}，刷新页面后会优先恢复这份本机工作区。`)}</p>
+              <p class="session-rail-copy">${escapeHtml(`上次停留在 ${formatNavViewLabel(localWorkspaceSession.activeNavView || "overview")} · ${localWorkspaceSession.workspaceShell?.notes?.[localWorkspaceSession.selectedWorkspaceNoteId]?.title || "未命名文档"}`)}</p>
+              ${
+                localWorkspaceSession.selectedActionId
+                  ? `<p class="session-rail-copy">${escapeHtml(`已选动作：${localWorkspaceSession.selectedActionId}`)}</p>`
+                  : ""
+              }
               ${
                 localWorkspaceSession.aiHeadline
                   ? `<p class="session-rail-copy">${escapeHtml(`最近 AI 结论：${localWorkspaceSession.aiHeadline}`)}</p>`
@@ -5483,6 +5569,7 @@ function renderWorkspaceAiPanel() {
 
 function renderWorkspaceChrome() {
   elements.workspaceStatus.textContent = `当前工作区：${formatWorkspaceSourceLabel(state.workspaceSourceLabel)}`;
+  persistLocalWorkspaceSession();
   syncSelectedWorkspaceNoteToSearch(state.workspaceShell || WORKSPACE_SAMPLE);
   renderWorkspaceTree();
   renderWorkspaceRail();
