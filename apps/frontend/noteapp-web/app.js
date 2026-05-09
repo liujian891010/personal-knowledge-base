@@ -1784,7 +1784,9 @@ function renderViewDetailGrid() {
       .slice(0, 4);
     const recoveryDrafts = state.recoveryDrafts.slice(0, 4);
     const recentNotes = notes.slice(0, 4);
-    const aiWikiNotes = notes.filter((entry) => entry.sectionId === "ai-wiki").slice(0, 4);
+    const aiWikiNotes = notes.filter((entry) => entry.sectionId === "ai-wiki");
+    const aiWikiReviewNotes = aiWikiNotes.filter((entry) => !entry.note.tags?.includes("reviewed")).slice(0, 3);
+    const aiWikiReviewedNotes = aiWikiNotes.filter((entry) => entry.note.tags?.includes("reviewed")).slice(0, 3);
     const actionableDraft = draftNotes.find((entry) => entry.note.statusLabel?.includes("更新")) || draftNotes[0] || null;
     const recommendedDraftAction = actionableDraft ? findRecommendedSyncActionForNote(actionableDraft.note) : null;
     const summary = state.syncCenter?.summary || null;
@@ -2028,25 +2030,44 @@ function renderViewDetailGrid() {
       </article>
       <article class="view-detail-card">
         <p class="card-section-label">AI 知识页</p>
-        <h3>最近编译结果</h3>
+        <h3>校对队列</h3>
         <div class="view-stack">
           ${
-            aiWikiNotes.length
-              ? aiWikiNotes
+            aiWikiReviewNotes.length
+              ? aiWikiReviewNotes
                   .map((entry) =>
                     buildOverviewNoteRow(entry, {
                       summary: entry.note.ai?.sourceNoteIds?.length
-                        ? `来源 ${entry.note.ai.sourceNoteIds.length} 篇文档，可继续人工校对、补结构或纳入下一次同步流程。`
-                        : "可继续人工校对、补结构，或纳入下一次同步流程。",
+                        ? `待校对，已汇总 ${entry.note.ai.sourceNoteIds.length} 篇来源文档，建议先核对结构和事实。`
+                        : "待校对，建议先核对结构、摘要和关键实体。",
                       pills: [entry.note.statusLabel || entry.status, entry.note.ai?.sourceScopeLabel || null, entry.note.lastSaved || null],
                       buttons: [
                         `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
                         `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">继续编辑</button>`,
+                        `<button class="ghost detail-inline-button" data-note-review-ai-wiki="${escapeHtml(entry.id)}" type="button">标记已校对</button>`,
                       ],
                     }),
                   )
                   .join("")
-              : '<div class="empty-state"><p>当前还没有生成知识页。可在右侧 AI 面板里直接把当前作用范围编译到 `.ai/wiki`。</p></div>'
+              : '<div class="empty-state"><p>当前没有待校对的 AI 知识页，可先在右侧 AI 面板生成新的 `.ai/wiki`，或查看下方已校对队列。</p></div>'
+          }
+        </div>
+        <div class="view-stack">
+          ${
+            aiWikiReviewedNotes.length
+              ? aiWikiReviewedNotes
+                  .map((entry) =>
+                    buildOverviewNoteRow(entry, {
+                      summary: "已完成一轮人工校对；如果继续修改正文，保存后会重新回到待校对状态。",
+                      pills: [entry.note.statusLabel || entry.status, entry.note.ai?.sourceScopeLabel || null, entry.note.lastSaved || null],
+                      buttons: [
+                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                        `<button class="ghost detail-inline-button" data-note-reopen-ai-wiki="${escapeHtml(entry.id)}" type="button">退回整理</button>`,
+                      ],
+                    }),
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前还没有完成校对的 AI 知识页。</p></div>'
           }
         </div>
         <div class="detail-actions">
@@ -2148,6 +2169,16 @@ function renderViewDetailGrid() {
     for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-execute-action]")) {
       button.addEventListener("click", async () => {
         await executeRecommendedSyncActionForNote(button.dataset.noteExecuteAction || state.selectedWorkspaceNoteId);
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-review-ai-wiki]")) {
+      button.addEventListener("click", () => {
+        updateAiWikiReviewState(button.dataset.noteReviewAiWiki || state.selectedWorkspaceNoteId, true);
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-reopen-ai-wiki]")) {
+      button.addEventListener("click", () => {
+        updateAiWikiReviewState(button.dataset.noteReopenAiWiki || state.selectedWorkspaceNoteId, false);
       });
     }
     for (const button of elements.viewDetailGrid.querySelectorAll("[data-recovery-restore]")) {
@@ -5465,6 +5496,9 @@ function renderWorkspaceAiPanel() {
     state.aiCompile.lastCompiledNoteId && getCurrentWorkspaceShell().notes[state.aiCompile.lastCompiledNoteId]
       ? getCurrentWorkspaceShell().notes[state.aiCompile.lastCompiledNoteId]
       : null;
+  const isAiWikiCurrentNote = isAiWikiNote(note.id);
+  const aiWikiSourceCount = Array.isArray(note.ai?.sourceNoteIds) ? note.ai.sourceNoteIds.length : 0;
+  const aiWikiReviewed = note.tags?.includes("reviewed");
   const aiCommands = [
     {
       id: "start-edit",
@@ -5590,6 +5624,42 @@ function renderWorkspaceAiPanel() {
           : '<p class="ai-copy">生成后会自动落到 `.ai/wiki` 分区，并直接进入编辑状态。</p>'
       }
     </section>
+    ${
+      isAiWikiCurrentNote
+        ? `
+          <section class="ai-sync-box">
+            <h3>知识页校对</h3>
+            <div class="ai-draft-grid">
+              <div class="ai-draft-item">
+                <span class="metric-label">当前状态</span>
+                <strong>${escapeHtml(note.statusLabel || (aiWikiReviewed ? "AI 知识页已校对" : "AI 知识页待校对"))}</strong>
+              </div>
+              <div class="ai-draft-item">
+                <span class="metric-label">来源文档</span>
+                <strong>${escapeHtml(aiWikiSourceCount)}</strong>
+              </div>
+              <div class="ai-draft-item">
+                <span class="metric-label">来源范围</span>
+                <strong>${escapeHtml(note.ai?.sourceScopeLabel || "当前知识页")}</strong>
+              </div>
+            </div>
+            <p class="ai-copy">${escapeHtml(aiWikiReviewed ? "这篇知识页已经完成一轮人工校对，可继续沉淀到知识库；如果继续修改正文，保存后会自动退回待校对状态。" : "这篇知识页仍处于待校对状态，建议优先核对事实、结构和关键实体后再继续沉淀。")}</p>
+            <div class="detail-actions ai-inline-actions">
+              ${
+                aiWikiReviewed
+                  ? '<button class="ghost detail-inline-button" data-ai-command="reopen-ai-wiki" type="button">退回继续整理</button>'
+                  : '<button class="solid detail-inline-button" data-ai-command="review-ai-wiki" type="button">标记已校对</button>'
+              }
+              ${
+                aiSourceNotes.length
+                  ? `<button class="ghost detail-inline-button" data-ai-source-note="${escapeHtml(aiSourceNotes[0].id)}" type="button">打开首个来源文档</button>`
+                  : ""
+              }
+            </div>
+          </section>
+        `
+        : ""
+    }
     <section class="ai-brief-card">
       <p class="card-section-label">AI 速览</p>
       <h3>${escapeHtml(aiBriefing.headline)}</h3>
@@ -5917,6 +5987,14 @@ function renderWorkspaceAiPanel() {
       }
       if (command === "compile-to-ai-wiki") {
         compileCurrentScopeToAiWiki();
+        return;
+      }
+      if (command === "review-ai-wiki") {
+        updateAiWikiReviewState(state.selectedWorkspaceNoteId, true);
+        return;
+      }
+      if (command === "reopen-ai-wiki") {
+        updateAiWikiReviewState(state.selectedWorkspaceNoteId, false);
         return;
       }
       if (command === "create-followup") {
