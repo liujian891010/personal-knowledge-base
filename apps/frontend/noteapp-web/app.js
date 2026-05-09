@@ -1453,6 +1453,7 @@ function buildRepositorySnapshot() {
   const riskEntries = visibleEntries.filter(
     (entry) => entry.note.statusTone === "warning" || entry.note.statusTone === "danger",
   );
+  const aiWikiEntries = visibleEntries.filter((entry) => entry.sectionId === "ai-wiki");
   const sectionCards = (workspaceShell.sections || []).map((section) => {
     const sectionEntries = allEntries.filter((entry) => entry.sectionId === section.id);
     const sectionVisibleEntries = visibleEntries.filter((entry) => entry.sectionId === section.id);
@@ -1473,6 +1474,7 @@ function buildRepositorySnapshot() {
     visibleEntries,
     draftEntries,
     riskEntries,
+    aiWikiEntries,
     sectionCards,
   };
 }
@@ -1775,6 +1777,7 @@ function renderViewDetailGrid() {
       .slice(0, 4);
     const recoveryDrafts = state.recoveryDrafts.slice(0, 4);
     const recentNotes = notes.slice(0, 4);
+    const aiWikiNotes = notes.filter((entry) => entry.sectionId === "ai-wiki").slice(0, 4);
     const actionableDraft = draftNotes.find((entry) => entry.note.statusLabel?.includes("更新")) || draftNotes[0] || null;
     const recommendedDraftAction = actionableDraft ? findRecommendedSyncActionForNote(actionableDraft.note) : null;
     const summary = state.syncCenter?.summary || null;
@@ -2014,6 +2017,36 @@ function renderViewDetailGrid() {
                   .join("")
               : '<div class="empty-state"><p>当前还没有可展示的最近编辑文档。</p></div>'
           }
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">AI 知识页</p>
+        <h3>最近编译结果</h3>
+        <div class="view-stack">
+          ${
+            aiWikiNotes.length
+              ? aiWikiNotes
+                  .map((entry) =>
+                    buildOverviewNoteRow(entry, {
+                      summary: "可继续人工校对、补结构，或纳入下一次同步流程。",
+                      pills: [entry.note.statusLabel || entry.status, entry.note.lastSaved || null],
+                      buttons: [
+                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                        `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">继续编辑</button>`,
+                      ],
+                    }),
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前还没有生成知识页。可在右侧 AI 面板里直接把当前作用范围编译到 `.ai/wiki`。</p></div>'
+          }
+        </div>
+        <div class="detail-actions">
+          ${
+            aiWikiNotes[0]
+              ? `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(aiWikiNotes[0].id)}" type="button">打开最新知识页</button>`
+              : ""
+          }
+          <button class="ghost detail-inline-button" data-overview-nav="repository" type="button">打开仓库浏览</button>
         </div>
       </article>
       <article class="view-detail-card">
@@ -2320,6 +2353,29 @@ function renderViewDetailGrid() {
                   )
                   .join("")
               : '<div class="empty-state"><p>当前没有挂起的草稿队列，可以继续整理仓库内容。</p></div>'
+          }
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">AI 知识页</p>
+        <h3>待校对队列</h3>
+        <div class="view-stack">
+          ${
+            repository.aiWikiEntries.length
+              ? repository.aiWikiEntries
+                  .slice(0, 4)
+                  .map((entry) =>
+                    buildOverviewNoteRow(entry, {
+                      summary: "建议先核对结构、来源文档和关键实体，再决定是否纳入正式同步。",
+                      pills: [entry.note.statusLabel || entry.status, entry.note.lastSaved || null],
+                      buttons: [
+                        `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                        `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">编辑</button>`,
+                      ],
+                    }),
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前可见范围里没有 AI 知识页，可先在右侧 AI 面板中生成。</p></div>'
           }
         </div>
       </article>
