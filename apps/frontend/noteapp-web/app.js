@@ -2323,6 +2323,25 @@ function collectWorkspaceNotes() {
   return entries;
 }
 
+function summarizeSectionActivity(section, workspaceShell) {
+  let draftCount = 0;
+  let riskCount = 0;
+  for (const item of section.items || []) {
+    const note = workspaceShell.notes?.[item.id];
+    const noteDraft = getEditorDraftByNoteId(item.id);
+    if (noteDraft && note && isEditorDraftDirty(note, noteDraft)) {
+      draftCount += 1;
+    }
+    if (note?.statusTone === "warning" || note?.statusTone === "danger") {
+      riskCount += 1;
+    }
+  }
+  return {
+    draftCount,
+    riskCount,
+  };
+}
+
 function buildOverviewNoteRow(entry, options = {}) {
   const pills = (options.pills || []).filter(Boolean);
   const buttons = (options.buttons || []).filter(Boolean);
@@ -2353,6 +2372,10 @@ function buildOverviewNoteRow(entry, options = {}) {
 
 function getDirtyEditorDraft(excludedNoteId = null) {
   return collectDirtyEditorDrafts().find((draft) => draft.noteId !== excludedNoteId) || null;
+}
+
+function getSelectedSectionId(workspaceShell) {
+  return findWorkspaceSectionByNoteId(workspaceShell, state.selectedWorkspaceNoteId)?.id || null;
 }
 
 function findRecommendedSyncActionForNote(note) {
@@ -2496,6 +2519,7 @@ function countWorkspaceNotes(workspaceShell) {
 function renderWorkspaceTree() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
   const filteredSections = buildFilteredWorkspaceSections(workspaceShell);
+  const selectedSectionId = getSelectedSectionId(workspaceShell);
 
   if (!filteredSections.length) {
     elements.workspaceTree.innerHTML = `
@@ -2508,13 +2532,32 @@ function renderWorkspaceTree() {
 
   elements.workspaceTree.innerHTML = filteredSections
     .map(
-      (section) => `
-        <section class="tree-section">
-          <h3>${escapeHtml(section.label)}</h3>
-          <div class="tree-list">
-            ${section.items
-              .map(
-                (item) => {
+      (section) => {
+        const stats = summarizeSectionActivity(section, workspaceShell);
+        return `
+          <section class="tree-section ${section.id === selectedSectionId ? "is-active" : ""}">
+            <div class="tree-section-header">
+              <div>
+                <h3>${escapeHtml(section.label)}</h3>
+                <p class="tree-section-summary">${escapeHtml(`当前可见 ${section.items.length} 篇文档${stats.draftCount ? ` · ${stats.draftCount} 篇有未保存草稿` : ""}`)}</p>
+              </div>
+              <div class="tree-section-meta">
+                <span class="mini-pill tone-info">${escapeHtml(section.items.length)} 篇</span>
+                ${
+                  stats.draftCount
+                    ? `<span class="mini-pill tone-warning">${escapeHtml(stats.draftCount)} 草稿</span>`
+                    : ""
+                }
+                ${
+                  stats.riskCount
+                    ? `<span class="mini-pill tone-danger">${escapeHtml(stats.riskCount)} 风险</span>`
+                    : ""
+                }
+              </div>
+            </div>
+            <div class="tree-list">
+              ${section.items
+                .map((item) => {
                   const noteDraft = getEditorDraftByNoteId(item.id);
                   const note = workspaceShell.notes[item.id];
                   const draftLabel = noteDraft
@@ -2528,19 +2571,25 @@ function renderWorkspaceTree() {
                       data-note-id="${escapeHtml(item.id)}"
                       type="button"
                     >
-                      <span class="tree-node-title">${escapeHtml(item.title)}</span>
+                      <div class="tree-node-main">
+                        <span class="tree-node-title">${escapeHtml(item.title)}</span>
+                        <span class="mini-pill tone-${resolveTone(note?.statusTone || "info")}">${escapeHtml(item.status)}</span>
+                      </div>
                       <span class="tree-node-path">${escapeHtml(item.path)}</span>
-                      <span class="tree-node-path">${escapeHtml(item.status)}</span>
-                      ${draftLabel ? `<span class="tree-node-path tone-warning-inline">${escapeHtml(draftLabel)}</span>` : ""}
+                      ${
+                        draftLabel
+                          ? `<span class="tree-node-path tone-warning-inline">${escapeHtml(draftLabel)}</span>`
+                          : ""
+                      }
                       <span class="tree-node-signals" data-signal-host="${escapeHtml(item.id)}"></span>
                     </button>
                   `;
-                },
-              )
-              .join("")}
-          </div>
-        </section>
-      `,
+                })
+                .join("")}
+            </div>
+          </section>
+        `;
+      },
     )
     .join("");
 
@@ -2590,6 +2639,9 @@ function renderWorkspaceRail() {
       : state.activityFeed
         ? formatPayloadKindLabel("sync-activity")
         : "未加载";
+  const noteBody = editorDraft ? editorDraft.body : note?.body || "";
+  const noteSummary = summarizeRichText(noteBody, 96);
+  const readingMinutes = estimateReadingMinutes(noteBody);
 
   if (!note) {
     elements.workspaceRail.innerHTML = `
@@ -2616,10 +2668,20 @@ function renderWorkspaceRail() {
       <span class="mini-pill tone-info">${escapeHtml(visibleCount)} / ${escapeHtml(countWorkspaceNotes(workspaceShell))} 篇</span>
     </div>
     <div class="session-rail-grid">
-      <article class="session-rail-item">
-        <span class="session-rail-title">当前文档</span>
+      <article class="session-rail-item rail-highlight-card">
+        <span class="session-rail-title">今日焦点</span>
         <strong>${escapeHtml(note.title)}</strong>
-        <p class="session-rail-copy">${escapeHtml(note.path)}</p>
+        <p class="session-rail-copy">${escapeHtml(noteSummary)}</p>
+        <div class="rail-metric-grid">
+          <div class="rail-metric">
+            <span class="metric-label">路径</span>
+            <strong>${escapeHtml(note.path)}</strong>
+          </div>
+          <div class="rail-metric">
+            <span class="metric-label">阅读</span>
+            <strong>${escapeHtml(`${readingMinutes} 分钟`)}</strong>
+          </div>
+        </div>
         <div class="session-rail-pills">
           <span class="mini-pill tone-${resolveTone(note.statusTone)}">${escapeHtml(note.statusLabel)}</span>
           <span class="mini-pill tone-info">${escapeHtml(note.lastSaved)}</span>
@@ -2629,48 +2691,60 @@ function renderWorkspaceRail() {
               : ""
           }
         </div>
+        <div class="detail-actions rail-action-row">
+          <button class="solid detail-inline-button" data-rail-command="edit-current" type="button">${editorDraft ? "继续编辑" : "开始编辑"}</button>
+          <button class="ghost detail-inline-button" data-rail-nav="repository" type="button">仓库浏览</button>
+        </div>
       </article>
       <article class="session-rail-item">
-        <span class="session-rail-title">会话来源</span>
-        <strong>${escapeHtml(syncKind)}</strong>
-        <p class="session-rail-copy">${escapeHtml(state.sourceLabel)}</p>
-        <p class="session-rail-copy">工作区：${escapeHtml(state.workspaceSourceLabel)}</p>
+        <span class="session-rail-title">工作区健康</span>
+        <strong>${escapeHtml(blockingReasons.length ? "需要继续处理" : "当前可继续")}</strong>
+        <div class="rail-metric-grid">
+          <div class="rail-metric">
+            <span class="metric-label">会话来源</span>
+            <strong>${escapeHtml(syncKind)}</strong>
+          </div>
+          <div class="rail-metric">
+            <span class="metric-label">冲突工件</span>
+            <strong>${escapeHtml(conflictCount)}</strong>
+          </div>
+          <div class="rail-metric">
+            <span class="metric-label">本地变更</span>
+            <strong>${escapeHtml(summary?.changes?.change_count ?? 0)}</strong>
+          </div>
+        </div>
+        <p class="session-rail-copy">${escapeHtml(blockingReasons.length ? blockingReasons.join("，") : "当前没有提交阻塞项，可继续整理内容或进入下一步同步。")}</p>
+        <div class="detail-actions rail-action-row">
+          <button class="ghost detail-inline-button" data-rail-nav="conflicts" type="button">查看冲突处理</button>
+        </div>
       </article>
       <article class="session-rail-item">
-        <span class="session-rail-title">同步摘要</span>
-        <strong>${escapeHtml(summary?.changes?.change_count ?? 0)} 项待处理</strong>
-        <p class="session-rail-copy">冲突工件 ${escapeHtml(conflictCount)}</p>
-        <p class="session-rail-copy">
+        <span class="session-rail-title">草稿与恢复</span>
+        <strong>${escapeHtml(dirtyDrafts.length ? `${dirtyDrafts.length} 篇未保存草稿` : "当前草稿稳定")}</strong>
+        <div class="rail-metric-grid">
+          <div class="rail-metric">
+            <span class="metric-label">恢复队列</span>
+            <strong>${escapeHtml(state.recoveryDrafts.length)}</strong>
+          </div>
+          <div class="rail-metric">
+            <span class="metric-label">工作区来源</span>
+            <strong>${escapeHtml(state.workspaceSourceLabel)}</strong>
+          </div>
+        </div>
+        <p class="session-rail-copy">${escapeHtml(dirtyDrafts.length ? dirtyDrafts.map((draft) => draft.title).join(" · ") : "当前没有挂起的未保存修改。")}</p>
+        ${
+          draftRecoveryStatus
+            ? `<p class="session-rail-copy">${escapeHtml(`${draftRecoveryStatus.label} · ${draftRecoveryStatus.detail}`)}</p>`
+            : ""
+        }
+        <div class="detail-actions rail-action-row">
           ${
-            blockingReasons.length
-              ? escapeHtml(blockingReasons.join("，"))
-              : "当前无提交阻塞项"
+            state.recoveryDrafts.length
+              ? `<button class="ghost detail-inline-button" data-rail-command="restore-recovery" type="button">恢复全部草稿</button>`
+              : ""
           }
-        </p>
+        </div>
       </article>
-      ${
-        draftInsight || dirtyDrafts.length
-          ? `
-            <article class="session-rail-item">
-              <span class="session-rail-title">草稿队列</span>
-              <strong>${dirtyDrafts.length ? `${dirtyDrafts.length} 篇未保存` : "当前文档编辑中"}</strong>
-              <p class="session-rail-copy">
-                ${
-                  draftInsight
-                    ? escapeHtml(`当前文档 ${draftInsight.dirty ? "待保存修改" : "草稿已对齐"} · 字数 ${draftInsight.draftChars} · 行数 ${draftInsight.lines}`)
-                    : "当前文档暂无编辑草稿。"
-                }
-              </p>
-              <p class="session-rail-copy">${escapeHtml(dirtyDrafts.length ? dirtyDrafts.map((draft) => draft.title).join(" · ") : "其余文档当前没有挂起的未保存修改。")}</p>
-              ${
-                draftRecoveryStatus
-                  ? `<p class="session-rail-copy">${escapeHtml(`${draftRecoveryStatus.label} · ${draftRecoveryStatus.detail}`)}</p>`
-                  : ""
-              }
-            </article>
-          `
-          : ""
-      }
       ${
         state.recoveryDrafts.length
           ? `
@@ -2697,6 +2771,24 @@ function renderWorkspaceRail() {
       }
     </div>
   `;
+
+  for (const button of elements.workspaceRail.querySelectorAll("[data-rail-nav]")) {
+    button.addEventListener("click", () => {
+      state.activeNavView = button.dataset.railNav || "overview";
+      render();
+    });
+  }
+  for (const button of elements.workspaceRail.querySelectorAll("[data-rail-command]")) {
+    button.addEventListener("click", () => {
+      if (button.dataset.railCommand === "edit-current") {
+        startEditingSelectedNote();
+        return;
+      }
+      if (button.dataset.railCommand === "restore-recovery") {
+        restoreAllRecoveryDrafts();
+      }
+    });
+  }
 }
 
 function renderWorkspaceEditor() {

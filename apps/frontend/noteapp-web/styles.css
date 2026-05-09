@@ -480,6 +480,25 @@ pre {
   margin-top: 18px;
 }
 
+.tree-section {
+  display: grid;
+  gap: 10px;
+}
+
+.tree-section.is-active {
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(96, 165, 250, 0.08);
+}
+
+.tree-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .tree-section h3,
 .ai-section h3,
 .editor-sync-box h3,
@@ -487,6 +506,20 @@ pre {
   margin: 0 0 10px;
   font-size: 0.9rem;
   color: var(--muted);
+}
+
+.tree-section-summary {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.tree-section-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .tree-list {
@@ -508,6 +541,13 @@ pre {
   background: rgba(12, 18, 32, 0.72);
   color: var(--ink);
   cursor: pointer;
+}
+
+.tree-node-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .tree-node.is-active {
@@ -566,6 +606,12 @@ pre {
   border: 1px solid var(--line-soft);
 }
 
+.rail-highlight-card {
+  background:
+    linear-gradient(135deg, rgba(233, 69, 96, 0.1), transparent 52%),
+    rgba(8, 12, 22, 0.72);
+}
+
 .session-rail-title {
   display: block;
   color: var(--muted);
@@ -591,6 +637,28 @@ pre {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
+}
+
+.rail-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.rail-metric {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.rail-metric strong {
+  font-size: 0.92rem;
+}
+
+.rail-action-row {
+  margin-top: 12px;
 }
 
 .editor-toolbar,
@@ -1186,6 +1254,11 @@ pre {
 
 @media (max-width: 1300px) {
   .workspace-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .editor-brief-metrics,
+  .rail-metric-grid {
     grid-template-columns: 1fr;
   }
 
