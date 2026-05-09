@@ -2,25 +2,25 @@
   "sections": [
     {
       "id": "notes",
-      "label": "Notes",
+      "label": "笔记",
       "items": [
         {
           "id": "desktop-bridge",
-          "title": "Desktop Bridge Rollout",
+          "title": "桌面桥接推进",
           "path": "Notes/Engineering/Desktop Bridge Rollout.md",
-          "status": "Modified"
+          "status": "已修改"
         },
         {
           "id": "sync-recovery",
-          "title": "Sync Recovery Checklist",
+          "title": "同步恢复检查清单",
           "path": "Notes/Engineering/Sync Recovery Checklist.md",
-          "status": "Review"
+          "status": "待复核"
         },
         {
           "id": "release-cadence",
-          "title": "Release Cadence",
+          "title": "发布节奏",
           "path": "Notes/Product/Release Cadence.md",
-          "status": "Stable"
+          "status": "稳定"
         }
       ]
     },
@@ -30,134 +30,134 @@
       "items": [
         {
           "id": "desktop-shell",
-          "title": "Desktop Shell Spec",
+          "title": "桌面壳层规格",
           "path": ".ai/wiki/shell/Desktop Shell Spec.md",
-          "status": "AI draft"
+          "status": "AI 草稿"
         },
         {
           "id": "bridge-diagnostics",
-          "title": "Bridge Diagnostics",
+          "title": "桥接诊断",
           "path": ".ai/wiki/ops/Bridge Diagnostics.md",
-          "status": "Needs accept"
+          "status": "待确认"
         }
       ]
     }
   ],
   "notes": {
     "desktop-bridge": {
-      "title": "Desktop Bridge Rollout",
+      "title": "桌面桥接推进",
       "path": "Notes/Engineering/Desktop Bridge Rollout.md",
       "statusTone": "warning",
-      "statusLabel": "Modified locally",
-      "lastSaved": "Saved 6 minutes ago",
+      "statusLabel": "本地有修改",
+      "lastSaved": "6 分钟前保存",
       "tags": ["sync", "desktop", "bridge", "noteapp-web"],
       "syncContext": {
         "watchActionIds": ["pull", "show-vault-summary"],
         "watchCardKinds": ["baseline", "activity"],
         "watchBlockingReasons": ["requires_full_pull"]
       },
-      "body": "# Desktop Bridge Rollout\n\n## Current slice\n- Export sync shell snapshots through the desktop CLI.\n- Forward executable actions through a local dev bridge instead of re-implementing them in the browser.\n- Keep browser-side diagnostics visible so missing local config is obvious.\n\n## Next decisions\n1. Stabilize the bridge contract with lightweight tests.\n2. Expand the web shell from sync-only to full workspace chrome.\n3. Move from prototype panes to real file-tree and editor contracts.",
+      "body": "# 桌面桥接推进\n\n## 当前阶段\n- 通过桌面 CLI 导出同步壳层快照。\n- 通过本地 bridge 转发可执行动作，而不是在浏览器里重复实现桌面逻辑。\n- 让浏览器侧能直接看见本地配置缺失与桥接诊断。\n\n## 下一步\n1. 用轻量测试固定 bridge 契约。\n2. 把 Web 壳层从同步页扩成完整工作台。\n3. 逐步替换成真实文件树与编辑器契约。",
       "ai": {
         "queueDepth": 2,
         "warnings": 1,
-        "relatedEntities": ["Desktop CLI", "Sync Center", "Bridge Local Config"],
+        "relatedEntities": ["桌面 CLI", "同步中心", "本地桥接配置"],
         "suggestions": [
-          "Promote the bridge status payload to a shared frontend contract.",
-          "Expose selected note context to the AI panel for follow-up workflows."
+          "把 bridge 状态载荷提升成前端共享契约。",
+          "把当前选中文档上下文暴露给 AI 面板，支撑后续工作流。"
         ],
-        "lint": ["Bridge status should surface config precedence and failure codes."]
+        "lint": ["桥接状态需要明确展示配置优先级和失败代码。"]
       }
     },
     "sync-recovery": {
-      "title": "Sync Recovery Checklist",
+      "title": "同步恢复检查清单",
       "path": "Notes/Engineering/Sync Recovery Checklist.md",
       "statusTone": "danger",
-      "statusLabel": "Needs conflict audit",
-      "lastSaved": "Saved yesterday",
+      "statusLabel": "需要冲突核查",
+      "lastSaved": "昨天保存",
       "tags": ["sync", "recovery", "conflicts"],
       "syncContext": {
         "watchActionIds": ["pull", "submit-detected-commit"],
         "watchCardKinds": ["baseline", "local-changes", "activity"],
         "watchBlockingReasons": ["requires_full_pull"]
       },
-      "body": "# Sync Recovery Checklist\n\n## Before retry\n- Confirm staging files were cleaned after the failed attempt.\n- Verify unresolved conflict copies are still visible in the vault.\n- Rebuild the next snapshot from a fresh working tree scan.\n\n## Operator note\nDo not resume a commit from stale plaintext snapshots. The next round must rebuild from the latest source versions.",
+      "body": "# 同步恢复检查清单\n\n## 重试前\n- 确认失败尝试留下的 staging 文件已经清理。\n- 确认未解决的冲突副本仍然能在仓库中定位。\n- 从新的工作树扫描重新构建下一轮快照。\n\n## 操作提示\n不要从过期的明文快照继续提交。下一轮必须基于最新源版本重新构建。",
       "ai": {
         "queueDepth": 1,
         "warnings": 3,
         "relatedEntities": ["commit_intent_journal", ".noteapp/staging", "conflict_copies"],
         "suggestions": [
-          "Add a visible recovery badge in the sync dock when staging cleanup is required.",
-          "Link conflict artifacts directly from the future file-tree contract."
+          "当需要清理 staging 时，在同步区增加显眼的恢复徽标。",
+          "未来从文件树契约直接链接到冲突工件。"
         ],
         "lint": [
-          "Missing rollback note for blob staging cleanup.",
-          "Needs example operator timeline for drift-abort handling."
+          "缺少 blob staging 清理的回滚说明。",
+          "需要补一个快照漂移中止的操作时间线示例。"
         ]
       }
     },
     "release-cadence": {
-      "title": "Release Cadence",
+      "title": "发布节奏",
       "path": "Notes/Product/Release Cadence.md",
       "statusTone": "success",
-      "statusLabel": "Ready",
-      "lastSaved": "Saved this morning",
+      "statusLabel": "可发布",
+      "lastSaved": "今天上午保存",
       "tags": ["product", "delivery", "weekly"],
       "syncContext": {
         "watchActionIds": ["show-vault-summary"],
         "watchCardKinds": ["local-changes"],
         "watchBlockingReasons": []
       },
-      "body": "# Release Cadence\n\n## Shipping rule\n- Push after each meaningful phase.\n- Keep the static shell deployable at every step.\n- Avoid mixing experimental UI work with bridge boundary fixes in the same commit unless they are tightly coupled.\n\n## Weekly ritual\nMonday: sync and diagnostics\nWednesday: desktop shell boundary work\nFriday: workspace UX refinement",
+      "body": "# 发布节奏\n\n## 交付规则\n- 每个有意义阶段结束后都推送代码。\n- 保证静态壳层在每一步都可运行。\n- 除非强相关，否则不要把实验性 UI 与 bridge 修复混在同一个提交里。\n\n## 每周节奏\n周一：同步与诊断\n周三：桌面壳层边界\n周五：工作区体验打磨",
       "ai": {
         "queueDepth": 0,
         "warnings": 0,
-        "relatedEntities": ["Weekly Review", "Milestone Board", "Release Notes"],
-        "suggestions": ["Summarize the last three pushed commits into a changelog draft."],
+        "relatedEntities": ["周回顾", "里程碑看板", "发布说明"],
+        "suggestions": ["把最近三次推送整理成一版更新说明草稿。"],
         "lint": []
       }
     },
     "desktop-shell": {
-      "title": "Desktop Shell Spec",
+      "title": "桌面壳层规格",
       "path": ".ai/wiki/shell/Desktop Shell Spec.md",
       "statusTone": "info",
-      "statusLabel": "AI draft",
-      "lastSaved": "Compiled 18 minutes ago",
+      "statusLabel": "AI 草稿",
+      "lastSaved": "18 分钟前编译",
       "tags": ["ai", "shell", "spec"],
       "syncContext": {
         "watchActionIds": ["sync-activity"],
         "watchCardKinds": ["activity"],
         "watchBlockingReasons": []
       },
-      "body": "# Desktop Shell Spec\n\n## Intent\nCapture the shell-level contracts the desktop client exposes to the static web layer.\n\n## Coverage\n- sync-shell-snapshot\n- sync-center summary and cards\n- activity feed\n- executable action forwarding\n\n## Gap\nThe current web shell still needs a first-class file tree and editor contract.",
+      "body": "# 桌面壳层规格\n\n## 目标\n沉淀桌面客户端暴露给静态 Web 层的壳层契约。\n\n## 覆盖范围\n- sync-shell-snapshot\n- sync-center 摘要与卡片\n- activity feed\n- 可执行动作转发\n\n## 缺口\n当前 Web 壳层仍缺少一等文件树与编辑器契约。",
       "ai": {
         "queueDepth": 4,
         "warnings": 2,
         "relatedEntities": ["sync-shell-snapshot", "activity_feed", "execute-sync-action-and-snapshot"],
         "suggestions": [
-          "Accept the AI draft once the editor and tree panes are backed by real contracts."
+          "等编辑器和文件树接入真实契约后，再确认这版 AI 草稿。"
         ],
-        "lint": ["Spec references future UI panes without sample contract payloads."]
+        "lint": ["规格里引用了未来 UI 面板，但还没有对应样例契约。"]
       }
     },
     "bridge-diagnostics": {
-      "title": "Bridge Diagnostics",
+      "title": "桥接诊断",
       "path": ".ai/wiki/ops/Bridge Diagnostics.md",
       "statusTone": "warning",
-      "statusLabel": "Needs accept",
-      "lastSaved": "Compiled 2 hours ago",
+      "statusLabel": "待确认",
+      "lastSaved": "2 小时前编译",
       "tags": ["ai", "ops", "diagnostics"],
       "syncContext": {
         "watchActionIds": ["pull", "sync-activity"],
         "watchCardKinds": ["activity", "baseline"],
         "watchBlockingReasons": ["requires_full_pull"]
       },
-      "body": "# Bridge Diagnostics\n\n## Captured signals\n- config source precedence\n- missing required bridge settings\n- desktop CLI spawn failures\n- invalid JSON returned by the desktop boundary\n\n## Pending\nMap diagnostics into a shared frontend model and keep the browser copy minimal.",
+      "body": "# 桥接诊断\n\n## 已覆盖信号\n- 配置来源优先级\n- 必填 bridge 配置缺失\n- 桌面 CLI 拉起失败\n- 桌面边界返回非法 JSON\n\n## 待补\n把诊断统一收敛到共享前端模型，同时保持浏览器侧副本足够轻量。",
       "ai": {
         "queueDepth": 1,
         "warnings": 1,
         "relatedEntities": ["configSource", "sourceByField", "desktop_cli_invalid_json"],
-        "suggestions": ["Add one screenshot-ready status panel for operator demos."],
-        "lint": ["Needs explicit note that bearer tokens remain local-only."]
+        "suggestions": ["补一个适合演示截图的状态面板。"],
+        "lint": ["需要明确写出 bearer token 只保留在本地。"]
       }
     }
   }

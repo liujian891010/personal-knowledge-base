@@ -15,25 +15,25 @@ const WORKSPACE_SAMPLE = {
   sections: [
     {
       id: "notes",
-      label: "Notes",
+      label: "笔记",
       items: [
         {
           id: "desktop-bridge",
-          title: "Desktop Bridge Rollout",
+          title: "桌面桥接推进",
           path: "Notes/Engineering/Desktop Bridge Rollout.md",
-          status: "Modified",
+          status: "已修改",
         },
         {
           id: "sync-recovery",
-          title: "Sync Recovery Checklist",
+          title: "同步恢复检查清单",
           path: "Notes/Engineering/Sync Recovery Checklist.md",
-          status: "Review",
+          status: "待复核",
         },
         {
           id: "release-cadence",
-          title: "Release Cadence",
+          title: "发布节奏",
           path: "Notes/Product/Release Cadence.md",
-          status: "Stable",
+          status: "稳定",
         },
       ],
     },
@@ -43,183 +43,181 @@ const WORKSPACE_SAMPLE = {
       items: [
         {
           id: "desktop-shell",
-          title: "Desktop Shell Spec",
+          title: "桌面壳层规格",
           path: ".ai/wiki/shell/Desktop Shell Spec.md",
-          status: "AI draft",
+          status: "AI 草稿",
         },
         {
           id: "bridge-diagnostics",
-          title: "Bridge Diagnostics",
+          title: "桥接诊断",
           path: ".ai/wiki/ops/Bridge Diagnostics.md",
-          status: "Needs accept",
+          status: "待确认",
         },
       ],
     },
   ],
   notes: {
     "desktop-bridge": {
-      title: "Desktop Bridge Rollout",
+      title: "桌面桥接推进",
       path: "Notes/Engineering/Desktop Bridge Rollout.md",
       statusTone: "warning",
-      statusLabel: "Modified locally",
-      lastSaved: "Saved 6 minutes ago",
+      statusLabel: "本地有修改",
+      lastSaved: "6 分钟前保存",
       tags: ["sync", "desktop", "bridge", "noteapp-web"],
       syncContext: {
         watchActionIds: ["pull", "show-vault-summary"],
         watchCardKinds: ["baseline", "activity"],
         watchBlockingReasons: ["requires_full_pull"],
       },
-      body: `# Desktop Bridge Rollout
+      body: `# 桌面桥接推进
 
-## Current slice
-- Export sync shell snapshots through the desktop CLI.
-- Forward executable actions through a local dev bridge instead of re-implementing them in the browser.
-- Keep browser-side diagnostics visible so missing local config is obvious.
+## 当前阶段
+- 通过桌面 CLI 导出同步壳层快照。
+- 通过本地 bridge 转发可执行动作，而不是在浏览器里重复实现桌面逻辑。
+- 让浏览器侧能直接看见本地配置缺失与桥接诊断。
 
-## Next decisions
-1. Stabilize the bridge contract with lightweight tests.
-2. Expand the web shell from sync-only to full workspace chrome.
-3. Move from prototype panes to real file-tree and editor contracts.`,
+## 下一步
+1. 用轻量测试固定 bridge 契约。
+2. 把 Web 壳层从同步页扩成完整工作台。
+3. 逐步替换成真实文件树与编辑器契约。`,
       ai: {
         queueDepth: 2,
         warnings: 1,
-        relatedEntities: ["Desktop CLI", "Sync Center", "Bridge Local Config"],
+        relatedEntities: ["桌面 CLI", "同步中心", "本地桥接配置"],
         suggestions: [
-          "Promote the bridge status payload to a shared frontend contract.",
-          "Expose selected note context to the AI panel for follow-up workflows.",
+          "把 bridge 状态载荷提升成前端共享契约。",
+          "把当前选中文档上下文暴露给 AI 面板，支撑后续工作流。",
         ],
-        lint: ["Bridge status should surface config precedence and failure codes."],
+        lint: ["桥接状态需要明确展示配置优先级和失败代码。"],
       },
     },
     "sync-recovery": {
-      title: "Sync Recovery Checklist",
+      title: "同步恢复检查清单",
       path: "Notes/Engineering/Sync Recovery Checklist.md",
       statusTone: "danger",
-      statusLabel: "Needs conflict audit",
-      lastSaved: "Saved yesterday",
+      statusLabel: "需要冲突核查",
+      lastSaved: "昨天保存",
       tags: ["sync", "recovery", "conflicts"],
       syncContext: {
         watchActionIds: ["pull", "submit-detected-commit"],
         watchCardKinds: ["baseline", "local-changes", "activity"],
         watchBlockingReasons: ["requires_full_pull"],
       },
-      body: `# Sync Recovery Checklist
+      body: `# 同步恢复检查清单
 
-## Before retry
-- Confirm staging files were cleaned after the failed attempt.
-- Verify unresolved conflict copies are still visible in the vault.
-- Rebuild the next snapshot from a fresh working tree scan.
+## 重试前
+- 确认失败尝试留下的 staging 文件已经清理。
+- 确认未解决的冲突副本仍然能在仓库中定位。
+- 从新的工作树扫描重新构建下一轮快照。
 
-## Operator note
-Do not resume a commit from stale plaintext snapshots. The next round must rebuild from the latest source versions.`,
+## 操作提示
+不要从过期的明文快照继续提交。下一轮必须基于最新源版本重新构建。`,
       ai: {
         queueDepth: 1,
         warnings: 3,
         relatedEntities: ["commit_intent_journal", ".noteapp/staging", "conflict_copies"],
         suggestions: [
-          "Add a visible recovery badge in the sync dock when staging cleanup is required.",
-          "Link conflict artifacts directly from the future file-tree contract.",
+          "当需要清理 staging 时，在同步区增加显眼的恢复徽标。",
+          "未来从文件树契约直接链接到冲突工件。",
         ],
         lint: [
-          "Missing rollback note for blob staging cleanup.",
-          "Needs example operator timeline for drift-abort handling.",
+          "缺少 blob staging 清理的回滚说明。",
+          "需要补一个快照漂移中止的操作时间线示例。",
         ],
       },
     },
     "release-cadence": {
-      title: "Release Cadence",
+      title: "发布节奏",
       path: "Notes/Product/Release Cadence.md",
       statusTone: "success",
-      statusLabel: "Ready",
-      lastSaved: "Saved this morning",
+      statusLabel: "可发布",
+      lastSaved: "今天上午保存",
       tags: ["product", "delivery", "weekly"],
       syncContext: {
         watchActionIds: ["show-vault-summary"],
         watchCardKinds: ["local-changes"],
         watchBlockingReasons: [],
       },
-      body: `# Release Cadence
+      body: `# 发布节奏
 
-## Shipping rule
-- Push after each meaningful phase.
-- Keep the static shell deployable at every step.
-- Avoid mixing experimental UI work with bridge boundary fixes in the same commit unless they are tightly coupled.
+## 交付规则
+- 每个有意义阶段结束后都推送代码。
+- 保证静态壳层在每一步都可运行。
+- 除非强相关，否则不要把实验性 UI 与 bridge 修复混在同一个提交里。
 
-## Weekly ritual
-Monday: sync and diagnostics
-Wednesday: desktop shell boundary work
-Friday: workspace UX refinement`,
+## 每周节奏
+周一：同步与诊断
+周三：桌面壳层边界
+周五：工作区体验打磨`,
       ai: {
         queueDepth: 0,
         warnings: 0,
-        relatedEntities: ["Weekly Review", "Milestone Board", "Release Notes"],
-        suggestions: ["Summarize the last three pushed commits into a changelog draft."],
+        relatedEntities: ["周回顾", "里程碑看板", "发布说明"],
+        suggestions: ["把最近三次推送整理成一版更新说明草稿。"],
         lint: [],
       },
     },
     "desktop-shell": {
-      title: "Desktop Shell Spec",
+      title: "桌面壳层规格",
       path: ".ai/wiki/shell/Desktop Shell Spec.md",
       statusTone: "info",
-      statusLabel: "AI draft",
-      lastSaved: "Compiled 18 minutes ago",
+      statusLabel: "AI 草稿",
+      lastSaved: "18 分钟前编译",
       tags: ["ai", "shell", "spec"],
       syncContext: {
         watchActionIds: ["sync-activity"],
         watchCardKinds: ["activity"],
         watchBlockingReasons: [],
       },
-      body: `# Desktop Shell Spec
+      body: `# 桌面壳层规格
 
-## Intent
-Capture the shell-level contracts the desktop client exposes to the static web layer.
+## 目标
+沉淀桌面客户端暴露给静态 Web 层的壳层契约。
 
-## Coverage
+## 覆盖范围
 - sync-shell-snapshot
-- sync-center summary and cards
+- sync-center 摘要与卡片
 - activity feed
-- executable action forwarding
+- 可执行动作转发
 
-## Gap
-The current web shell still needs a first-class file tree and editor contract.`,
+## 缺口
+当前 Web 壳层仍缺少一等文件树与编辑器契约。`,
       ai: {
         queueDepth: 4,
         warnings: 2,
         relatedEntities: ["sync-shell-snapshot", "activity_feed", "execute-sync-action-and-snapshot"],
-        suggestions: [
-          "Accept the AI draft once the editor and tree panes are backed by real contracts.",
-        ],
-        lint: ["Spec references future UI panes without sample contract payloads."],
+        suggestions: ["等编辑器和文件树接入真实契约后，再确认这版 AI 草稿。"],
+        lint: ["规格里引用了未来 UI 面板，但还没有对应样例契约。"],
       },
     },
     "bridge-diagnostics": {
-      title: "Bridge Diagnostics",
+      title: "桥接诊断",
       path: ".ai/wiki/ops/Bridge Diagnostics.md",
       statusTone: "warning",
-      statusLabel: "Needs accept",
-      lastSaved: "Compiled 2 hours ago",
+      statusLabel: "待确认",
+      lastSaved: "2 小时前编译",
       tags: ["ai", "ops", "diagnostics"],
       syncContext: {
         watchActionIds: ["pull", "sync-activity"],
         watchCardKinds: ["activity", "baseline"],
         watchBlockingReasons: ["requires_full_pull"],
       },
-      body: `# Bridge Diagnostics
+      body: `# 桥接诊断
 
-## Captured signals
-- config source precedence
-- missing required bridge settings
-- desktop CLI spawn failures
-- invalid JSON returned by the desktop boundary
+## 已覆盖信号
+- 配置来源优先级
+- 必填 bridge 配置缺失
+- 桌面 CLI 拉起失败
+- 桌面边界返回非法 JSON
 
-## Pending
-Map diagnostics into a shared frontend model and keep the browser copy minimal.`,
+## 待补
+把诊断统一收敛到共享前端模型，同时保持浏览器侧副本足够轻量。`,
       ai: {
         queueDepth: 1,
         warnings: 1,
         relatedEntities: ["configSource", "sourceByField", "desktop_cli_invalid_json"],
-        suggestions: ["Add one screenshot-ready status panel for operator demos."],
-        lint: ["Needs explicit note that bearer tokens remain local-only."],
+        suggestions: ["补一个适合演示截图的状态面板。"],
+        lint: ["需要明确写出 bearer token 只保留在本地。"],
       },
     },
   },
@@ -230,14 +228,14 @@ const state = {
   activityFeed: null,
   snapshotMetadata: null,
   workspaceShell: null,
-  workspaceSourceLabel: "Not loaded",
+  workspaceSourceLabel: "未加载",
   selectedWorkspaceNoteId: "desktop-bridge",
   selectedAction: null,
   bridgeStatus: null,
   bridgeCheckedAtMs: null,
   lastBridgeError: null,
   lastExecution: null,
-  sourceLabel: "Not loaded",
+  sourceLabel: "未加载",
 };
 
 const elements = {
@@ -364,7 +362,7 @@ function validateAppSession(payload) {
 
 function renderExecutionResult(execution) {
   if (!execution) {
-    elements.actionResultOutput.textContent = "No action has been executed yet.";
+    elements.actionResultOutput.textContent = "尚未执行任何动作。";
     return;
   }
   elements.actionResultOutput.textContent = JSON.stringify(execution, null, 2);
@@ -385,7 +383,7 @@ function normalizeBridgeError(error) {
     return {
       code: typeof error.code === "string" ? error.code : "bridge_error",
       message:
-        typeof error.message === "string" ? error.message : "Bridge request failed unexpectedly.",
+        typeof error.message === "string" ? error.message : "桥接请求发生了未预期错误。",
       details: "details" in error ? error.details : null,
     };
   }
@@ -406,7 +404,7 @@ function buildOfflineBridgeStatus(error = null) {
       {
         level: "danger",
         code: "dev_server_bridge_unreachable",
-        message: "Could not reach the local dev server bridge.",
+        message: "无法连接本地开发桥接服务。",
         details: error ? { reason: error.message } : null,
       },
     ],
@@ -415,7 +413,7 @@ function buildOfflineBridgeStatus(error = null) {
 
 function renderBridgeError(error) {
   if (!error) {
-    elements.bridgeErrorOutput.textContent = "No bridge errors.";
+    elements.bridgeErrorOutput.textContent = "当前没有桥接错误。";
     return;
   }
   elements.bridgeErrorOutput.textContent = JSON.stringify(error, null, 2);
@@ -423,13 +421,13 @@ function renderBridgeError(error) {
 
 function renderBridgeDiagnostics(status) {
   if (!status) {
-    elements.bridgeDiagnosticsOutput.textContent = "Waiting for /api/bridge/status ...";
+    elements.bridgeDiagnosticsOutput.textContent = "等待 /api/bridge/status 返回...";
     return;
   }
   elements.bridgeDiagnosticsOutput.textContent = JSON.stringify(
     {
-      checkedAt: state.bridgeCheckedAtMs ? formatDateTime(state.bridgeCheckedAtMs) : "not yet",
-      mode: status.mode || "unknown",
+      checkedAt: state.bridgeCheckedAtMs ? formatDateTime(state.bridgeCheckedAtMs) : "尚未检查",
+      mode: status.mode || "未知",
       available: Boolean(status.available),
       missing: status.missing || [],
       config: status.config || null,
@@ -443,7 +441,7 @@ function renderBridgeDiagnostics(status) {
 function renderBridgeStatus() {
   const status = state.bridgeStatus;
   if (!status) {
-    elements.bridgeStatus.textContent = "Checking local desktop bridge...";
+    elements.bridgeStatus.textContent = "正在检查本地桌面桥接状态...";
     elements.refreshLocalButton.disabled = true;
     elements.executeSelectedButton.disabled = true;
     elements.reloadBridgeStatusButton.disabled = true;
@@ -455,8 +453,7 @@ function renderBridgeStatus() {
   if (status.available) {
     const sourceLabel = status.config?.configSource || "env";
     elements.bridgeStatus.textContent =
-      `Local desktop bridge ready for ${status.config.vaultId} at ${status.config.vaultRoot} ` +
-      `(${sourceLabel})`;
+      `本地桌面桥接已就绪：${status.config.vaultId} · ${status.config.vaultRoot} · ${sourceLabel}`;
     elements.refreshLocalButton.disabled = false;
     elements.executeSelectedButton.disabled = !state.selectedAction;
     elements.reloadBridgeStatusButton.disabled = false;
@@ -465,7 +462,7 @@ function renderBridgeStatus() {
     return;
   }
 
-  elements.bridgeStatus.textContent = `Local desktop bridge unavailable: ${status.missing.join(", ")}`;
+  elements.bridgeStatus.textContent = `本地桌面桥接不可用：缺少 ${status.missing.join(", ")}`;
   elements.refreshLocalButton.disabled = true;
   elements.executeSelectedButton.disabled = true;
   elements.reloadBridgeStatusButton.disabled = false;
@@ -478,34 +475,34 @@ function setSelectedAction(action, source = "manual selection") {
 
   if (!action) {
     elements.actionContractHelp.textContent =
-      "Select an action from the panel, cards, or activity area to preview the shell command contract.";
-    elements.actionContractOutput.textContent = "No action selected.";
+      "请在面板、卡片或活动流中先选择一个动作，这里会展示它对应的执行契约。";
+    elements.actionContractOutput.textContent = "尚未选择任何动作。";
     elements.actionExecutionStatus.textContent =
-      "Local execution is available only when the desktop bridge is configured.";
+      "只有本地桌面桥接配置完整后，才能真正执行动作。";
     elements.executeSelectedButton.disabled = true;
     return;
   }
 
   const commandLine = [DEFAULT_ACTION_COMMAND, action.command, ...(action.argv || [])].join(" ");
   const lines = [
-    `source: ${source}`,
-    `action_id: ${action.action_id}`,
-    `enabled: ${action.enabled !== false}`,
-    `command: ${action.command}`,
-    `argv: ${JSON.stringify(action.argv || [])}`,
-    `requires_confirmation: ${Boolean(action.requires_confirmation)}`,
-    `shell: ${commandLine}`,
+    `来源: ${source}`,
+    `动作 ID: ${action.action_id}`,
+    `可执行: ${action.enabled !== false}`,
+    `命令: ${action.command}`,
+    `参数: ${JSON.stringify(action.argv || [])}`,
+    `需要确认: ${Boolean(action.requires_confirmation)}`,
+    `Shell 契约: ${commandLine}`,
   ];
 
   if (action.reason) {
-    lines.push(`reason: ${action.reason}`);
+    lines.push(`原因: ${action.reason}`);
   }
 
   elements.actionContractHelp.textContent =
-    "The UI does not execute actions directly; it previews the exact command contract the local bridge can forward.";
+    "前端不会直接执行动作；这里只展示会被本地 bridge 转发的精确执行契约。";
   elements.actionContractOutput.textContent = lines.join("\n");
   elements.actionExecutionStatus.textContent =
-    "Use Run Selected Action to forward this contract through the local desktop bridge.";
+    "点击“执行当前动作”后，会通过本地桌面 bridge 转发该契约。";
   elements.executeSelectedButton.disabled = !state.bridgeStatus?.available;
 }
 
@@ -530,6 +527,41 @@ function resolveTone(level) {
   return ["success", "warning", "danger", "info"].includes(level) ? level : "info";
 }
 
+function formatLevelLabel(level) {
+  return {
+    success: "正常",
+    warning: "注意",
+    danger: "风险",
+    info: "信息",
+  }[level] || level;
+}
+
+function formatStatusLabel(status) {
+  return {
+    executed: "已执行",
+    disabled: "不可执行",
+    failed: "失败",
+    healthy: "健康",
+    stale: "过期",
+  }[status] || status;
+}
+
+function formatPayloadKindLabel(kind) {
+  return {
+    "sync-shell-snapshot": "同步壳层快照",
+    "sync-center": "同步中心",
+    "sync-activity": "同步活动流",
+  }[kind] || kind;
+}
+
+function formatCardKindLabel(kind) {
+  return {
+    baseline: "基线",
+    changes: "变更",
+    activity: "活动",
+  }[kind] || kind;
+}
+
 function createSignal(level, label) {
   return {
     level: resolveTone(level),
@@ -552,24 +584,29 @@ function deriveWorkspaceSyncContext(note) {
 
   if (!summary || !panel) {
     return {
-      headline: "Workspace note is not linked to a sync payload yet.",
-      signals: [createSignal("info", "No sync payload")],
-      actions: ["Load a sync-shell-snapshot or sync-center payload to enrich this workspace note."],
+      headline: "当前工作区文档还没有关联任何同步载荷。",
+      signals: [createSignal("info", "没有同步载荷")],
+      actions: ["先加载 sync-shell-snapshot 或 sync-center，再让工作区与同步状态联动。"],
       relatedActivity: [],
     };
   }
 
   if (summary.changes?.change_count > 0) {
-    signals.push(createSignal("warning", `${summary.changes.change_count} local changes`));
+    signals.push(createSignal("warning", `本地变更 ${summary.changes.change_count} 项`));
   }
   if (summary.commit_gate?.requires_full_pull) {
-    signals.push(createSignal("danger", "Full pull required"));
+    signals.push(createSignal("danger", "需要先完整拉取"));
   }
   if (summary.conflicts?.actual_has_unresolved_conflicts) {
-    signals.push(createSignal("danger", "Unresolved conflicts"));
+    signals.push(createSignal("danger", "存在未解决冲突"));
   }
   if (summary.worker_health?.status) {
-    signals.push(createSignal(summary.worker_health.status === "healthy" ? "success" : "warning", summary.worker_health.status));
+    signals.push(
+      createSignal(
+        summary.worker_health.status === "healthy" ? "success" : "warning",
+        summary.worker_health.status === "healthy" ? "同步线程正常" : "同步线程异常",
+      ),
+    );
   }
 
   const matchedCards = cards.filter((card) => watchCardKinds.includes(card.kind));
@@ -583,7 +620,7 @@ function deriveWorkspaceSyncContext(note) {
   }
 
   for (const reason of matchedBlockingReasons) {
-    signals.push(createSignal("danger", `Gate: ${reason}`));
+    signals.push(createSignal("danger", `提交门禁：${reason}`));
   }
 
   const dedupedSignals = [];
@@ -599,16 +636,16 @@ function deriveWorkspaceSyncContext(note) {
 
   const actions = [];
   if (matchedBlockingReasons.includes("requires_full_pull")) {
-    actions.push("Run Pull before attempting a new submit.");
+    actions.push("尝试新的提交前，先执行一次 Pull。");
   }
   if (matchedActivity.some((record) => record.status === "failed")) {
-    actions.push("Inspect the failed sync activity details and retry after fixing the local condition.");
+    actions.push("先检查失败的同步活动详情，修复本地条件后再重试。");
   }
   if (summary.changes?.change_count > 0) {
-    actions.push("Keep this note aligned with the pending local changes before the next sync cycle.");
+    actions.push("在下一次同步前，确认这篇文档与待提交的本地变更保持一致。");
   }
   if (!actions.length) {
-    actions.push("No immediate sync follow-up is required for this note.");
+    actions.push("这篇文档当前没有必须立即处理的同步后续动作。");
   }
 
   const latestRelated = matchedActivity.slice(-2).reverse();
@@ -620,7 +657,7 @@ function deriveWorkspaceSyncContext(note) {
 
   return {
     headline: headlineParts.join(" | "),
-    signals: dedupedSignals.length ? dedupedSignals : [createSignal("info", "No matched sync signals")],
+    signals: dedupedSignals.length ? dedupedSignals : [createSignal("info", "没有命中同步信号")],
     actions,
     relatedActivity: latestRelated,
   };
@@ -690,7 +727,7 @@ function renderWorkspaceEditor() {
   elements.workspaceEditor.innerHTML = `
     <div class="editor-toolbar">
       <div>
-        <p class="card-meta">Editor Prototype</p>
+        <p class="card-meta">编辑器原型</p>
         <h2 class="editor-title">${escapeHtml(note.title)}</h2>
       </div>
       <span class="level-pill tone-${resolveTone(note.statusTone)}">${escapeHtml(note.statusLabel)}</span>
@@ -703,7 +740,7 @@ function renderWorkspaceEditor() {
       ${note.tags.map((tag) => `<li>${escapeHtml(tag)}</li>`).join("")}
     </ul>
     <section class="editor-sync-box">
-      <h3>Sync Signals</h3>
+      <h3>同步信号</h3>
       <p class="summary-copy">${escapeHtml(syncContext.headline)}</p>
       <div class="editor-signal-row">
         ${syncContext.signals
@@ -724,65 +761,65 @@ function renderWorkspaceAiPanel() {
   elements.workspaceAiPanel.innerHTML = `
     <div class="pane-heading">
       <div>
-        <p class="card-meta">AI Panel</p>
-        <h2 class="ai-panel-title">Context For ${escapeHtml(note.title)}</h2>
+        <p class="card-meta">AI 面板</p>
+        <h2 class="ai-panel-title">${escapeHtml(note.title)} 的上下文</h2>
       </div>
-      <span class="mini-pill tone-warning">Draft</span>
+      <span class="mini-pill tone-warning">草稿</span>
     </div>
     <div class="ai-stat-grid">
       <article class="ai-stat">
-        <span class="metric-label">Queue</span>
+        <span class="metric-label">队列</span>
         <strong>${escapeHtml(note.ai.queueDepth)}</strong>
       </article>
       <article class="ai-stat">
-        <span class="metric-label">Warnings</span>
+        <span class="metric-label">告警</span>
         <strong>${escapeHtml(note.ai.warnings)}</strong>
       </article>
     </div>
     <section class="ai-sync-box">
-      <h3>Operator Next Steps</h3>
+      <h3>操作建议</h3>
       <ul class="ai-list">
         ${syncContext.actions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
       </ul>
     </section>
     <section class="ai-section">
-      <h3>Related Entities</h3>
+      <h3>相关实体</h3>
       <div class="editor-tags">
         ${note.ai.relatedEntities.map((entity) => `<span class="ai-chip">${escapeHtml(entity)}</span>`).join("")}
       </div>
     </section>
     <section class="ai-section">
-      <h3>Suggested Actions</h3>
+      <h3>建议动作</h3>
       <ul class="ai-list">
         ${note.ai.suggestions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
       </ul>
     </section>
     <section class="ai-section">
-      <h3>Lint</h3>
+      <h3>Lint 提示</h3>
       ${
         note.ai.lint.length
           ? `<ul class="ai-list">${note.ai.lint.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
-          : '<p class="ai-copy">No lint warnings for this note.</p>'
+          : '<p class="ai-copy">当前没有 lint 提示。</p>'
       }
     </section>
     <section class="ai-section">
-      <h3>Related Sync Activity</h3>
+      <h3>相关同步活动</h3>
       ${
         syncContext.relatedActivity.length
           ? `<ul class="ai-list">${syncContext.relatedActivity
               .map(
                 (record) =>
-                  `<li>${escapeHtml(record.action_id)} / ${escapeHtml(record.status)} / ${escapeHtml(record.message || "no message")}</li>`,
+                  `<li>${escapeHtml(record.action_id)} / ${escapeHtml(record.status)} / ${escapeHtml(record.message || "无附加信息")}</li>`,
               )
               .join("")}</ul>`
-          : '<p class="ai-copy">No matching sync activity for this note.</p>'
+          : '<p class="ai-copy">这篇文档当前没有匹配到相关同步活动。</p>'
       }
     </section>
   `;
 }
 
 function renderWorkspaceChrome() {
-  elements.workspaceStatus.textContent = `Workspace shell source: ${state.workspaceSourceLabel}`;
+  elements.workspaceStatus.textContent = `工作区契约来源：${state.workspaceSourceLabel}`;
   renderWorkspaceTree();
   renderWorkspaceEditor();
   renderWorkspaceAiPanel();
@@ -802,9 +839,9 @@ function renderPanel(syncCenter) {
   const tone = resolveTone(panel.level);
   elements.panelCard.innerHTML = `
     <div class="panel-topline">
-      <span class="level-pill tone-${tone}">${escapeHtml(panel.level)}</span>
-      <span class="mini-pill tone-info">Conflicts ${escapeHtml(panel.conflict_badge_count)}</span>
-      <span class="mini-pill tone-info">Changes ${escapeHtml(panel.change_badge_count)}</span>
+      <span class="level-pill tone-${tone}">${escapeHtml(formatLevelLabel(panel.level))}</span>
+      <span class="mini-pill tone-info">冲突 ${escapeHtml(panel.conflict_badge_count)}</span>
+      <span class="mini-pill tone-info">变更 ${escapeHtml(panel.change_badge_count)}</span>
     </div>
     <h2 class="panel-headline">${escapeHtml(panel.headline)}</h2>
     <p class="summary-copy">${escapeHtml(panel.detail)}</p>
@@ -822,28 +859,28 @@ function renderSummary(syncCenter) {
   const summary = syncCenter.summary;
   const metrics = [
     {
-      label: "Commit Gate",
-      value: summary.commit_gate.can_submit_commit ? "Open" : "Blocked",
-      kicker: summary.commit_gate.blocking_reasons?.join(", ") || "No blocking reasons",
+      label: "提交门禁",
+      value: summary.commit_gate.can_submit_commit ? "可提交" : "被阻塞",
+      kicker: summary.commit_gate.blocking_reasons?.join(", ") || "当前无阻塞原因",
     },
     {
-      label: "Local Changes",
+      label: "本地变更",
       value: summary.changes.change_count ?? 0,
-      kicker: `${summary.changes.tracked_record_count ?? 0} tracked records scanned`,
+      kicker: `已扫描 ${summary.changes.tracked_record_count ?? 0} 条跟踪记录`,
     },
     {
-      label: "Conflicts",
+      label: "冲突",
       value:
         (summary.conflicts.conflict_copies?.length || 0) +
         (summary.conflicts.conflict_orphans?.length || 0),
       kicker: summary.conflicts.actual_has_unresolved_conflicts
-        ? "Unresolved artifacts still exist"
-        : "No unresolved local artifacts",
+        ? "仍存在未解决的本地冲突工件"
+        : "当前没有未解决的本地冲突工件",
     },
     {
-      label: "Revisions",
+      label: "版本",
       value: `${summary.state.acked_revision}/${summary.state.remote_head_revision}`,
-      kicker: `Manifest ${summary.state.last_manifest_summary_status}`,
+      kicker: `Manifest 状态：${summary.state.last_manifest_summary_status}`,
     },
   ];
 
@@ -864,7 +901,7 @@ function renderCards(syncCenter) {
   if (!syncCenter.cards.length) {
     elements.cardsGrid.innerHTML = `
       <div class="empty-state">
-        <p>No sync cards were provided by the current payload.</p>
+        <p>当前载荷没有返回同步卡片。</p>
       </div>
     `;
     return;
@@ -877,13 +914,13 @@ function renderCards(syncCenter) {
     article.innerHTML = `
       <div class="card-title-row">
         <div>
-          <p class="card-meta">${escapeHtml(card.kind)} / ${escapeHtml(card.card_id)}</p>
+          <p class="card-meta">${escapeHtml(formatCardKindLabel(card.kind))} / ${escapeHtml(card.card_id)}</p>
           <h3>${escapeHtml(card.title)}</h3>
         </div>
-        <span class="level-pill tone-${resolveTone(card.level)}">${escapeHtml(card.level)}</span>
+        <span class="level-pill tone-${resolveTone(card.level)}">${escapeHtml(formatLevelLabel(card.level))}</span>
       </div>
       <p class="card-body">${escapeHtml(card.body)}</p>
-      <p class="summary-kicker">Badge count: ${escapeHtml(card.badge_count)}</p>
+      <p class="summary-kicker">徽标数：${escapeHtml(card.badge_count)}</p>
       <div class="card-actions"></div>
     `;
 
@@ -903,8 +940,8 @@ function renderActivity(feed) {
     elements.activityCard.innerHTML = `
       <div class="activity-header">
         <div>
-          <h2>Recent Activity</h2>
-          <p class="activity-empty">No sync activity records have been loaded yet.</p>
+          <h2>最近活动</h2>
+          <p class="activity-empty">当前还没有加载任何同步活动记录。</p>
         </div>
       </div>
     `;
@@ -915,14 +952,14 @@ function renderActivity(feed) {
   elements.activityCard.innerHTML = `
     <div class="activity-header">
       <div>
-        <h2>Recent Activity</h2>
+        <h2>最近活动</h2>
         <p class="summary-copy">
-          ${escapeHtml(feed.total_count)} records loaded. Latest event at
+          已加载 ${escapeHtml(feed.total_count)} 条记录，最近一次发生于
           ${escapeHtml(formatDateTime(latestRecord.occurred_at_ms))}.
         </p>
       </div>
       <span class="level-pill tone-${resolveTone(latestRecord.level)}">
-        ${escapeHtml(latestRecord.status)}
+        ${escapeHtml(formatStatusLabel(latestRecord.status))}
       </span>
     </div>
     <div class="timeline"></div>
@@ -938,8 +975,8 @@ function renderActivity(feed) {
         <span class="timeline-time">${escapeHtml(formatDateTime(record.occurred_at_ms))}</span>
       </div>
       <div class="timeline-row">
-        <span class="mini-pill tone-${resolveTone(record.level)}">${escapeHtml(record.level)}</span>
-        <span class="card-meta">${escapeHtml(record.command)} from ${escapeHtml(record.source)}</span>
+        <span class="mini-pill tone-${resolveTone(record.level)}">${escapeHtml(formatLevelLabel(record.level))}</span>
+        <span class="card-meta">${escapeHtml(record.command)} · 来源 ${escapeHtml(record.source)}</span>
       </div>
       ${record.message ? `<p class="timeline-message">${escapeHtml(record.message)}</p>` : ""}
     `;
@@ -948,14 +985,14 @@ function renderActivity(feed) {
 }
 
 function renderEmptyDashboard(message) {
-  elements.payloadKind.textContent = "Not loaded";
+  elements.payloadKind.textContent = "未加载";
   elements.payloadDetail.textContent = message;
   elements.panelCard.innerHTML = `<div class="empty-state"><p>${escapeHtml(message)}</p></div>`;
   elements.summaryGrid.innerHTML = "";
   elements.cardsGrid.innerHTML = "";
   elements.activityCard.innerHTML = `
     <div class="empty-state">
-      <p>Load a payload to render the sync dashboard.</p>
+      <p>加载同步载荷后，这里才会显示同步看板。</p>
     </div>
   `;
   renderExecutionResult(state.lastExecution);
@@ -968,15 +1005,15 @@ function render() {
   renderWorkspaceChrome();
 
   if (!state.syncCenter && !state.activityFeed) {
-    renderEmptyDashboard("Load the sample contract or paste your own JSON.");
+    renderEmptyDashboard("请先加载样例会话，或手动粘贴同步 JSON。");
     return;
   }
 
   elements.payloadKind.textContent = state.snapshotMetadata
-    ? "sync-shell-snapshot"
+    ? formatPayloadKindLabel("sync-shell-snapshot")
     : state.syncCenter
-      ? "sync-center"
-      : "sync-activity";
+      ? formatPayloadKindLabel("sync-center")
+      : formatPayloadKindLabel("sync-activity");
   elements.payloadDetail.textContent = buildPayloadDetail();
 
   if (state.syncCenter) {
@@ -988,8 +1025,8 @@ function render() {
     elements.panelCard.innerHTML = `
       <div class="empty-state">
         <p>
-          Activity-only payload loaded. Import a <code>sync-center</code> payload to render
-          panel, summary, and card sections.
+          当前只加载了活动流。若要显示顶部面板、摘要和同步卡片，请继续导入
+          <code>sync-center</code> 或 <code>sync-shell-snapshot</code>。
         </p>
       </div>
     `;
@@ -1053,11 +1090,11 @@ function resolveInitialPayloadPath() {
 }
 
 async function loadSample() {
-  await loadPayloadFromPath(SAMPLE_PATH, "Bundled sync shell snapshot sample");
+  await loadPayloadFromPath(SAMPLE_PATH, "内置同步快照样例");
 }
 
 async function loadLiveSnapshot() {
-  await loadPayloadFromPath(LIVE_SNAPSHOT_PATH, "Exported live sync shell snapshot");
+  await loadPayloadFromPath(LIVE_SNAPSHOT_PATH, "本地导出的实时同步快照");
 }
 
 async function loadWorkspaceShellFromPath(path, sourceLabel) {
@@ -1089,7 +1126,7 @@ function applyWorkspaceShell(payload, sourceLabel) {
   }
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
   renderWorkspaceChrome();
-  elements.actionExecutionStatus.textContent = `Workspace shell source: ${sourceLabel}.`;
+  elements.actionExecutionStatus.textContent = `工作区契约来源：${sourceLabel}`;
 }
 
 function applyAppSession(payload, sourceLabel) {
@@ -1097,7 +1134,7 @@ function applyAppSession(payload, sourceLabel) {
   applyWorkspaceShell(session.workspaceShell, `${sourceLabel} / workspace`);
   applyPayload(session.syncPayload, `${sourceLabel} / sync`);
   state.lastBridgeError = null;
-  elements.actionExecutionStatus.textContent = `App session source: ${session.source} at ${formatDateTime(session.loadedAtMs)}.`;
+  elements.actionExecutionStatus.textContent = `应用会话来源：${session.source} · ${formatDateTime(session.loadedAtMs)}`;
 }
 
 async function refreshFromDesktop() {
@@ -1105,22 +1142,22 @@ async function refreshFromDesktop() {
   state.lastBridgeError = null;
   state.lastExecution = null;
   elements.payloadInput.value = JSON.stringify(json.snapshot, null, 2);
-  applyPayload(json.snapshot, "Refreshed from local desktop bridge");
+  applyPayload(json.snapshot, "通过本地桌面桥接刷新同步快照");
 }
 
 async function loadSampleAppSession() {
   const session = await fetchSampleAppSession();
-  applyAppSession(session, "Bundled app session");
+  applyAppSession(session, "内置应用会话");
 }
 
 async function refreshFullAppSession() {
   const session = await refreshAppSession({});
-  applyAppSession(session, "Desktop bridge app session");
+  applyAppSession(session, "桌面桥接应用会话");
 }
 
 async function executeSelectedAction() {
   if (!state.selectedAction) {
-    throw new Error("select an action before trying to run it");
+    throw new Error("执行前请先选择一个动作");
   }
 
   const actionId = state.selectedAction.action_id;
@@ -1129,15 +1166,15 @@ async function executeSelectedAction() {
   state.lastBridgeError = null;
   state.lastExecution = json.execution;
   elements.payloadInput.value = JSON.stringify(json.snapshot, null, 2);
-  applyPayload(json.snapshot, `Executed ${actionId} through local desktop bridge`);
+  applyPayload(json.snapshot, `通过本地桌面桥接执行动作：${actionId}`);
   elements.actionExecutionStatus.textContent =
-    `Executed ${json.execution.action.action_id} with status ${json.execution.status}.`;
+    `动作 ${json.execution.action.action_id} 已执行，状态为 ${json.execution.status}。`;
 }
 
 async function loadInitialPayload() {
   const explicitPath = resolveInitialPayloadPath();
   if (explicitPath) {
-    await loadPayloadFromPath(explicitPath, `Loaded from ${explicitPath}`);
+    await loadPayloadFromPath(explicitPath, `从 ${explicitPath} 加载`);
     return;
   }
 
@@ -1157,11 +1194,11 @@ async function loadInitialSession() {
     if (explicitWorkspacePath) {
       await loadWorkspaceShellFromPath(explicitWorkspacePath, explicitWorkspacePath);
     } else {
-      await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "bundled workspace shell sample");
+      await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "内置工作区样例");
     }
 
     if (explicitPayloadPath) {
-      await loadPayloadFromPath(explicitPayloadPath, `Loaded from ${explicitPayloadPath}`);
+      await loadPayloadFromPath(explicitPayloadPath, `从 ${explicitPayloadPath} 加载`);
     } else {
       await loadInitialPayload();
     }
@@ -1184,15 +1221,13 @@ async function loadInitialSession() {
 function applyTextareaPayload() {
   const raw = elements.payloadInput.value.trim();
   if (!raw) {
-    renderEmptyDashboard(
-      "Paste a sync-shell-snapshot, sync-center, or sync-activity JSON payload first.",
-    );
+    renderEmptyDashboard("请先粘贴 sync-shell-snapshot、sync-center 或 sync-activity JSON。");
     return;
   }
 
   state.lastBridgeError = null;
   state.lastExecution = null;
-  applyPayload(JSON.parse(raw), "Textarea JSON payload");
+  applyPayload(JSON.parse(raw), "文本框同步 JSON");
 }
 
 async function importLocalFile(file) {
@@ -1200,20 +1235,20 @@ async function importLocalFile(file) {
   elements.payloadInput.value = text;
   state.lastBridgeError = null;
   state.lastExecution = null;
-  applyPayload(JSON.parse(text), `Imported file: ${file.name}`);
+  applyPayload(JSON.parse(text), `导入文件：${file.name}`);
 }
 
 function applyWorkspaceTextareaPayload() {
   const raw = elements.workspaceInput.value.trim();
   if (!raw) {
-    throw new Error("Paste a workspace shell JSON payload first.");
+    throw new Error("请先粘贴工作区壳层 JSON。");
   }
-  applyWorkspaceShell(JSON.parse(raw), "Workspace textarea JSON payload");
+  applyWorkspaceShell(JSON.parse(raw), "文本框工作区 JSON");
 }
 
 async function importWorkspaceFile(file) {
   const text = await file.text();
-  applyWorkspaceShell(JSON.parse(text), `Imported workspace file: ${file.name}`);
+  applyWorkspaceShell(JSON.parse(text), `导入工作区文件：${file.name}`);
 }
 
 elements.loadSampleButton.addEventListener("click", async () => {
@@ -1256,7 +1291,7 @@ elements.loadLiveButton.addEventListener("click", async () => {
 
 elements.loadWorkspaceSampleButton.addEventListener("click", async () => {
   try {
-    await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "Bundled workspace shell sample");
+    await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "内置工作区样例");
   } catch (error) {
     elements.workspaceStatus.textContent = error instanceof Error ? error.message : String(error);
   }
@@ -1307,7 +1342,7 @@ elements.clearInputButton.addEventListener("click", () => {
   state.selectedAction = null;
   state.lastBridgeError = null;
   state.lastExecution = null;
-  state.sourceLabel = "Not loaded";
+  state.sourceLabel = "未加载";
   render();
 });
 
@@ -1372,7 +1407,7 @@ startBridgeStatusPolling({
 loadInitialSession().catch(async (error) => {
   try {
     state.workspaceShell = null;
-    state.workspaceSourceLabel = "Fallback inline sample";
+    state.workspaceSourceLabel = "内置兜底样例";
     elements.workspaceInput.value = JSON.stringify(WORKSPACE_SAMPLE, null, 2);
     renderWorkspaceChrome();
     await loadInitialPayload();
