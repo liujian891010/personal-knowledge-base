@@ -241,7 +241,7 @@ const state = {
   activeNavView: "overview",
   appSession: null,
   sessionHistory: [],
-  editorDraft: null,
+  editorDrafts: {},
 };
 
 const elements = {
@@ -1564,15 +1564,74 @@ function getSelectedWorkspaceNote() {
   return workspaceShell.notes[selectedId] || workspaceShell.notes["desktop-bridge"] || null;
 }
 
+function getEditorDraftByNoteId(noteId) {
+  if (!noteId) {
+    return null;
+  }
+  return state.editorDrafts[noteId] || null;
+}
+
 function getActiveEditorDraft() {
   const note = getSelectedWorkspaceNote();
   if (!note) {
     return null;
   }
-  if (state.editorDraft?.noteId === state.selectedWorkspaceNoteId) {
-    return state.editorDraft;
+  return getEditorDraftByNoteId(state.selectedWorkspaceNoteId);
+}
+
+function setEditorDraftForNote(noteId, draft) {
+  if (!noteId || !draft) {
+    return;
   }
-  return null;
+  state.editorDrafts = {
+    ...state.editorDrafts,
+    [noteId]: {
+      noteId,
+      title: draft.title,
+      body: draft.body,
+    },
+  };
+}
+
+function removeEditorDraftForNote(noteId) {
+  if (!noteId || !state.editorDrafts[noteId]) {
+    return;
+  }
+  const nextDrafts = { ...state.editorDrafts };
+  delete nextDrafts[noteId];
+  state.editorDrafts = nextDrafts;
+}
+
+function pruneEditorDrafts(workspaceShell) {
+  const nextDrafts = {};
+  for (const [noteId, draft] of Object.entries(state.editorDrafts)) {
+    const note = workspaceShell.notes?.[noteId];
+    if (!note) {
+      continue;
+    }
+    nextDrafts[noteId] = {
+      noteId,
+      title: typeof draft.title === "string" ? draft.title : note.title,
+      body: typeof draft.body === "string" ? draft.body : note.body,
+    };
+  }
+  state.editorDrafts = nextDrafts;
+}
+
+function collectDirtyEditorDrafts() {
+  const workspaceShell = getCurrentWorkspaceShell();
+  return Object.entries(state.editorDrafts)
+    .map(([noteId, draft]) => {
+      const note = workspaceShell.notes?.[noteId];
+      if (!note || !isEditorDraftDirty(note, draft)) {
+        return null;
+      }
+      return {
+        noteId,
+        title: draft.title?.trim() || note.title || noteId,
+      };
+    })
+    .filter(Boolean);
 }
 
 function isEditorDraftDirty(note, draft) {
@@ -1656,6 +1715,10 @@ function inferNoteRank(note, noteId) {
   if (note.statusLabel?.includes("草稿") || note.tags?.includes("draft")) {
     rank += 2 * 10 ** 12;
   }
+  const editorDraft = getEditorDraftByNoteId(noteId);
+  if (editorDraft && isEditorDraftDirty(note, editorDraft)) {
+    rank += 3 * 10 ** 12;
+  }
   return rank;
 }
 
@@ -1711,19 +1774,8 @@ function buildOverviewNoteRow(entry, options = {}) {
   `;
 }
 
-function getDirtyEditorDraft() {
-  if (!state.editorDraft) {
-    return null;
-  }
-  const workspaceShell = getCurrentWorkspaceShell();
-  const note = workspaceShell.notes?.[state.editorDraft.noteId];
-  if (!note || !isEditorDraftDirty(note, state.editorDraft)) {
-    return null;
-  }
-  return {
-    noteId: state.editorDraft.noteId,
-    title: state.editorDraft.title?.trim() || note.title || state.editorDraft.noteId,
-  };
+function getDirtyEditorDraft(excludedNoteId = null) {
+  return collectDirtyEditorDrafts().find((draft) => draft.noteId !== excludedNoteId) || null;
 }
 
 function findRecommendedSyncActionForNote(note) {
@@ -1733,10 +1785,10 @@ function findRecommendedSyncActionForNote(note) {
 
 function focusWorkspaceNoteForEdit(noteId) {
   const targetId = noteId || state.selectedWorkspaceNoteId;
-  const dirtyDraft = getDirtyEditorDraft();
+  const dirtyDraft = getDirtyEditorDraft(targetId);
   state.selectedWorkspaceNoteId = targetId;
   state.activeNavView = "overview";
-  if (dirtyDraft && dirtyDraft.noteId !== targetId) {
+  if (dirtyDraft) {
     elements.workspaceStatus.textContent =
       `已切换文档，但仍保留未保存草稿：${dirtyDraft.title}。请先保存或取消后再开始新的编辑。`;
     pushSessionHistory({
@@ -1867,7 +1919,6 @@ function countWorkspaceNotes(workspaceShell) {
 function renderWorkspaceTree() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
   const filteredSections = buildFilteredWorkspaceSections(workspaceShell);
-  const activeDraft = getActiveEditorDraft();
 
   if (!filteredSections.length) {
     elements.workspaceTree.innerHTML = `
@@ -1886,23 +1937,28 @@ function renderWorkspaceTree() {
           <div class="tree-list">
             ${section.items
               .map(
-                (item) => `
-                  <button
-                    class="tree-node ${item.id === state.selectedWorkspaceNoteId ? "is-active" : ""}"
-                    data-note-id="${escapeHtml(item.id)}"
-                    type="button"
-                  >
-                    <span class="tree-node-title">${escapeHtml(item.title)}</span>
-                    <span class="tree-node-path">${escapeHtml(item.path)}</span>
-                    <span class="tree-node-path">${escapeHtml(item.status)}</span>
-                    ${
-                      activeDraft?.noteId === item.id
-                        ? `<span class="tree-node-path tone-warning-inline">${escapeHtml(isEditorDraftDirty(workspaceShell.notes[item.id], activeDraft) ? "有未保存草稿" : "草稿编辑中")}</span>`
-                        : ""
-                    }
-                    <span class="tree-node-signals" data-signal-host="${escapeHtml(item.id)}"></span>
-                  </button>
-                `,
+                (item) => {
+                  const noteDraft = getEditorDraftByNoteId(item.id);
+                  const note = workspaceShell.notes[item.id];
+                  const draftLabel = noteDraft
+                    ? isEditorDraftDirty(note, noteDraft)
+                      ? "有未保存草稿"
+                      : "草稿编辑中"
+                    : "";
+                  return `
+                    <button
+                      class="tree-node ${item.id === state.selectedWorkspaceNoteId ? "is-active" : ""}"
+                      data-note-id="${escapeHtml(item.id)}"
+                      type="button"
+                    >
+                      <span class="tree-node-title">${escapeHtml(item.title)}</span>
+                      <span class="tree-node-path">${escapeHtml(item.path)}</span>
+                      <span class="tree-node-path">${escapeHtml(item.status)}</span>
+                      ${draftLabel ? `<span class="tree-node-path tone-warning-inline">${escapeHtml(draftLabel)}</span>` : ""}
+                      <span class="tree-node-signals" data-signal-host="${escapeHtml(item.id)}"></span>
+                    </button>
+                  `;
+                },
               )
               .join("")}
           </div>
@@ -1914,7 +1970,7 @@ function renderWorkspaceTree() {
   for (const button of elements.workspaceTree.querySelectorAll("[data-note-id]")) {
     button.addEventListener("click", () => {
       state.selectedWorkspaceNoteId = button.dataset.noteId;
-      renderWorkspaceChrome();
+      render();
     });
   }
 
@@ -1938,6 +1994,7 @@ function renderWorkspaceRail() {
   const workspaceShell = state.workspaceShell || WORKSPACE_SAMPLE;
   const note = getSelectedWorkspaceNote();
   const editorDraft = getActiveEditorDraft();
+  const dirtyDrafts = collectDirtyEditorDrafts();
   const draftInsight = buildEditorDraftInsight(note, editorDraft);
   const lastExecution = buildLastExecutionSummary();
   const visibleCount = getVisibleWorkspaceNoteIds(workspaceShell).length;
@@ -2014,13 +2071,19 @@ function renderWorkspaceRail() {
         </p>
       </article>
       ${
-        draftInsight
+        draftInsight || dirtyDrafts.length
           ? `
             <article class="session-rail-item">
-              <span class="session-rail-title">草稿状态</span>
-              <strong>${draftInsight.dirty ? "待保存修改" : "正在编辑"}</strong>
-              <p class="session-rail-copy">字数 ${escapeHtml(draftInsight.draftChars)} · 行数 ${escapeHtml(draftInsight.lines)}</p>
-              <p class="session-rail-copy">${escapeHtml(draftInsight.delta >= 0 ? `比已保存版本多 ${draftInsight.delta} 字` : `比已保存版本少 ${Math.abs(draftInsight.delta)} 字`)}</p>
+              <span class="session-rail-title">草稿队列</span>
+              <strong>${dirtyDrafts.length ? `${dirtyDrafts.length} 篇未保存` : "当前文档编辑中"}</strong>
+              <p class="session-rail-copy">
+                ${
+                  draftInsight
+                    ? escapeHtml(`当前文档 ${draftInsight.dirty ? "待保存修改" : "草稿已对齐"} · 字数 ${draftInsight.draftChars} · 行数 ${draftInsight.lines}`)
+                    : "当前文档暂无编辑草稿。"
+                }
+              </p>
+              <p class="session-rail-copy">${escapeHtml(dirtyDrafts.length ? dirtyDrafts.map((draft) => draft.title).join(" · ") : "其余文档当前没有挂起的未保存修改。")}</p>
             </article>
           `
           : ""
@@ -2218,7 +2281,10 @@ function renderWorkspaceEditor() {
   if (titleInput && bodyInput && editorDraft) {
     const updateDraftMeta = () => {
       const currentNote = getSelectedWorkspaceNote();
-      const currentDraft = state.editorDraft;
+      const currentDraft = getActiveEditorDraft();
+      if (!currentDraft) {
+        return;
+      }
       const isDirty = isEditorDraftDirty(currentNote, currentDraft);
       if (dirtyIndicator) {
         dirtyIndicator.className = `mini-pill ${isDirty ? "tone-warning" : "tone-success"}`;
@@ -2230,19 +2296,19 @@ function renderWorkspaceEditor() {
       }
     };
     titleInput.addEventListener("input", (event) => {
-      state.editorDraft = {
+      setEditorDraftForNote(editorDraft.noteId, {
         ...editorDraft,
         title: event.target.value,
         body: bodyInput.value,
-      };
+      });
       updateDraftMeta();
     });
     bodyInput.addEventListener("input", (event) => {
-      state.editorDraft = {
-        ...state.editorDraft,
+      setEditorDraftForNote(editorDraft.noteId, {
+        ...getActiveEditorDraft(),
         title: titleInput.value,
         body: event.target.value,
-      };
+      });
       updateDraftMeta();
     });
     const saveOnShortcut = (event) => {
@@ -2775,7 +2841,7 @@ function applyWorkspaceShell(payload, sourceLabel) {
   state.workspaceShell = workspaceShell;
   state.workspaceSourceLabel = sourceLabel;
   state.appSession = null;
-  state.editorDraft = null;
+  pruneEditorDrafts(workspaceShell);
   if (!workspaceShell.notes[state.selectedWorkspaceNoteId]) {
     state.selectedWorkspaceNoteId = Object.keys(workspaceShell.notes)[0] || "desktop-bridge";
   }
@@ -2947,34 +3013,35 @@ function startEditingSelectedNote() {
   if (!note) {
     return;
   }
-  state.editorDraft = {
+  setEditorDraftForNote(state.selectedWorkspaceNoteId, {
     noteId: state.selectedWorkspaceNoteId,
-    title: note.title,
-    body: note.body,
-  };
+    title: getEditorDraftByNoteId(state.selectedWorkspaceNoteId)?.title || note.title,
+    body: getEditorDraftByNoteId(state.selectedWorkspaceNoteId)?.body || note.body,
+  });
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
   render();
 }
 
 function cancelEditingSelectedNote() {
-  state.editorDraft = null;
+  removeEditorDraftForNote(state.selectedWorkspaceNoteId);
   render();
 }
 
 function saveEditingSelectedNote() {
-  if (!state.editorDraft) {
+  const activeDraft = getActiveEditorDraft();
+  if (!activeDraft) {
     return;
   }
 
   const workspaceShell = ensureEditableWorkspaceShell();
-  const note = workspaceShell.notes[state.editorDraft.noteId];
-  const item = findWorkspaceItemById(workspaceShell, state.editorDraft.noteId);
+  const note = workspaceShell.notes[activeDraft.noteId];
+  const item = findWorkspaceItemById(workspaceShell, activeDraft.noteId);
   if (!note) {
     return;
   }
 
-  const trimmedTitle = state.editorDraft.title.trim() || note.title;
-  const trimmedBody = state.editorDraft.body.trim();
+  const trimmedTitle = activeDraft.title.trim() || note.title;
+  const trimmedBody = activeDraft.body.trim();
   note.title = trimmedTitle;
   note.body = trimmedBody || note.body;
   note.lastSaved = "刚刚保存";
@@ -2993,7 +3060,7 @@ function saveEditingSelectedNote() {
   }
 
   state.workspaceSourceLabel = "浏览器本地草稿";
-  state.editorDraft = null;
+  removeEditorDraftForNote(activeDraft.noteId);
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
   elements.workspaceStatus.textContent = `已保存文档：${trimmedTitle}`;
   pushSessionHistory({
@@ -3072,11 +3139,11 @@ function createQuickCaptureNote() {
 
   state.selectedWorkspaceNoteId = draftId;
   state.workspaceSourceLabel = "浏览器本地草稿";
-  state.editorDraft = {
+  setEditorDraftForNote(draftId, {
     noteId: draftId,
     title,
     body: workspaceShell.notes[draftId].body,
-  };
+  });
   resetSearchQuery();
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
   elements.workspaceStatus.textContent = `已创建本地草稿：${title}`;
@@ -3207,7 +3274,7 @@ elements.clearInputButton.addEventListener("click", () => {
   state.activityFeed = null;
   state.snapshotMetadata = null;
   state.appSession = null;
-  state.editorDraft = null;
+  state.editorDrafts = {};
   state.selectedAction = null;
   state.lastBridgeError = null;
   state.lastExecution = null;
