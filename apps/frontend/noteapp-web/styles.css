@@ -173,6 +173,7 @@ pre {
 }
 
 .control-card p,
+.bridge-status,
 .summary-copy,
 .card-body,
 .activity-empty,
@@ -183,6 +184,10 @@ pre {
   margin: 0;
   color: var(--muted);
   line-height: 1.55;
+}
+
+.bridge-status {
+  margin-top: 12px;
 }
 
 .control-actions {
@@ -209,6 +214,14 @@ pre {
 .ghost:hover,
 .action-chip:hover {
   transform: translateY(-1px);
+}
+
+.solid:disabled,
+.ghost:disabled,
+.action-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+  transform: none;
 }
 
 .solid {

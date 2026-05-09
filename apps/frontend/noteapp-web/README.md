@@ -18,6 +18,14 @@ cd apps\frontend\noteapp-web
 npm run dev
 ```
 
+When `PKB_VAULT_ROOT` / `PKB_BASE_URL` / `PKB_VAULT_ID` / `PKB_DEVICE_ID` are set, the dev server also enables a local desktop bridge:
+
+1. `POST /api/bridge/refresh-snapshot`
+2. `POST /api/bridge/execute-action`
+3. `GET /api/bridge/status`
+
+The shell uses that bridge for `Refresh Local Snapshot` and `Run Selected Action`.
+
 Build static output:
 
 ```powershell
@@ -43,6 +51,10 @@ Then start the shell. Without any query parameter it will try `live-sync-shell.j
 
 ```powershell
 cd apps\frontend\noteapp-web
+$env:PKB_VAULT_ROOT='C:\vaults\pkb'
+$env:PKB_BASE_URL='https://sync.example.com'
+$env:PKB_VAULT_ID='vault-001'
+$env:PKB_DEVICE_ID='desktop-shanghai'
 npm run dev
 ```
 
