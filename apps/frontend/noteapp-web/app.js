@@ -536,7 +536,8 @@ function readLocalWorkspaceSession() {
       workspaceSourceLabel:
         typeof parsed.workspaceSourceLabel === "string" ? parsed.workspaceSourceLabel : "浏览器本地草稿",
       activeNavView:
-        typeof parsed.activeNavView === "string" && ["overview", "graph", "repository", "conflicts", "settings"].includes(parsed.activeNavView)
+        typeof parsed.activeNavView === "string" &&
+        ["overview", "graph", "repository", "conflicts", "settings", "debug"].includes(parsed.activeNavView)
           ? parsed.activeNavView
           : "overview",
       searchQuery: typeof parsed.searchQuery === "string" ? parsed.searchQuery : "",
@@ -1373,11 +1374,12 @@ function buildAppSessionState(session) {
 
 function formatNavViewLabel(view) {
   return {
-    overview: "总览",
-    graph: "知识图谱",
-    repository: "仓库浏览",
+    overview: "仪表盘",
+    graph: "图谱视图",
+    repository: "笔记库",
     conflicts: "冲突处理",
     settings: "设置",
+    debug: "调试中心",
   }[view] || view;
 }
 
@@ -1856,8 +1858,8 @@ function renderViewModeCard() {
   const viewConfigs = {
     repository: {
       tone: "info",
-      title: "仓库浏览视图",
-      detail: "这里围绕工作区目录、处理队列和当前焦点文档展开，适合连续整理内容、切换分区和进入编辑。",
+      title: "笔记库视图",
+      detail: "这里围绕当前笔记库、分区目录和焦点文档展开，适合连续整理内容、切换分区和进入编辑。",
       pills: [`当前可见：${visibleCount}/${totalCount}`, `搜索：${state.searchQuery ? `“${state.searchQuery}”` : "未启用"}`],
     },
     conflicts: {
@@ -1874,12 +1876,22 @@ function renderViewModeCard() {
     },
     settings: {
       tone: "info",
-      title: "本地设置视图",
-      detail: "这里集中管理本地桥接、工作区来源和调试入口，把低频接入动作与主工作台隔离开。",
+      title: "设置视图",
+      detail: "这里集中管理工作区接续、本地恢复和面向用户的偏好设置，调试入口已迁到独立的调试中心。",
       pills: [
         `工作区：${formatWorkspaceSourceLabel(state.workspaceSourceLabel)}`,
         `同步：${formatSyncSourceLabel(state.sourceLabel)}`,
         `AI：${buildAiBoundarySummary().headline}`,
+      ],
+    },
+    debug: {
+      tone: "warning",
+      title: "调试中心",
+      detail: "桥接诊断、原始数据导入、AI 边界细节和专家模式全部集中在这里，避免打断面向用户的主工作流。",
+      pills: [
+        `桥接：${state.bridgeStatus?.available ? "已连接" : "未连接"}`,
+        `AI：${buildAiBoundarySummary().available ? "在线" : "回退"}`,
+        `模式：${state.localUiSettings.expertMode ? "高级调试" : "普通工作台"}`,
       ],
     },
   };
@@ -1896,7 +1908,593 @@ function renderViewModeCard() {
   `;
 }
 
+function bindSurfaceNavButtons(root) {
+  for (const button of root.querySelectorAll("[data-surface-nav]")) {
+    button.addEventListener("click", () => {
+      state.activeNavView = button.dataset.surfaceNav || "overview";
+      render();
+    });
+  }
+}
+
+async function handleSurfaceCommand(command, root) {
+  if (command === "load-sample-session") {
+    try {
+      await loadSampleAppSession();
+    } catch (error) {
+      renderEmptyDashboard(error instanceof Error ? error.message : String(error));
+    }
+    return;
+  }
+
+  if (command === "load-workspace-sample") {
+    try {
+      await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "演示工作区");
+    } catch (error) {
+      elements.workspaceStatus.textContent = error instanceof Error ? error.message : String(error);
+    }
+    return;
+  }
+
+  if (command === "quick-capture") {
+    createQuickCaptureNote();
+    return;
+  }
+
+  if (command === "continue-local-workspace-session") {
+    const restoredSession = restoreLocalWorkspaceSession({
+      statusMessage: "已切回本地工作区草稿，可继续整理刚才的编辑上下文。",
+    });
+    if (!restoredSession) {
+      elements.workspaceStatus.textContent = "当前没有可恢复的本机工作区会话。";
+    }
+    return;
+  }
+
+  if (command === "load-bridge-session") {
+    try {
+      await refreshFullAppSession();
+    } catch (error) {
+      state.lastBridgeError = normalizeBridgeError(error);
+      elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
+      renderBridgeError(state.lastBridgeError);
+    }
+    return;
+  }
+
+  if (command === "toggle-expert-mode") {
+    persistLocalUiSettings({
+      ...state.localUiSettings,
+      expertMode: !state.localUiSettings.expertMode,
+    });
+    elements.workspaceStatus.textContent = state.localUiSettings.expertMode
+      ? "已开启高级调试模式。"
+      : "已切回普通工作台模式。";
+    render();
+    return;
+  }
+
+  if (command === "refresh-ai-boundary") {
+    await requestAiBoundaryStatus("manual");
+    render();
+    return;
+  }
+
+  if (command === "clear-local-workspace-session") {
+    clearLocalWorkspaceSession();
+    elements.workspaceStatus.textContent = "已清除本机自动恢复的工作区会话。";
+    render();
+    return;
+  }
+
+  if (command === "save-ai-raw-settings") {
+    const fileLimitInput = root.querySelector("#settings-ai-raw-file-limit");
+    const totalLimitInput = root.querySelector("#settings-ai-raw-total-limit");
+    const cleanupPolicyInput = root.querySelector("#settings-ai-raw-cleanup-policy");
+    const exportModeInput = root.querySelector("#settings-ai-raw-export-mode");
+    const didPersist = persistLocalUiSettings({
+      aiRawFileLimitMb: Number(fileLimitInput?.value || DEFAULT_LOCAL_UI_SETTINGS.aiRawFileLimitMb),
+      aiRawTotalLimitMb: Number(totalLimitInput?.value || DEFAULT_LOCAL_UI_SETTINGS.aiRawTotalLimitMb),
+      aiRawCleanupPolicy: cleanupPolicyInput?.value || DEFAULT_LOCAL_UI_SETTINGS.aiRawCleanupPolicy,
+      includeAiRawInExport: exportModeInput?.value === "include",
+    });
+    elements.workspaceStatus.textContent = didPersist
+      ? "已保存 `.ai/raw` 本地策略；它只影响本机，不会改变常规同步边界。"
+      : "保存 `.ai/raw` 本地策略失败，请检查浏览器本地存储是否可用。";
+    render();
+    return;
+  }
+
+  if (command === "reset-ai-raw-settings") {
+    persistLocalUiSettings(DEFAULT_LOCAL_UI_SETTINGS);
+    elements.workspaceStatus.textContent = "已恢复 `.ai/raw` 本地默认策略。";
+    render();
+    return;
+  }
+
+  if (command === "restore-all-recovery") {
+    restoreAllRecoveryDrafts();
+    return;
+  }
+
+  if (command === "discard-all-recovery") {
+    discardAllRecoveryDrafts();
+  }
+}
+
+function bindSurfaceCommandButtons(root) {
+  for (const button of root.querySelectorAll("[data-surface-command]")) {
+    button.addEventListener("click", async () => {
+      await handleSurfaceCommand(button.dataset.surfaceCommand, root);
+    });
+  }
+}
+
+function bindSurfaceViewButtons(root) {
+  for (const button of root.querySelectorAll("[data-view-command]")) {
+    button.addEventListener("click", async () => {
+      if (button.dataset.viewCommand === "refresh-bridge") {
+        await requestBridgeStatus();
+        render();
+        return;
+      }
+      if (button.dataset.viewCommand === "refresh-session") {
+        try {
+          await refreshFullAppSession();
+        } catch (error) {
+          state.lastBridgeError = normalizeBridgeError(error);
+          elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
+          renderBridgeError(state.lastBridgeError);
+        }
+      }
+    });
+  }
+}
+
+function renderSettingsSurface() {
+  const settings = buildSettingsSnapshot();
+  elements.viewDetailGrid.hidden = false;
+  elements.viewDetailGrid.innerHTML = `
+    <article class="view-detail-card">
+      <p class="card-section-label">Workspace</p>
+      <h3>继续当前工作区</h3>
+      <div class="detail-metric-grid">
+        <div class="detail-metric">
+          <span class="metric-label">当前入口</span>
+          <strong>${escapeHtml(settings.workspaceSourceDisplay)}</strong>
+        </div>
+        <div class="detail-metric">
+          <span class="metric-label">当前规模</span>
+          <strong>${escapeHtml(`${settings.totalNoteCount} 篇 / ${settings.visibleNoteCount} 可见`)}</strong>
+        </div>
+      </div>
+      <div class="view-stack">
+        <div class="detail-row detail-row-block">
+          <strong>${escapeHtml(settings.workspaceSourceSummary.headline)}</strong>
+          <span>${escapeHtml(settings.workspaceSourceSummary.detail)}</span>
+        </div>
+        <div class="detail-row">
+          <span>当前焦点</span>
+          <strong>${escapeHtml(settings.selectedNote?.title || "当前没有命中文档")}</strong>
+        </div>
+        <div class="detail-row">
+          <span>同步看板</span>
+          <strong>${escapeHtml(settings.syncSourceDisplay)}</strong>
+        </div>
+        ${
+          settings.appSession
+            ? `
+              <div class="detail-row">
+                <span>最近载入</span>
+                <strong>${escapeHtml(formatDateTime(settings.appSession.loadedAtMs))}</strong>
+              </div>
+            `
+            : ""
+        }
+      </div>
+      <div class="detail-actions">
+        ${
+          settings.canRestoreLocalSession
+            ? '<button class="solid detail-inline-button" data-surface-command="continue-local-workspace-session" type="button">继续本机草稿</button>'
+            : ""
+        }
+        ${
+          settings.bridgeAvailable
+            ? '<button class="ghost detail-inline-button" data-surface-command="load-bridge-session" type="button">切到桌面实时会话</button>'
+            : '<button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">检查桌面连接</button>'
+        }
+        <button class="ghost detail-inline-button" data-surface-command="load-sample-session" type="button">加载演示会话</button>
+        <button class="ghost detail-inline-button" data-surface-command="load-workspace-sample" type="button">打开演示工作区</button>
+      </div>
+    </article>
+    <article class="view-detail-card">
+      <p class="card-section-label">Recovery</p>
+      <h3>本机会话恢复</h3>
+      <div class="detail-metric-grid">
+        <div class="detail-metric">
+          <span class="metric-label">恢复状态</span>
+          <strong>${settings.localWorkspaceSession ? "已保存" : "未保存"}</strong>
+        </div>
+        <div class="detail-metric">
+          <span class="metric-label">恢复队列</span>
+          <strong>${escapeHtml(settings.recoveryCount)}</strong>
+        </div>
+      </div>
+      <div class="view-stack">
+        <div class="detail-row">
+          <span>最后保存</span>
+          <strong>${escapeHtml(settings.localWorkspaceSession ? formatDateTime(settings.localWorkspaceSession.savedAtMs) : "无")}</strong>
+        </div>
+        <div class="detail-row">
+          <span>焦点文档</span>
+          <strong>${escapeHtml(settings.localWorkspaceSession?.workspaceShell?.notes?.[settings.localWorkspaceSession?.selectedWorkspaceNoteId]?.title || "无")}</strong>
+        </div>
+        ${
+          settings.localWorkspaceSession?.activeNavView
+            ? `
+              <div class="detail-row">
+                <span>上次停留</span>
+                <strong>${escapeHtml(formatNavViewLabel(settings.localWorkspaceSession.activeNavView))}</strong>
+              </div>
+            `
+            : ""
+        }
+        ${
+          settings.localWorkspaceSession?.aiQuestion
+            ? `
+              <div class="detail-row detail-row-block">
+                <strong>最近 AI 问答</strong>
+                <span>${escapeHtml(settings.localWorkspaceSession.aiQuestion)}</span>
+                ${settings.localWorkspaceSession.aiHeadline ? `<span>${escapeHtml(settings.localWorkspaceSession.aiHeadline)}</span>` : ""}
+              </div>
+            `
+            : ""
+        }
+      </div>
+      <div class="detail-actions">
+        ${
+          settings.canRestoreLocalSession
+            ? '<button class="solid detail-inline-button" data-surface-command="continue-local-workspace-session" type="button">恢复到编辑区</button>'
+            : ""
+        }
+        ${
+          settings.localWorkspaceSession
+            ? '<button class="ghost detail-inline-button" data-surface-command="clear-local-workspace-session" type="button">清除本机会话</button>'
+            : ""
+        }
+        ${
+          settings.recoveryCount
+            ? '<button class="ghost detail-inline-button" data-surface-command="restore-all-recovery" type="button">恢复全部草稿</button>'
+            : ""
+        }
+        ${
+          settings.recoveryCount
+            ? '<button class="ghost detail-inline-button" data-surface-command="discard-all-recovery" type="button">清空恢复区</button>'
+            : ""
+        }
+      </div>
+    </article>
+    <article class="view-detail-card">
+      <p class="card-section-label">Status</p>
+      <h3>系统状态</h3>
+      <div class="detail-metric-grid">
+        <div class="detail-metric">
+          <span class="metric-label">桌面桥接</span>
+          <strong>${settings.bridgeAvailable ? "已连接" : "未连接"}</strong>
+        </div>
+        <div class="detail-metric">
+          <span class="metric-label">AI 边界</span>
+          <strong>${settings.aiBoundary.available ? "在线" : "回退"}</strong>
+        </div>
+      </div>
+      <div class="view-stack">
+        <div class="detail-row">
+          <span>桥接模式</span>
+          <strong>${escapeHtml(settings.bridgeMode)}</strong>
+        </div>
+        <div class="detail-row">
+          <span>AI 模式</span>
+          <strong>${escapeHtml(settings.aiBoundary.modeLabel)}</strong>
+        </div>
+        <div class="detail-row detail-row-block">
+          <strong>${escapeHtml(settings.aiBoundary.headline)}</strong>
+          <span>${escapeHtml(settings.aiBoundary.message || "当前 AI 问答和知识页编译会优先通过显式边界，必要时自动回退到本地生成。")}</span>
+        </div>
+      </div>
+      <div class="detail-actions">
+        <button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">刷新桥接状态</button>
+        <button class="ghost detail-inline-button" data-surface-command="refresh-ai-boundary" type="button">刷新 AI 边界</button>
+        <button class="solid detail-inline-button" data-surface-nav="debug" type="button">打开调试中心</button>
+      </div>
+    </article>
+    <article class="view-detail-card">
+      <p class="card-section-label">Flow</p>
+      <h3>整理偏好</h3>
+      <div class="view-stack">
+        <div class="detail-row detail-row-block">
+          <strong>当前建议</strong>
+          <span>${escapeHtml(settings.bridgeAvailable ? "如果准备处理真实同步问题，优先切到桌面实时会话；如果只是沉淀内容，继续本机草稿即可。" : "当前更适合先整理本机草稿、补充快速记录，或在演示会话里熟悉界面结构。")}</span>
+        </div>
+        <div class="detail-row">
+          <span>未保存草稿</span>
+          <strong>${escapeHtml(settings.dirtyDraftCount)}</strong>
+        </div>
+        <div class="detail-row">
+          <span>待恢复草稿</span>
+          <strong>${escapeHtml(settings.recoveryCount)}</strong>
+        </div>
+      </div>
+      <div class="detail-actions">
+        <button class="solid detail-inline-button" data-surface-command="quick-capture" type="button">新建快速记录</button>
+        <button class="ghost detail-inline-button" data-surface-nav="overview" type="button">返回仪表盘</button>
+        <button class="ghost detail-inline-button" data-surface-nav="repository" type="button">打开笔记库</button>
+        <button class="ghost detail-inline-button" data-surface-nav="conflicts" type="button">查看冲突解决</button>
+      </div>
+    </article>
+  `;
+  bindSurfaceNavButtons(elements.viewDetailGrid);
+  bindSurfaceCommandButtons(elements.viewDetailGrid);
+  bindSurfaceViewButtons(elements.viewDetailGrid);
+}
+
+function renderDebugSurface() {
+  const settings = buildSettingsSnapshot();
+  elements.viewDetailGrid.hidden = false;
+  elements.viewDetailGrid.innerHTML = `
+    <article class="view-detail-card">
+      <p class="card-section-label">Mode</p>
+      <h3>调试模式</h3>
+      <div class="detail-metric-grid">
+        <div class="detail-metric">
+          <span class="metric-label">当前模式</span>
+          <strong>${settings.expertMode ? "高级调试" : "普通工作台"}</strong>
+        </div>
+        <div class="detail-metric">
+          <span class="metric-label">高级入口</span>
+          <strong>${settings.expertMode ? "已显示" : "已收起"}</strong>
+        </div>
+      </div>
+      <div class="view-stack">
+        <div class="detail-row detail-row-block">
+          <strong>${settings.expertMode ? "当前保留所有调试入口" : "当前仅保留基础调试入口"}</strong>
+          <span>${escapeHtml(settings.expertMode ? "你现在可以直接查看桌面连接诊断、手动导入同步数据，以及手动粘贴工作区数据。" : "默认只保留调试中心主入口，避免把桥接、原始数据和专家面板带到用户工作流里。")}</span>
+        </div>
+        <div class="detail-row detail-row-block">
+          <strong>调试面板说明</strong>
+          <span>下方“调试中心”卡片已经承接桥接诊断、原始参数、手动导入和动作执行，不再占用主界面。</span>
+        </div>
+      </div>
+      <div class="detail-actions">
+        <button class="solid detail-inline-button" data-surface-command="toggle-expert-mode" type="button">${settings.expertMode ? "切回普通工作台" : "开启高级调试"}</button>
+        <button class="ghost detail-inline-button" data-surface-nav="settings" type="button">返回设置</button>
+      </div>
+    </article>
+    <article class="view-detail-card">
+      <p class="card-section-label">Bridge</p>
+      <h3>桌面桥接状态</h3>
+      <div class="detail-metric-grid">
+        <div class="detail-metric">
+          <span class="metric-label">可用</span>
+          <strong>${settings.bridgeAvailable ? "已连接" : "未连接"}</strong>
+        </div>
+        <div class="detail-metric">
+          <span class="metric-label">模式</span>
+          <strong>${escapeHtml(settings.bridgeMode)}</strong>
+        </div>
+      </div>
+      <div class="view-stack">
+        <div class="detail-row">
+          <span>配置来源</span>
+          <strong>${escapeHtml(settings.bridgeSource)}</strong>
+        </div>
+        <div class="detail-row">
+          <span>Vault ID</span>
+          <strong>${escapeHtml(settings.vaultId)}</strong>
+        </div>
+        <div class="detail-row">
+          <span>Vault Root</span>
+          <strong>${escapeHtml(settings.vaultRoot)}</strong>
+        </div>
+      </div>
+      <div class="token-grid">
+        ${
+          settings.missing.length
+            ? settings.missing.map((item) => `<span class="mini-pill tone-warning">${escapeHtml(formatBridgeMissingItem(item))}</span>`).join("")
+            : '<span class="mini-pill tone-success">桥接配置已齐全</span>'
+        }
+        ${
+          settings.diagnostics.slice(0, 4).length
+            ? settings.diagnostics
+                .slice(0, 4)
+                .map((item) => `<span class="mini-pill tone-${resolveTone(item.level)}">${escapeHtml(formatBridgeDiagnosticCode(item.code))}</span>`)
+                .join("")
+            : ""
+        }
+      </div>
+      <div class="detail-actions">
+        <button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">检查桌面连接</button>
+        <button class="solid detail-inline-button" data-view-command="refresh-session" type="button">刷新实时会话</button>
+      </div>
+    </article>
+    <article class="view-detail-card">
+      <p class="card-section-label">AI Boundary</p>
+      <h3>${escapeHtml(settings.aiBoundary.headline)}</h3>
+      <div class="detail-metric-grid">
+        <div class="detail-metric">
+          <span class="metric-label">当前模式</span>
+          <strong>${escapeHtml(settings.aiBoundary.modeLabel)}</strong>
+        </div>
+        <div class="detail-metric">
+          <span class="metric-label">最近检查</span>
+          <strong>${escapeHtml(settings.aiBoundary.checkedAtLabel)}</strong>
+        </div>
+      </div>
+      <div class="view-stack">
+        <div class="detail-row">
+          <span>问答来源</span>
+          <strong>${escapeHtml(settings.aiBoundary.answerSourceLabel)}</strong>
+        </div>
+        <div class="detail-row">
+          <span>知识页编译</span>
+          <strong>${escapeHtml(settings.aiBoundary.compileSourceLabel)}</strong>
+        </div>
+        <div class="detail-row detail-row-block">
+          <strong>${escapeHtml(settings.aiBoundary.capabilities.length ? "当前能力清单" : "当前未返回能力清单")}</strong>
+          <span>${escapeHtml(settings.aiBoundary.capabilities.length ? settings.aiBoundary.capabilities.join(" / ") : settings.aiBoundary.message || "可继续在右侧 AI 面板触发调用，观察边界状态变化。")}</span>
+        </div>
+        ${
+          settings.aiBoundary.message
+            ? `
+              <div class="detail-row detail-row-block">
+                <strong>最近失败原因</strong>
+                <span>${escapeHtml(settings.aiBoundary.message)}</span>
+              </div>
+            `
+            : ""
+        }
+      </div>
+      <div class="detail-actions">
+        <button class="ghost detail-inline-button" data-surface-command="refresh-ai-boundary" type="button">重查 AI 边界</button>
+      </div>
+    </article>
+    <article class="view-detail-card">
+      <p class="card-section-label">Session</p>
+      <h3>调试会话入口</h3>
+      <div class="view-stack">
+        <div class="detail-row detail-row-block">
+          <strong>当前工作区</strong>
+          <span>${escapeHtml(settings.workspaceSourceSummary.headline)}</span>
+          <span>${escapeHtml(settings.workspaceSourceSummary.detail)}</span>
+        </div>
+        ${
+          settings.appSession
+            ? `
+              <div class="detail-row">
+                <span>会话 ID</span>
+                <strong>${escapeHtml(settings.appSession.sessionId || "未进入应用会话")}</strong>
+              </div>
+              <div class="detail-row">
+                <span>载荷类型</span>
+                <strong>${escapeHtml(formatPayloadKindLabel(settings.appSession.payloadKind))}</strong>
+              </div>
+            `
+            : ""
+        }
+      </div>
+      <div class="detail-actions">
+        <button class="ghost detail-inline-button" data-surface-command="load-sample-session" type="button">加载演示会话</button>
+        <button class="ghost detail-inline-button" data-surface-command="load-workspace-sample" type="button">打开演示工作区</button>
+        ${
+          settings.bridgeAvailable
+            ? '<button class="ghost detail-inline-button" data-surface-command="load-bridge-session" type="button">切到桌面实时会话</button>'
+            : ""
+        }
+        ${
+          settings.canRestoreLocalSession
+            ? '<button class="solid detail-inline-button" data-surface-command="continue-local-workspace-session" type="button">继续本机草稿</button>'
+            : ""
+        }
+      </div>
+    </article>
+    <article class="view-detail-card">
+      <p class="card-section-label">AI Raw</p>
+      <h3>`.ai/raw` 本地策略</h3>
+      <div class="editor-sync-checklist">
+        <div class="editor-sync-item">
+          <span>单文件上限</span>
+          <strong>${escapeHtml(`${settings.localUiSettings.aiRawFileLimitMb} MB`)}</strong>
+        </div>
+        <div class="editor-sync-item">
+          <span>目录总量上限</span>
+          <strong>${escapeHtml(`${settings.localUiSettings.aiRawTotalLimitMb} MB`)}</strong>
+        </div>
+        <div class="editor-sync-item">
+          <span>清理策略</span>
+          <strong>${escapeHtml(formatAiRawCleanupPolicy(settings.localUiSettings.aiRawCleanupPolicy))}</strong>
+        </div>
+      </div>
+      <p class="summary-copy">这些设置只保存在当前浏览器本地，用于管理 `.ai/raw` 体积、清理和导出附带行为，不会把 `.ai/raw` 纳入常规同步。</p>
+      <div class="editor-draft-panel">
+        <label class="editor-field">
+          <span class="metric-label">单个抽取文本文件上限（MB）</span>
+          <input id="settings-ai-raw-file-limit" class="editor-title-input" type="number" min="1" max="100" step="1" value="${escapeHtml(settings.localUiSettings.aiRawFileLimitMb)}" />
+        </label>
+        <label class="editor-field">
+          <span class="metric-label">`.ai/raw` 目录总量上限（MB）</span>
+          <input id="settings-ai-raw-total-limit" class="editor-title-input" type="number" min="50" max="5000" step="50" value="${escapeHtml(settings.localUiSettings.aiRawTotalLimitMb)}" />
+        </label>
+        <label class="editor-field">
+          <span class="metric-label">超限时处理方式</span>
+          <select id="settings-ai-raw-cleanup-policy" class="editor-title-input">
+            <option value="prompt" ${settings.localUiSettings.aiRawCleanupPolicy === "prompt" ? "selected" : ""}>超限时先提醒</option>
+            <option value="prune-oldest" ${settings.localUiSettings.aiRawCleanupPolicy === "prune-oldest" ? "selected" : ""}>超限后清理最旧内容</option>
+            <option value="manual" ${settings.localUiSettings.aiRawCleanupPolicy === "manual" ? "selected" : ""}>仅手动清理</option>
+          </select>
+        </label>
+        <label class="editor-field">
+          <span class="metric-label">完整 Vault 导出时是否附带 `.ai/raw`</span>
+          <select id="settings-ai-raw-export-mode" class="editor-title-input">
+            <option value="exclude" ${settings.localUiSettings.includeAiRawInExport ? "" : "selected"}>默认不附带</option>
+            <option value="include" ${settings.localUiSettings.includeAiRawInExport ? "selected" : ""}>按本机偏好附带</option>
+          </select>
+        </label>
+      </div>
+      <div class="detail-actions">
+        <button class="solid detail-inline-button" data-surface-command="save-ai-raw-settings" type="button">保存到本机</button>
+        <button class="ghost detail-inline-button" data-surface-command="reset-ai-raw-settings" type="button">恢复默认</button>
+      </div>
+    </article>
+    <article class="view-detail-card">
+      <p class="card-section-label">Execution</p>
+      <h3>最近执行与恢复</h3>
+      <div class="view-stack">
+        ${
+          settings.lastExecution
+            ? `
+              <div class="detail-row detail-row-block">
+                <strong>${escapeHtml(settings.lastExecution.actionId)}</strong>
+                <span>${escapeHtml(`${settings.lastExecution.statusLabel} · ${settings.lastExecution.atLabel}`)}</span>
+                <span>${escapeHtml(settings.lastExecution.commandLine || "通过桌面桥接执行")}</span>
+              </div>
+            `
+            : '<div class="detail-row detail-row-block"><strong>最近还没有桥接执行记录</strong><span>可以先在工作区选中文档，再通过推荐动作进入同步流程。</span></div>'
+        }
+        <div class="detail-row detail-row-block">
+          <strong>${escapeHtml(settings.recoveryCount ? `有 ${settings.recoveryCount} 份本地恢复草稿` : "当前没有待恢复草稿")}</strong>
+          <span>${escapeHtml(settings.recoveryCount ? "这些内容仅保留在浏览器本地，可恢复后再决定是否保存正式草稿。" : "本地恢复区处于干净状态。")}</span>
+        </div>
+      </div>
+      <div class="detail-actions">
+        <button class="solid detail-inline-button" data-surface-command="quick-capture" type="button">新建快速记录</button>
+        ${
+          settings.recoveryCount
+            ? '<button class="ghost detail-inline-button" data-surface-command="restore-all-recovery" type="button">恢复全部草稿</button>'
+            : ""
+        }
+        ${
+          settings.recoveryCount
+            ? '<button class="ghost detail-inline-button" data-surface-command="discard-all-recovery" type="button">放弃恢复区</button>'
+            : ""
+        }
+      </div>
+    </article>
+  `;
+  bindSurfaceNavButtons(elements.viewDetailGrid);
+  bindSurfaceCommandButtons(elements.viewDetailGrid);
+  bindSurfaceViewButtons(elements.viewDetailGrid);
+}
+
 function renderViewDetailGrid() {
+  if (state.activeNavView === "settings") {
+    renderSettingsSurface();
+    return;
+  }
+
+  if (state.activeNavView === "debug") {
+    renderDebugSurface();
+    return;
+  }
+
   if (state.activeNavView === "overview") {
     const notes = collectWorkspaceNotes().sort((left, right) => right.rank - left.rank);
     const inboxNotes = notes.filter((entry) => entry.sectionId === "inbox").slice(0, 4);
@@ -3603,8 +4201,8 @@ function renderNavViewVisibility() {
   elements.cardsGrid.hidden = !showSyncSections;
   elements.activityCard.hidden = !showSyncSections;
   elements.viewDetailGrid.hidden = false;
-  elements.workspaceShellRoot.hidden = state.activeNavView === "settings";
-  elements.controlCenterCard.hidden = state.activeNavView !== "settings";
+  elements.workspaceShellRoot.hidden = state.activeNavView === "settings" || state.activeNavView === "debug";
+  elements.controlCenterCard.hidden = state.activeNavView !== "debug";
 }
 
 function deriveWorkspaceSyncContext(note) {
