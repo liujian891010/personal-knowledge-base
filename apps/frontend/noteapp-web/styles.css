@@ -861,6 +861,10 @@ pre {
   resize: vertical;
 }
 
+.ai-question-input {
+  min-height: 120px;
+}
+
 .editor-sync-box,
 .ai-sync-box,
 .ai-stat {

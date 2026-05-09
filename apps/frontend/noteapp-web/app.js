@@ -266,6 +266,12 @@ const state = {
   draftRecoveryMeta: {},
   recoveryDrafts: [],
   localUiSettings: DEFAULT_LOCAL_UI_SETTINGS,
+  aiCopilot: {
+    anchorNoteId: null,
+    scope: "current-note",
+    question: "",
+    lastAnswer: null,
+  },
   runtimeSessionId: createRuntimeSessionId(),
 };
 
@@ -1165,6 +1171,7 @@ function formatSessionEventLabel(type) {
     workspace_draft_restored: "恢复草稿已恢复",
     workspace_draft_discarded: "恢复草稿已放弃",
     workspace_ai_applied: "AI 建议已写入草稿",
+    ai_answer_generated: "AI 回答已生成",
     workspace_followup_created: "跟进笔记已创建",
     workspace_note_moved: "工作区文档已归档",
     workspace_session_restored: "本地工作区已恢复",
@@ -3680,6 +3687,178 @@ function buildAiBriefing({ note, noteBody, syncContext, draftInsight }) {
   };
 }
 
+function buildAiCopilotScopeOptions(note) {
+  const workspaceShell = getCurrentWorkspaceShell();
+  const currentSection = findWorkspaceSectionByNoteId(workspaceShell, note.id);
+  const visibleIds = getVisibleWorkspaceNoteIds(workspaceShell);
+  const searchActive = Boolean(normalizeSearchQuery(state.searchQuery));
+  return [
+    {
+      id: "current-note",
+      label: "当前笔记",
+      detail: `只围绕《${note.title}》回答`,
+      disabled: false,
+    },
+    {
+      id: "current-section",
+      label: currentSection ? currentSection.label : "当前分区",
+      detail: currentSection ? `覆盖 ${currentSection.label} 分区` : "覆盖当前分区",
+      disabled: !currentSection,
+    },
+    {
+      id: "search-results",
+      label: searchActive ? "搜索结果" : "当前筛选",
+      detail: searchActive ? `覆盖 ${visibleIds.length} 条搜索命中` : `覆盖 ${visibleIds.length} 篇当前可见文档`,
+      disabled: !visibleIds.length,
+    },
+    {
+      id: "workspace",
+      label: "整个工作区",
+      detail: `覆盖 ${Object.keys(workspaceShell.notes || {}).length} 篇文档`,
+      disabled: false,
+    },
+  ];
+}
+
+function resolveAiCopilotScopeContext(note) {
+  const workspaceShell = getCurrentWorkspaceShell();
+  const visibleIds = getVisibleWorkspaceNoteIds(workspaceShell);
+  const fallbackVisibleNotes = visibleIds.map((id) => workspaceShell.notes[id]).filter(Boolean);
+  const scope = state.aiCopilot.scope || "current-note";
+
+  if (scope === "current-section") {
+    const section = findWorkspaceSectionByNoteId(workspaceShell, note.id);
+    const notes = (section?.items || [])
+      .map((item) => workspaceShell.notes[item.id])
+      .filter(Boolean);
+    return {
+      id: "current-section",
+      label: section ? `${section.label} 分区` : "当前分区",
+      detail: section ? `聚焦 ${section.label} 下的 ${notes.length} 篇文档` : "未找到当前分区",
+      notes: notes.length ? notes : [note],
+    };
+  }
+
+  if (scope === "search-results") {
+    return {
+      id: "search-results",
+      label: normalizeSearchQuery(state.searchQuery) ? "搜索结果" : "当前筛选结果",
+      detail: normalizeSearchQuery(state.searchQuery)
+        ? `当前关键字“${state.searchQuery}”命中 ${fallbackVisibleNotes.length} 篇文档`
+        : `当前界面可见 ${fallbackVisibleNotes.length} 篇文档`,
+      notes: fallbackVisibleNotes.length ? fallbackVisibleNotes : [note],
+    };
+  }
+
+  if (scope === "workspace") {
+    const notes = Object.values(workspaceShell.notes || {});
+    return {
+      id: "workspace",
+      label: "整个工作区",
+      detail: `覆盖当前工作区的 ${notes.length} 篇文档`,
+      notes: notes.length ? notes : [note],
+    };
+  }
+
+  return {
+    id: "current-note",
+    label: "当前笔记",
+    detail: `只围绕《${note.title}》回答`,
+    notes: [note],
+  };
+}
+
+function buildAiCopilotSuggestedQuestions(note, syncContext, draftInsight) {
+  return [
+    `这篇笔记当前最值得先补什么？`,
+    draftInsight?.dirty ? "我应该先保存什么，再继续推进？" : "这篇内容下一步应该怎么推进？",
+    syncContext.signals[0]?.label ? `围绕“${syncContext.signals[0].label}”我需要注意什么？` : "这里目前最大的风险是什么？",
+    note.ai.relatedEntities[0] ? `这些内容和“${note.ai.relatedEntities[0]}”的关系是什么？` : "帮我梳理一下这篇内容的关联线索。",
+  ];
+}
+
+function buildAiCopilotAnswer({ note, noteBody, syncContext, draftInsight, aiBriefing }) {
+  const question = (state.aiCopilot.question || "").trim() || "这篇内容下一步应该怎么推进？";
+  const scopeContext = resolveAiCopilotScopeContext(note);
+  const normalizedQuestion = question.replace(/\s+/g, "");
+  const scopeNotes = scopeContext.notes;
+  const noteSummaries = scopeNotes
+    .slice(0, 3)
+    .map((entry) => `《${entry.title}》：${summarizeRichText(getEditorDraftByNoteId(entry.id)?.body || entry.body, 42)}`);
+  const aggregatedEntities = Array.from(
+    new Set(scopeNotes.flatMap((entry) => entry.ai?.relatedEntities || [])),
+  ).slice(0, 5);
+  const aggregatedLint = Array.from(new Set(scopeNotes.flatMap((entry) => entry.ai?.lint || []))).slice(0, 3);
+  const aggregatedSuggestions = Array.from(
+    new Set(scopeNotes.flatMap((entry) => entry.ai?.suggestions || [])),
+  ).slice(0, 4);
+
+  let headline = `${scopeContext.label}里最值得先推进的是补齐结论并明确下一步。`;
+  let summary = `${scopeContext.detail}。当前焦点仍是《${note.title}》，${aiBriefing.summary}`;
+  const bullets = [];
+
+  if (/风险|问题|阻塞|冲突|卡住|告警/.test(normalizedQuestion)) {
+    headline = `${scopeContext.label}里最需要先处理的是同步阻塞和内容风险。`;
+    summary = summaryHasBlockingSyncWork()
+      ? "当前同步侧仍有阻塞项，建议先把阻塞原因和待确认项写清楚，再继续提交或拉取。"
+      : "当前没有明显同步阻塞，但仍建议先核对 AI 提示和草稿中的模糊表述。";
+    bullets.push(
+      draftInsight?.dirty ? "先保存本地草稿，避免带着未定稿内容进入同步动作。" : "草稿已对齐，可以直接核对同步侧动作。",
+      aggregatedLint[0] || "优先核对本篇笔记里的风险提示，确认没有遗漏前置条件。",
+      syncContext.signals[0]?.label || "当前没有命中的同步告警，可继续关注内容质量。",
+    );
+  } else if (/下一步|行动|推进|待办|怎么做/.test(normalizedQuestion)) {
+    headline = draftInsight?.dirty ? "建议先定稿，再推进同步或跟进动作。" : "当前最适合先完成一条明确的下一步动作。";
+    summary = draftInsight?.dirty
+      ? "这篇内容还带着未保存草稿，先把当前结论保存下来，再决定是否进入同步或拆分跟进任务。"
+      : "这篇内容已经具备继续推进的条件，可以按优先级依次处理同步动作、结构补充和后续笔记拆分。";
+    bullets.push(
+      draftInsight?.dirty ? "先保存当前草稿，并确认标题与正文是否已经能代表当前结论。" : "保持当前草稿稳定，优先执行最靠前的一条同步或整理动作。",
+      syncContext.actions[0] || "补一段明确结论，减少后续回看成本。",
+      aggregatedSuggestions[0] || "如需继续拆分任务，可直接生成一篇跟进笔记。",
+    );
+  } else if (/关系|关联|实体|联系/.test(normalizedQuestion)) {
+    headline = `${scopeContext.label}当前最集中的关联线索已经浮出来了。`;
+    summary = aggregatedEntities.length
+      ? `当前高频实体主要集中在 ${aggregatedEntities.join("、")}，它们构成了这轮整理和追问的主线。`
+      : "当前还没有明显的高频实体线索，更适合先补正文和结构。";
+    bullets.push(
+      aggregatedEntities[0] ? `优先围绕“${aggregatedEntities[0]}”回看相关文档，确认术语和上下文是否一致。`
+        : "先补充正文中的实体名词，后续图谱和 AI 面板会更稳定。",
+      noteSummaries[0] || `当前焦点《${note.title}》是最直接的入口。`,
+      noteSummaries[1] || "如果需要跨文档梳理，可切到知识图谱继续查看相关节点。",
+    );
+  } else if (/结构|大纲|整理|重组/.test(normalizedQuestion)) {
+    headline = "先把结构骨架搭稳，再继续补细节会更高效。";
+    summary = aiBriefing.outline.length
+      ? `当前已经识别到 ${aiBriefing.outline.length} 个结构节点，可在此基础上继续补背景、结论和下一步。`
+      : "当前正文还缺少明显的小节结构，建议先补齐背景、核心信息和下一步三个最小分段。";
+    bullets.push(
+      aiBriefing.outline[0] ? `保留“${aiBriefing.outline[0]}”作为主骨架，再补 1-2 个平级小节。` : "先补“背景 / 核心信息 / 下一步”三段最小结构。",
+      noteSummaries[0] || "先提炼一段不超过 50 字的结论放在开头。",
+      aggregatedSuggestions[0] || "结构补齐后，再决定是否生成跟进笔记。",
+    );
+  } else {
+    bullets.push(
+      noteSummaries[0] || `《${note.title}》目前仍是这轮整理的主入口。`,
+      syncContext.actions[0] || aiBriefing.headline,
+      aggregatedSuggestions[0] || "如需沉淀更多结论，可把本轮回答直接写回草稿。",
+    );
+  }
+
+  return {
+    anchorNoteId: note.id,
+    question,
+    scopeLabel: scopeContext.label,
+    headline,
+    summary,
+    bullets: bullets.filter(Boolean).slice(0, 4),
+    sources: scopeNotes.slice(0, 3).map((entry) => ({ id: entry.id, title: entry.title })),
+    entities: aggregatedEntities,
+    generatedAtMs: Date.now(),
+  };
+}
+
 function upsertMarkdownSection(text, heading, content, level = 2) {
   const normalizedBody = String(text || "").trim();
   const normalizedContent = String(content || "").trim();
@@ -4728,6 +4907,13 @@ function renderWorkspaceAiPanel() {
     `;
     return;
   }
+  if (state.aiCopilot.anchorNoteId !== note.id) {
+    state.aiCopilot = {
+      ...state.aiCopilot,
+      anchorNoteId: note.id,
+      lastAnswer: null,
+    };
+  }
   const syncContext = deriveWorkspaceSyncContext(note);
   const editorDraft = getActiveEditorDraft();
   const draftInsight = buildEditorDraftInsight(note, editorDraft);
@@ -4748,6 +4934,11 @@ function renderWorkspaceAiPanel() {
   if (draftInsight && summaryHasBlockingSyncWork()) {
     draftActions.push("当前同步仍有阻塞项，草稿保存后建议先处理同步风险，再考虑提交。");
   }
+  const aiScopeOptions = buildAiCopilotScopeOptions(note);
+  const activeAiScope = resolveAiCopilotScopeContext(note);
+  const aiSuggestedQuestions = buildAiCopilotSuggestedQuestions(note, syncContext, draftInsight);
+  const aiLastAnswer =
+    state.aiCopilot.lastAnswer?.anchorNoteId === note.id ? state.aiCopilot.lastAnswer : null;
   const aiCommands = [
     {
       id: "start-edit",
@@ -4783,6 +4974,65 @@ function renderWorkspaceAiPanel() {
       </div>
       <span class="mini-pill tone-warning">联动</span>
     </div>
+    <section class="ai-sync-box">
+      <h3>AI 问答</h3>
+      <p class="ai-copy">调用前作用范围：${escapeHtml(activeAiScope.label)}。${escapeHtml(activeAiScope.detail)}</p>
+      <div class="detail-actions">
+        ${aiScopeOptions
+          .map(
+            (scope) =>
+              `<button class="${scope.id === state.aiCopilot.scope ? "solid" : "ghost"} detail-inline-button" data-ai-scope="${escapeHtml(scope.id)}" type="button" ${scope.disabled ? "disabled" : ""}>${escapeHtml(scope.label)}</button>`,
+          )
+          .join("")}
+      </div>
+      <div class="editor-draft-panel">
+        <label class="editor-field">
+          <span class="metric-label">本轮问题</span>
+          <textarea id="ai-question-input" class="editor-body-input ai-question-input" spellcheck="false" placeholder="例如：这篇内容下一步该怎么推进？">${escapeHtml(state.aiCopilot.question)}</textarea>
+        </label>
+      </div>
+      <div class="editor-tags">
+        ${aiSuggestedQuestions
+          .map(
+            (question) =>
+              `<button class="ghost detail-inline-button" data-ai-question-suggestion="${escapeHtml(question)}" type="button">${escapeHtml(question)}</button>`,
+          )
+          .join("")}
+      </div>
+      <div class="detail-actions">
+        <button class="solid detail-inline-button" data-ai-command="answer-question" type="button">生成本轮回答</button>
+      </div>
+      ${
+        aiLastAnswer
+          ? `
+            <article class="ai-action-card">
+              <strong>${escapeHtml(aiLastAnswer.headline)}</strong>
+              <p>${escapeHtml(aiLastAnswer.summary)}</p>
+              <ul class="ai-list">
+                ${aiLastAnswer.bullets.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+              </ul>
+              ${
+                aiLastAnswer.entities.length
+                  ? `<div class="editor-tags">${aiLastAnswer.entities.map((entity) => `<span class="ai-chip">${escapeHtml(entity)}</span>`).join("")}</div>`
+                  : ""
+              }
+              <div class="detail-actions">
+                <button class="solid detail-inline-button" data-ai-command="apply-answer-to-draft" type="button">写入问答结论</button>
+                <button class="ghost detail-inline-button" data-ai-command="create-followup" type="button">生成跟进笔记</button>
+              </div>
+              <div class="editor-tags">
+                ${aiLastAnswer.sources
+                  .map(
+                    (source) =>
+                      `<button class="ghost detail-inline-button" data-ai-source-note="${escapeHtml(source.id)}" type="button">${escapeHtml(source.title)}</button>`,
+                  )
+                  .join("")}
+              </div>
+            </article>
+          `
+          : '<p class="ai-copy">输入问题后，右侧会基于当前笔记、分区或工作区上下文生成一轮可写回草稿的回答。</p>'
+      }
+    </section>
     <section class="ai-brief-card">
       <p class="card-section-label">AI 速览</p>
       <h3>${escapeHtml(aiBriefing.headline)}</h3>
@@ -4931,11 +5181,49 @@ function renderWorkspaceAiPanel() {
     </section>
   `;
 
+  const aiQuestionInput = elements.workspaceAiPanel.querySelector("#ai-question-input");
+  if (aiQuestionInput) {
+    aiQuestionInput.addEventListener("input", (event) => {
+      state.aiCopilot.question = event.target.value;
+    });
+  }
+  for (const button of elements.workspaceAiPanel.querySelectorAll("[data-ai-scope]")) {
+    button.addEventListener("click", () => {
+      state.aiCopilot.scope = button.dataset.aiScope || "current-note";
+      state.aiCopilot.lastAnswer = null;
+      render();
+    });
+  }
+  for (const button of elements.workspaceAiPanel.querySelectorAll("[data-ai-question-suggestion]")) {
+    button.addEventListener("click", () => {
+      state.aiCopilot.question = button.dataset.aiQuestionSuggestion || "";
+      state.aiCopilot.lastAnswer = null;
+      render();
+    });
+  }
   for (const button of elements.workspaceAiPanel.querySelectorAll("[data-ai-command]")) {
     button.addEventListener("click", () => {
       const command = button.dataset.aiCommand;
       if (command === "start-edit") {
         ensureEditorDraftSession(state.selectedWorkspaceNoteId);
+        render();
+        return;
+      }
+      if (command === "answer-question") {
+        const answer = buildAiCopilotAnswer({
+          note,
+          noteBody,
+          syncContext,
+          draftInsight,
+          aiBriefing,
+        });
+        state.aiCopilot.lastAnswer = answer;
+        elements.workspaceStatus.textContent = `已生成 AI 回答：${answer.scopeLabel}`;
+        pushSessionHistory({
+          type: "ai_answer_generated",
+          level: "info",
+          detail: `${note.title} · ${answer.scopeLabel}`,
+        });
         render();
         return;
       }
@@ -4998,6 +5286,33 @@ function renderWorkspaceAiPanel() {
         );
         return;
       }
+      if (command === "apply-answer-to-draft") {
+        if (!state.aiCopilot.lastAnswer) {
+          return;
+        }
+        applyAiDraftMutation(
+          state.selectedWorkspaceNoteId,
+          ({ draft }) => ({
+            ...draft,
+            body: upsertMarkdownSection(
+              draft.body,
+              "AI 问答结论",
+              [
+                `- 提问：${state.aiCopilot.lastAnswer.question}`,
+                `- 作用范围：${state.aiCopilot.lastAnswer.scopeLabel}`,
+                `- 结论：${state.aiCopilot.lastAnswer.headline}`,
+                "",
+                ...state.aiCopilot.lastAnswer.bullets.map((item, index) => `${index + 1}. ${item}`),
+              ].join("\n"),
+            ),
+          }),
+          {
+            statusMessage: `已把 AI 问答结论写入草稿：${note.title}`,
+            historyDetail: `${note.title} · 写入 AI 问答结论`,
+          },
+        );
+        return;
+      }
       if (command === "create-followup") {
         createFollowUpNoteFromCurrent();
         return;
@@ -5009,6 +5324,12 @@ function renderWorkspaceAiPanel() {
       if (command === "cancel-edit") {
         cancelEditingSelectedNote();
       }
+    });
+  }
+  for (const button of elements.workspaceAiPanel.querySelectorAll("[data-ai-source-note]")) {
+    button.addEventListener("click", () => {
+      state.selectedWorkspaceNoteId = button.dataset.aiSourceNote || state.selectedWorkspaceNoteId;
+      render();
     });
   }
   for (const button of elements.workspaceAiPanel.querySelectorAll("[data-ai-entity]")) {
