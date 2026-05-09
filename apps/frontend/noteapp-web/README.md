@@ -30,6 +30,12 @@ http://127.0.0.1:4173/
 
 Inside the page you can now use `Load App Session` for the bundled end-to-end shell state, or `Refresh App Session` to pull a fresh desktop snapshot plus the workspace shell in one step.
 
+By default the page now boots from the bundled app session. If you want to prefer the live desktop bridge session on page load, open:
+
+```text
+http://127.0.0.1:4173/?session=live
+```
+
 You can also pass bridge config directly on the dev command line:
 
 ```powershell

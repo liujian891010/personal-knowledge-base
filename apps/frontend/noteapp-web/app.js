@@ -1075,13 +1075,9 @@ function resolveInitialWorkspacePath() {
   return search.get("workspace");
 }
 
-async function loadInitialWorkspaceShell() {
-  const explicitPath = resolveInitialWorkspacePath();
-  if (explicitPath) {
-    await loadWorkspaceShellFromPath(explicitPath, explicitPath);
-    return;
-  }
-  await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "bundled workspace shell sample");
+function resolveInitialSessionMode() {
+  const search = new URLSearchParams(window.location.search);
+  return search.get("session");
 }
 
 function applyWorkspaceShell(payload, sourceLabel) {
@@ -1150,6 +1146,39 @@ async function loadInitialPayload() {
   } catch {
     await loadSample();
   }
+}
+
+async function loadInitialSession() {
+  const explicitPayloadPath = resolveInitialPayloadPath();
+  const explicitWorkspacePath = resolveInitialWorkspacePath();
+  const sessionMode = resolveInitialSessionMode();
+
+  if (explicitPayloadPath || explicitWorkspacePath) {
+    if (explicitWorkspacePath) {
+      await loadWorkspaceShellFromPath(explicitWorkspacePath, explicitWorkspacePath);
+    } else {
+      await loadWorkspaceShellFromPath(WORKSPACE_SAMPLE_PATH, "bundled workspace shell sample");
+    }
+
+    if (explicitPayloadPath) {
+      await loadPayloadFromPath(explicitPayloadPath, `Loaded from ${explicitPayloadPath}`);
+    } else {
+      await loadInitialPayload();
+    }
+    return;
+  }
+
+  if (sessionMode === "live") {
+    try {
+      await refreshFullAppSession();
+      return;
+    } catch {
+      await loadSampleAppSession();
+      return;
+    }
+  }
+
+  await loadSampleAppSession();
 }
 
 function applyTextareaPayload() {
@@ -1340,12 +1369,14 @@ startBridgeStatusPolling({
     renderBridgeStatus();
   },
 });
-loadInitialWorkspaceShell().catch(() => {
-  state.workspaceShell = null;
-  state.workspaceSourceLabel = "Fallback inline sample";
-  elements.workspaceInput.value = JSON.stringify(WORKSPACE_SAMPLE, null, 2);
-  renderWorkspaceChrome();
-});
-loadInitialPayload().catch((error) => {
-  renderEmptyDashboard(error instanceof Error ? error.message : String(error));
+loadInitialSession().catch(async (error) => {
+  try {
+    state.workspaceShell = null;
+    state.workspaceSourceLabel = "Fallback inline sample";
+    elements.workspaceInput.value = JSON.stringify(WORKSPACE_SAMPLE, null, 2);
+    renderWorkspaceChrome();
+    await loadInitialPayload();
+  } catch {
+    renderEmptyDashboard(error instanceof Error ? error.message : String(error));
+  }
 });
