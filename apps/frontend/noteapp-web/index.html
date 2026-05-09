@@ -130,22 +130,23 @@
               </details>
             </details>
             <details class="details-block">
-              <summary>桥接动作与执行结果</summary>
+              <summary>本地动作执行</summary>
               <p id="action-contract-help">
-                在面板、卡片或活动流中选择动作后，这里会显示它的执行契约和返回结果。
+                在总览、冲突处理或仓库浏览里选中动作后，这里会显示当前动作、执行条件和最近结果。
               </p>
+              <div id="action-execution-card" class="session-rail-grid"></div>
               <div class="control-actions">
                 <button id="execute-selected-button" class="solid">执行当前动作</button>
               </div>
-              <details class="details-block details-block-nested">
+              <details class="details-block details-block-nested" data-advanced-control>
                 <summary>查看动作契约</summary>
                 <pre id="action-contract-output">尚未选择任何动作。</pre>
               </details>
-              <details class="details-block details-block-nested">
+              <details class="details-block details-block-nested" data-advanced-control>
                 <summary>查看动作结果</summary>
                 <pre id="action-result-output">尚未执行任何动作。</pre>
               </details>
-              <details class="details-block details-block-nested">
+              <details class="details-block details-block-nested" data-advanced-control>
                 <summary>查看桥接错误</summary>
                 <pre id="bridge-error-output" class="compact-output">当前没有桥接错误。</pre>
               </details>

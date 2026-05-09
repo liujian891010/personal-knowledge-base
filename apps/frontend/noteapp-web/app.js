@@ -250,6 +250,7 @@ const state = {
   workspaceSourceLabel: "未加载",
   selectedWorkspaceNoteId: "desktop-bridge",
   selectedAction: null,
+  selectedActionSource: null,
   bridgeStatus: null,
   bridgeCheckedAtMs: null,
   lastBridgeError: null,
@@ -285,6 +286,7 @@ const elements = {
   cardsGrid: document.getElementById("cards-grid"),
   activityCard: document.getElementById("activity-card"),
   actionContractOutput: document.getElementById("action-contract-output"),
+  actionExecutionCard: document.getElementById("action-execution-card"),
   actionContractHelp: document.getElementById("action-contract-help"),
   actionResultOutput: document.getElementById("action-result-output"),
   payloadInput: document.getElementById("payload-input"),
@@ -503,6 +505,78 @@ function renderExecutionResult(execution) {
   elements.actionResultOutput.textContent = JSON.stringify(execution, null, 2);
 }
 
+function renderActionExecutionPanel() {
+  if (!elements.actionExecutionCard) {
+    return;
+  }
+
+  const selectedAction = state.selectedAction;
+  const lastExecution = buildLastExecutionSummary();
+  const bridgeReady = Boolean(state.bridgeStatus?.available);
+  const selectedSource = state.selectedActionSource
+    ? formatActionSourceLabel(state.selectedActionSource)
+    : "尚未选择";
+  const readinessLabel = selectedAction
+    ? selectedAction.enabled === false
+      ? "当前不可执行"
+      : bridgeReady
+        ? "可以执行"
+        : "等待本地桥接"
+    : "等待选择动作";
+  const readinessTone = selectedAction
+    ? selectedAction.enabled === false
+      ? "warning"
+      : bridgeReady
+        ? "success"
+        : "warning"
+    : "info";
+  const nextStep = !selectedAction
+    ? "先在总览、仓库浏览或冲突处理中选中一个动作。"
+    : selectedAction.enabled === false
+      ? selectedAction.reason
+        ? `先处理：${formatActionReason(selectedAction.reason)}`
+        : "当前动作暂不可执行，请先处理前置条件。"
+      : bridgeReady
+        ? "可以直接执行当前动作，执行后结果会回写到这里。"
+        : "先连接本地桌面桥接，再执行当前动作。";
+
+  elements.actionExecutionCard.innerHTML = `
+    <article class="session-rail-item">
+      <span class="session-rail-title">当前动作</span>
+      <strong>${escapeHtml(selectedAction?.label || "尚未选择动作")}</strong>
+      <p class="session-rail-copy">${escapeHtml(selectedAction ? `${selectedAction.action_id} · ${selectedSource}` : "从工作台中挑选一个动作后，这里会进入可执行状态。")}</p>
+      <div class="session-rail-pills">
+        <span class="mini-pill tone-${readinessTone}">${escapeHtml(readinessLabel)}</span>
+        ${
+          selectedAction?.requires_confirmation
+            ? '<span class="mini-pill tone-warning">需要确认</span>'
+            : ""
+        }
+      </div>
+    </article>
+    <article class="session-rail-item">
+      <span class="session-rail-title">执行条件</span>
+      <strong>${escapeHtml(bridgeReady ? "本地桥接已就绪" : "本地桥接未就绪")}</strong>
+      <p class="session-rail-copy">${escapeHtml(nextStep)}</p>
+      ${
+        selectedAction?.command
+          ? `<p class="session-rail-copy">${escapeHtml(`动作命令：${selectedAction.command}`)}</p>`
+          : ""
+      }
+    </article>
+    <article class="session-rail-item">
+      <span class="session-rail-title">最近结果</span>
+      <strong>${escapeHtml(lastExecution ? `${lastExecution.statusLabel} · ${lastExecution.actionId}` : "还没有执行记录")}</strong>
+      <p class="session-rail-copy">${escapeHtml(lastExecution ? `${lastExecution.atLabel} · ${lastExecution.commandLine || "通过本地桥接执行"}` : "执行后的结果会在这里汇总展示。")}</p>
+      ${
+        state.lastBridgeError
+          ? `<p class="session-rail-copy tone-warning-inline">${escapeHtml(`最近错误：${state.lastBridgeError.message}`)}</p>`
+          : ""
+      }
+    </article>
+  `;
+}
+
 function normalizeBridgeError(error) {
   if (!error) {
     return null;
@@ -626,14 +700,16 @@ function renderControlCenterMode() {
 
 function setSelectedAction(action, source = "手动选择") {
   state.selectedAction = action;
+  state.selectedActionSource = action ? source : null;
 
   if (!action) {
     elements.actionContractHelp.textContent =
-      "请在面板、卡片或活动流中先选择一个动作，这里会展示它对应的执行契约。";
+      "请先从总览、仓库浏览或冲突处理中选中一个动作，再回到这里执行。";
     elements.actionContractOutput.textContent = "尚未选择任何动作。";
     elements.actionExecutionStatus.textContent =
-      "只有本地桌面桥接配置完整后，才能真正执行动作。";
+      "只有本地桌面桥接可用，且动作本身未被门禁阻塞时，才允许执行。";
     elements.executeSelectedButton.disabled = true;
+    renderActionExecutionPanel();
     refreshActionChipSelection();
     return;
   }
@@ -654,16 +730,17 @@ function setSelectedAction(action, source = "手动选择") {
   }
 
   elements.actionContractHelp.textContent =
-    "前端不会直接执行动作；这里只展示会被本地 bridge 转发的精确执行契约。";
+    "普通模式下这里优先展示执行条件与结果；如需核对原始命令契约，可切到高级调试模式查看。";
   elements.actionContractOutput.textContent = lines.join("\n");
   elements.actionExecutionStatus.textContent =
-    "点击“执行当前动作”后，会通过本地桌面 bridge 转发该契约。";
+    "点击“执行当前动作”后，会通过本地桌面 bridge 执行并把结果回写到当前面板。";
   elements.executeSelectedButton.disabled = !state.bridgeStatus?.available;
   pushSessionHistory({
     type: "sync_action_selected",
     level: action.enabled === false ? "warning" : "info",
     detail: `${action.action_id} · ${formatActionSourceLabel(source)}`,
   });
+  renderActionExecutionPanel();
   refreshActionChipSelection();
 }
 
@@ -4815,6 +4892,7 @@ function render() {
   renderControlCenterMode();
   renderBridgeStatus();
   renderExecutionResult(state.lastExecution);
+  renderActionExecutionPanel();
   renderWorkspaceChrome();
 
   if (!state.syncCenter && !state.activityFeed) {
@@ -5495,6 +5573,7 @@ elements.clearInputButton.addEventListener("click", () => {
   state.editorDrafts = {};
   state.draftRecoveryMeta = {};
   state.selectedAction = null;
+  state.selectedActionSource = null;
   state.lastBridgeError = null;
   state.lastExecution = null;
   state.lastExecutionAtMs = null;
