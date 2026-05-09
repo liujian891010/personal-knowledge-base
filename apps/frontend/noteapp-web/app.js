@@ -692,6 +692,7 @@ function formatStatusLabel(status) {
     degraded: "降级",
     stale: "过期",
     unsupported: "不支持",
+    unknown: "未知",
   }[status] || status;
 }
 
@@ -1018,13 +1019,113 @@ function buildRepositorySnapshot() {
 function buildConflictSnapshot() {
   const summary = state.syncCenter?.summary || null;
   const conflicts = summary?.conflicts || {};
+  const activityRecords = Array.isArray(state.activityFeed?.records)
+    ? state.activityFeed.records
+    : Array.isArray(state.syncCenter?.recent_activity?.records)
+      ? state.syncCenter.recent_activity.records
+      : [];
+  const blockingReasons = Array.isArray(summary?.commit_gate?.blocking_reasons)
+    ? summary.commit_gate.blocking_reasons.map(formatBlockingReason)
+    : [];
+  const rawBlockingReasons = Array.isArray(summary?.commit_gate?.blocking_reasons)
+    ? summary.commit_gate.blocking_reasons
+    : [];
+  const lastFailure = [...activityRecords].reverse().find((record) => record.status === "failed") || null;
+  const workerHealth = summary?.worker_health || null;
+  const impactedNotes = collectWorkspaceNotes()
+    .map((entry) => {
+      const syncContext = deriveWorkspaceSyncContext(entry.note);
+      const recommendation = findRecommendedSyncActionForNote(entry.note);
+      const watchReasons = Array.isArray(entry.note?.syncContext?.watchBlockingReasons)
+        ? entry.note.syncContext.watchBlockingReasons
+        : [];
+      const watchActionIds = Array.isArray(entry.note?.syncContext?.watchActionIds)
+        ? entry.note.syncContext.watchActionIds
+        : [];
+      const reasonHits = rawBlockingReasons.filter((reason) => watchReasons.includes(reason)).map(formatBlockingReason);
+      const actionHit =
+        lastFailure && watchActionIds.includes(lastFailure.action_id)
+          ? `${lastFailure.action_id} · ${formatStatusLabel(lastFailure.status)}`
+          : null;
+      const riskSignals = syncContext.signals
+        .filter((signal) => signal.level === "danger" || signal.level === "warning")
+        .map((signal) => signal.label)
+        .slice(0, 3);
+      return {
+        ...entry,
+        recommendation,
+        syncContext,
+        reasonHits,
+        actionHit,
+        riskSignals,
+      };
+    })
+    .filter(
+      (entry) =>
+        entry.reasonHits.length ||
+        entry.actionHit ||
+        entry.note.statusTone === "warning" ||
+        entry.note.statusTone === "danger" ||
+        entry.riskSignals.length,
+    )
+    .sort(
+      (left, right) =>
+        right.reasonHits.length - left.reasonHits.length ||
+        right.riskSignals.length - left.riskSignals.length ||
+        right.rank - left.rank,
+    )
+    .slice(0, 6);
+  const recoverySteps = [];
+  if (summary?.commit_gate?.requires_full_pull) {
+    recoverySteps.push({
+      label: "先执行 Pull 重建同步基线",
+      detail: "当前提交门禁要求先完整拉取，否则本地变更和远端基线无法对齐。",
+    });
+  }
+  if (summary?.commit_gate?.has_active_sync_apply_journal) {
+    recoverySteps.push({
+      label: "优先完成 sync apply journal 恢复",
+      detail: "说明上次远端应用流程未完成，应该先恢复 journal，再继续新的同步动作。",
+    });
+  }
+  if (summary?.commit_gate?.has_active_commit_journal) {
+    recoverySteps.push({
+      label: "检查 commit journal 是否仍在占用",
+      detail: "如果本地仍有未完成提交流程，需要先恢复或清理后再进入下一次提交。",
+    });
+  }
+  if (conflicts.actual_has_unresolved_conflicts || (conflicts.conflict_copies?.length || 0) || (conflicts.conflict_orphans?.length || 0)) {
+    recoverySteps.push({
+      label: "逐个处理本地冲突工件",
+      detail: "确认冲突副本、孤立冲突文件和原文档去向，再决定保留、整理还是放弃。",
+    });
+  }
+  if (lastFailure) {
+    recoverySteps.push({
+      label: `回看最近失败动作：${lastFailure.action_id}`,
+      detail: `${formatActionSourceLabel(lastFailure.source)} · ${lastFailure.message || formatStatusLabel(lastFailure.status)}`,
+    });
+  }
+  if (!recoverySteps.length) {
+    recoverySteps.push({
+      label: "当前没有显式冲突工件",
+      detail: "可以重点检查最近活动、工作区草稿和下一步同步动作是否仍然一致。",
+    });
+  }
   return {
-    blockingReasons: Array.isArray(summary?.commit_gate?.blocking_reasons)
-      ? summary.commit_gate.blocking_reasons.map(formatBlockingReason)
-      : [],
+    blockingReasons,
+    rawBlockingReasons,
     copies: Array.isArray(conflicts.conflict_copies) ? conflicts.conflict_copies : [],
     orphans: Array.isArray(conflicts.conflict_orphans) ? conflicts.conflict_orphans : [],
     canSubmit: Boolean(summary?.commit_gate?.can_submit_commit),
+    workerHealth,
+    lastFailure,
+    impactedNotes,
+    recoverySteps,
+    hasActiveCommitJournal: Boolean(summary?.commit_gate?.has_active_commit_journal),
+    hasActiveSyncApplyJournal: Boolean(summary?.commit_gate?.has_active_sync_apply_journal),
+    requiresFullPull: Boolean(summary?.commit_gate?.requires_full_pull),
+    activityRecords,
   };
 }
 
@@ -1867,6 +1968,7 @@ function renderViewDetailGrid() {
 
   if (state.activeNavView === "conflicts") {
     const conflictSnapshot = buildConflictSnapshot();
+    const conflictActions = collectConflictActions();
     elements.viewDetailGrid.hidden = false;
     elements.viewDetailGrid.innerHTML = `
       <article class="view-detail-card">
@@ -1881,6 +1983,14 @@ function renderViewDetailGrid() {
             <span class="metric-label">阻塞项</span>
             <strong>${escapeHtml(conflictSnapshot.blockingReasons.length)}</strong>
           </div>
+          <div class="detail-metric">
+            <span class="metric-label">同步线程</span>
+            <strong>${escapeHtml(formatStatusLabel(conflictSnapshot.workerHealth?.status || "unknown"))}</strong>
+          </div>
+          <div class="detail-metric">
+            <span class="metric-label">最近失败</span>
+            <strong>${escapeHtml(conflictSnapshot.lastFailure ? conflictSnapshot.lastFailure.action_id : "无")}</strong>
+          </div>
         </div>
         <div class="token-grid">
           ${conflictSnapshot.blockingReasons.length
@@ -1888,11 +1998,87 @@ function renderViewDetailGrid() {
                 .map((reason) => `<span class="mini-pill tone-danger">${escapeHtml(reason)}</span>`)
                 .join("")
             : '<span class="mini-pill tone-success">当前无阻塞原因</span>'}
+          ${
+            conflictSnapshot.requiresFullPull
+              ? '<span class="mini-pill tone-warning">需要先完整拉取</span>'
+              : ""
+          }
+          ${
+            conflictSnapshot.hasActiveCommitJournal
+              ? '<span class="mini-pill tone-warning">存在 commit journal</span>'
+              : ""
+          }
+          ${
+            conflictSnapshot.hasActiveSyncApplyJournal
+              ? '<span class="mini-pill tone-warning">存在 sync apply journal</span>'
+              : ""
+          }
+        </div>
+        <div class="detail-actions">
+          <button class="ghost detail-inline-button" data-conflict-command="refresh-session" type="button">刷新实时会话</button>
+          <button class="ghost detail-inline-button" data-conflict-command="refresh-bridge" type="button">刷新桥接状态</button>
+          ${
+            conflictSnapshot.lastFailure
+              ? `<button class="solid detail-inline-button" data-conflict-select-action="${escapeHtml(conflictSnapshot.lastFailure.action_id)}" type="button">选中最近失败动作</button>`
+              : ""
+          }
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">恢复顺序</p>
+        <h3>建议处置步骤</h3>
+        <div class="view-stack">
+          ${conflictSnapshot.recoverySteps
+            .map(
+              (step, index) => `
+                <div class="detail-row detail-row-block">
+                  <strong>${escapeHtml(`${index + 1}. ${step.label}`)}</strong>
+                  <span>${escapeHtml(step.detail)}</span>
+                </div>
+              `,
+            )
+            .join("")}
+        </div>
+        <div class="detail-actions" id="conflict-detail-actions"></div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">受影响文档</p>
+        <h3>建议优先检查</h3>
+        <div class="view-stack">
+          ${
+            conflictSnapshot.impactedNotes.length
+              ? conflictSnapshot.impactedNotes
+                  .map(
+                    (entry) =>
+                      buildOverviewNoteRow(entry, {
+                        summary: [
+                          entry.reasonHits[0] || null,
+                          entry.actionHit ? `最近失败：${entry.actionHit}` : null,
+                          entry.syncContext.actions[0] || null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · "),
+                        pills: [
+                          entry.note.statusLabel || entry.status,
+                          ...entry.riskSignals.slice(0, 2),
+                        ],
+                        buttons: [
+                          `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                          `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">编辑</button>`,
+                          entry.recommendation
+                            ? `<button class="ghost detail-inline-button" data-note-select-action="${escapeHtml(entry.id)}" type="button">选中推荐动作</button>`
+                            : "",
+                        ],
+                      }),
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前没有直接命中的高优先级文档，可先按阻塞项和最近失败动作处理。</p></div>'
+          }
         </div>
       </article>
       <article class="view-detail-card">
         <p class="card-section-label">冲突清单</p>
-        <h3>本地冲突工件</h3>
+        <h3>本地工件与最近失败</h3>
         <div class="view-stack">
           ${
             [...conflictSnapshot.copies, ...conflictSnapshot.orphans].length
@@ -1906,15 +2092,77 @@ function renderViewDetailGrid() {
                     `,
                   )
                   .join("")
-              : '<div class="empty-state"><p>当前样例没有返回具体冲突文件，说明冲突面板已比阻塞态更靠前。</p></div>'
+              : '<div class="detail-row detail-row-block"><strong>当前没有具体冲突文件</strong><span>这说明当前问题更偏向同步基线、动作失败或门禁阻塞，而不是文件级冲突副本。</span></div>'
+          }
+          ${
+            conflictSnapshot.lastFailure
+              ? `
+                <div class="detail-row detail-row-block">
+                  <strong>${escapeHtml(`最近失败动作：${conflictSnapshot.lastFailure.action_id}`)}</strong>
+                  <span>${escapeHtml(`${formatDateTime(conflictSnapshot.lastFailure.occurred_at_ms)} · ${formatActionSourceLabel(conflictSnapshot.lastFailure.source)}`)}</span>
+                  <span>${escapeHtml(conflictSnapshot.lastFailure.message || formatStatusLabel(conflictSnapshot.lastFailure.status))}</span>
+                </div>
+              `
+              : ""
           }
         </div>
-        <div class="detail-actions" id="conflict-detail-actions"></div>
       </article>
     `;
     const conflictActionsHost = elements.viewDetailGrid.querySelector("#conflict-detail-actions");
-    for (const { action, source } of collectConflictActions()) {
+    for (const { action, source } of conflictActions) {
       conflictActionsHost?.appendChild(createActionChip(action, source));
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-open]")) {
+      button.addEventListener("click", () => {
+        state.selectedWorkspaceNoteId = button.dataset.noteOpen || state.selectedWorkspaceNoteId;
+        state.activeNavView = "repository";
+        render();
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-edit]")) {
+      button.addEventListener("click", () => {
+        focusWorkspaceNoteForEdit(button.dataset.noteEdit || state.selectedWorkspaceNoteId);
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-select-action]")) {
+      button.addEventListener("click", () => {
+        selectRecommendedSyncActionForNote(button.dataset.noteSelectAction || state.selectedWorkspaceNoteId);
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-conflict-select-action]")) {
+      button.addEventListener("click", () => {
+        const matched = conflictActions.find(({ action }) => action.action_id === button.dataset.conflictSelectAction);
+        if (!matched) {
+          return;
+        }
+        setSelectedAction(matched.action, matched.source);
+        render();
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-conflict-command]")) {
+      button.addEventListener("click", async () => {
+        const command = button.dataset.conflictCommand;
+        if (command === "refresh-bridge") {
+          try {
+            await requestBridgeStatus();
+            render();
+          } catch (error) {
+            state.lastBridgeError = normalizeBridgeError(error);
+            renderBridgeError(state.lastBridgeError);
+            render();
+          }
+          return;
+        }
+        if (command === "refresh-session") {
+          try {
+            await refreshFullAppSession();
+          } catch (error) {
+            state.lastBridgeError = normalizeBridgeError(error);
+            elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
+            renderBridgeError(state.lastBridgeError);
+          }
+        }
+      });
     }
     return;
   }
