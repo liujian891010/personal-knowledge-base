@@ -889,6 +889,40 @@ pre {
   flex-direction: column;
 }
 
+.overview-row {
+  gap: 14px;
+}
+
+.overview-row-main {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.overview-row-copy {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.overview-row-copy span {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.overview-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.overview-row-actions {
+  width: 100%;
+}
+
 .detail-row-block strong {
   font-size: 0.98rem;
 }

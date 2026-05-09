@@ -661,6 +661,9 @@ function formatActionSourceLabel(source) {
   if (source === "panel") {
     return "顶部面板";
   }
+  if (source.startsWith("workspace:")) {
+    return "总览工作台";
+  }
   if (source.startsWith("card:")) {
     return `同步卡片 / ${formatCardSourceLabel(source.slice(5))}`;
   }
@@ -731,6 +734,8 @@ function formatSessionEventLabel(type) {
     sync_payload_loaded: "同步载荷已更新",
     workspace_contract_loaded: "工作区契约已更新",
     workspace_note_saved: "工作区文档已保存",
+    workspace_edit_blocked: "编辑切换已拦截",
+    workspace_sync_blocked: "同步执行已拦截",
   }[type] || type;
 }
 
@@ -942,8 +947,150 @@ function renderViewModeCard() {
 
 function renderViewDetailGrid() {
   if (state.activeNavView === "overview") {
-    elements.viewDetailGrid.hidden = true;
-    elements.viewDetailGrid.innerHTML = "";
+    const notes = collectWorkspaceNotes().sort((left, right) => right.rank - left.rank);
+    const inboxNotes = notes.filter((entry) => entry.sectionId === "inbox").slice(0, 4);
+    const draftNotes = notes
+      .filter((entry) => entry.note.statusLabel?.includes("草稿") || entry.note.tags?.includes("draft"))
+      .slice(0, 4);
+    const recentNotes = notes.slice(0, 4);
+    const actionableDraft = draftNotes.find((entry) => entry.note.statusLabel?.includes("更新")) || draftNotes[0] || null;
+    const recommendedDraftAction = actionableDraft ? findRecommendedSyncActionForNote(actionableDraft.note) : null;
+
+    elements.viewDetailGrid.hidden = false;
+    elements.viewDetailGrid.innerHTML = `
+      <article class="view-detail-card">
+        <p class="card-section-label">工作台入口</p>
+        <h3>最近编辑</h3>
+        <div class="view-stack">
+          ${
+            recentNotes.length
+              ? recentNotes
+                  .map(
+                    (entry) =>
+                      buildOverviewNoteRow(entry, {
+                        pills: [
+                          entry.id === state.selectedWorkspaceNoteId ? "当前查看" : null,
+                          entry.note.lastSaved || entry.status,
+                        ],
+                        buttons: [
+                          `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                        ],
+                      }),
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前还没有可展示的最近编辑文档。</p></div>'
+          }
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">收件箱</p>
+        <h3>待整理记录</h3>
+        <div class="view-stack">
+          ${
+            inboxNotes.length
+              ? inboxNotes
+                  .map(
+                    (entry) =>
+                      buildOverviewNoteRow(entry, {
+                        summary: "建议先补充上下文，再决定是否进入同步周期。",
+                        pills: [entry.status],
+                        buttons: [
+                          `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                          `<button class="solid detail-inline-button" data-note-edit="${escapeHtml(entry.id)}" type="button">继续编辑</button>`,
+                        ],
+                      }),
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>收件箱目前为空，可以直接点顶部“快速记录”。</p></div>'
+          }
+        </div>
+        <div class="detail-actions">
+          <button class="solid detail-inline-button" data-overview-command="quick-capture" type="button">新建快速记录</button>
+        </div>
+      </article>
+      <article class="view-detail-card">
+        <p class="card-section-label">同步前准备</p>
+        <h3>待同步草稿</h3>
+        <div class="view-stack">
+          ${
+            draftNotes.length
+              ? draftNotes
+                  .map(
+                    (entry) => {
+                      const recommendation = findRecommendedSyncActionForNote(entry.note);
+                      return buildOverviewNoteRow(entry, {
+                        summary: recommendation
+                          ? `推荐动作：${recommendation.action.label}`
+                          : "当前没有匹配到可继续的同步动作。",
+                        pills: [entry.note.statusLabel || entry.status, recommendation?.action?.command || null],
+                        buttons: [
+                          `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(entry.id)}" type="button">打开</button>`,
+                          recommendation
+                            ? `<button class="ghost detail-inline-button" data-note-select-action="${escapeHtml(entry.id)}" type="button">选中动作</button>`
+                            : "",
+                        ],
+                      });
+                    },
+                  )
+                  .join("")
+              : '<div class="empty-state"><p>当前没有处于草稿态的文档。</p></div>'
+          }
+        </div>
+        <div class="detail-actions">
+          ${
+            actionableDraft
+              ? `<button class="ghost detail-inline-button" data-note-open="${escapeHtml(actionableDraft.id)}" type="button">打开当前草稿</button>`
+              : ""
+          }
+          ${
+            actionableDraft && recommendedDraftAction
+              ? `<button class="solid detail-inline-button" data-note-execute-action="${escapeHtml(actionableDraft.id)}" type="button">执行「${escapeHtml(recommendedDraftAction.action.label)}」</button>`
+              : ""
+          }
+          <button class="ghost detail-inline-button" data-overview-command="refresh-session" type="button">刷新实时会话</button>
+        </div>
+      </article>
+    `;
+
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-open]")) {
+      button.addEventListener("click", () => {
+        state.selectedWorkspaceNoteId = button.dataset.noteOpen || state.selectedWorkspaceNoteId;
+        state.activeNavView = "overview";
+        render();
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-edit]")) {
+      button.addEventListener("click", () => {
+        focusWorkspaceNoteForEdit(button.dataset.noteEdit || state.selectedWorkspaceNoteId);
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-select-action]")) {
+      button.addEventListener("click", () => {
+        selectRecommendedSyncActionForNote(button.dataset.noteSelectAction || state.selectedWorkspaceNoteId);
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-execute-action]")) {
+      button.addEventListener("click", async () => {
+        await executeRecommendedSyncActionForNote(button.dataset.noteExecuteAction || state.selectedWorkspaceNoteId);
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-overview-command]")) {
+      button.addEventListener("click", async () => {
+        if (button.dataset.overviewCommand === "quick-capture") {
+          createQuickCaptureNote();
+          return;
+        }
+        if (button.dataset.overviewCommand === "refresh-session") {
+          try {
+            await refreshFullAppSession();
+          } catch (error) {
+            state.lastBridgeError = normalizeBridgeError(error);
+            elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
+            renderBridgeError(state.lastBridgeError);
+          }
+        }
+      });
+    }
     return;
   }
 
@@ -1248,7 +1395,7 @@ function renderNavViewVisibility() {
   elements.summaryGrid.hidden = !showSyncSections;
   elements.cardsGrid.hidden = !showSyncSections;
   elements.activityCard.hidden = !showSyncSections;
-  elements.viewDetailGrid.hidden = state.activeNavView === "overview";
+  elements.viewDetailGrid.hidden = false;
   elements.workspaceShellRoot.hidden = state.activeNavView === "settings";
   elements.controlCenterCard.hidden = state.activeNavView !== "settings";
 }
@@ -1485,6 +1632,169 @@ function summaryHasBlockingSyncWork() {
       summary?.conflicts?.actual_has_unresolved_conflicts ||
       summary?.changes?.change_count,
   );
+}
+
+function inferNoteRank(note, noteId) {
+  if (!note) {
+    return 0;
+  }
+  let rank = typeof note.updatedAtMs === "number" ? note.updatedAtMs : 0;
+  if (state.selectedWorkspaceNoteId === noteId) {
+    rank += 10 ** 13;
+  }
+  if (note.lastSaved?.includes("刚刚")) {
+    rank += 9 * 10 ** 12;
+  } else if (note.lastSaved?.includes("分钟")) {
+    rank += 8 * 10 ** 12;
+  } else if (note.lastSaved?.includes("小时")) {
+    rank += 7 * 10 ** 12;
+  } else if (note.lastSaved?.includes("今天")) {
+    rank += 6 * 10 ** 12;
+  } else if (note.lastSaved?.includes("昨天")) {
+    rank += 5 * 10 ** 12;
+  }
+  if (note.statusLabel?.includes("草稿") || note.tags?.includes("draft")) {
+    rank += 2 * 10 ** 12;
+  }
+  return rank;
+}
+
+function collectWorkspaceNotes() {
+  const workspaceShell = getCurrentWorkspaceShell();
+  const entries = [];
+  for (const section of workspaceShell.sections || []) {
+    for (const item of section.items || []) {
+      const note = workspaceShell.notes?.[item.id];
+      if (!note) {
+        continue;
+      }
+      entries.push({
+        id: item.id,
+        sectionId: section.id,
+        sectionLabel: section.label,
+        title: item.title,
+        path: item.path,
+        status: item.status,
+        note,
+        rank: inferNoteRank(note, item.id),
+      });
+    }
+  }
+  return entries;
+}
+
+function buildOverviewNoteRow(entry, options = {}) {
+  const pills = (options.pills || []).filter(Boolean);
+  const buttons = (options.buttons || []).filter(Boolean);
+  const tone = resolveTone(entry.note?.statusTone || "info");
+  const metaLine = [entry.sectionLabel, entry.path].filter(Boolean).join(" · ");
+  const summaryLine = options.summary || `${entry.note.lastSaved || entry.status} · ${entry.note.tags?.join(" / ") || "无标签"}`;
+  return `
+    <article class="detail-row detail-row-block overview-row">
+      <div class="overview-row-main">
+        <div class="overview-row-copy">
+          <strong>${escapeHtml(entry.title)}</strong>
+          <span>${escapeHtml(metaLine)}</span>
+          <span>${escapeHtml(summaryLine)}</span>
+        </div>
+        <div class="overview-row-meta">
+          <span class="mini-pill tone-${tone}">${escapeHtml(entry.note.statusLabel || entry.status)}</span>
+          ${pills.map((pill) => `<span class="mini-pill tone-info">${escapeHtml(pill)}</span>`).join("")}
+        </div>
+      </div>
+      ${
+        buttons.length
+          ? `<div class="detail-actions overview-row-actions">${buttons.join("")}</div>`
+          : ""
+      }
+    </article>
+  `;
+}
+
+function getDirtyEditorDraft() {
+  if (!state.editorDraft) {
+    return null;
+  }
+  const workspaceShell = getCurrentWorkspaceShell();
+  const note = workspaceShell.notes?.[state.editorDraft.noteId];
+  if (!note || !isEditorDraftDirty(note, state.editorDraft)) {
+    return null;
+  }
+  return {
+    noteId: state.editorDraft.noteId,
+    title: state.editorDraft.title?.trim() || note.title || state.editorDraft.noteId,
+  };
+}
+
+function findRecommendedSyncActionForNote(note) {
+  const actions = collectWorkspaceSyncActions(note);
+  return actions.find(({ action }) => action.enabled !== false) || actions[0] || null;
+}
+
+function focusWorkspaceNoteForEdit(noteId) {
+  const targetId = noteId || state.selectedWorkspaceNoteId;
+  const dirtyDraft = getDirtyEditorDraft();
+  state.selectedWorkspaceNoteId = targetId;
+  state.activeNavView = "overview";
+  if (dirtyDraft && dirtyDraft.noteId !== targetId) {
+    elements.workspaceStatus.textContent =
+      `已切换文档，但仍保留未保存草稿：${dirtyDraft.title}。请先保存或取消后再开始新的编辑。`;
+    pushSessionHistory({
+      type: "workspace_edit_blocked",
+      level: "warning",
+      detail: `${dirtyDraft.title} · 未保存草稿仍保留`,
+    });
+    render();
+    return;
+  }
+  startEditingSelectedNote();
+}
+
+function selectRecommendedSyncActionForNote(noteId, options = {}) {
+  const targetId = noteId || state.selectedWorkspaceNoteId;
+  const note = getCurrentWorkspaceShell().notes?.[targetId];
+  if (!note) {
+    return null;
+  }
+  const recommendation = findRecommendedSyncActionForNote(note);
+  state.selectedWorkspaceNoteId = targetId;
+  state.activeNavView = "overview";
+  if (!recommendation) {
+    render();
+    return null;
+  }
+  setSelectedAction(recommendation.action, `workspace:${targetId}`);
+  if (options.renderAfterSelection !== false) {
+    render();
+  }
+  return recommendation;
+}
+
+async function executeRecommendedSyncActionForNote(noteId) {
+  const recommendation = selectRecommendedSyncActionForNote(noteId, { renderAfterSelection: false });
+  if (!recommendation) {
+    render();
+    return;
+  }
+  const dirtyDraft = getDirtyEditorDraft();
+  if (dirtyDraft) {
+    elements.workspaceStatus.textContent =
+      `当前仍有未保存草稿：${dirtyDraft.title}。请先保存草稿，再执行同步动作。`;
+    pushSessionHistory({
+      type: "workspace_sync_blocked",
+      level: "warning",
+      detail: `${dirtyDraft.title} · 先保存草稿再执行同步`,
+    });
+    render();
+    return;
+  }
+  try {
+    await executeSelectedAction();
+  } catch (error) {
+    state.lastBridgeError = normalizeBridgeError(error);
+    elements.actionExecutionStatus.textContent = state.lastBridgeError.message;
+    renderBridgeError(state.lastBridgeError);
+  }
 }
 
 function buildLastExecutionSummary() {
@@ -2470,7 +2780,7 @@ function applyWorkspaceShell(payload, sourceLabel) {
     state.selectedWorkspaceNoteId = Object.keys(workspaceShell.notes)[0] || "desktop-bridge";
   }
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
-  renderWorkspaceChrome();
+  render();
   elements.actionExecutionStatus.textContent = `工作区契约来源：${sourceLabel}`;
 }
 
@@ -2643,12 +2953,12 @@ function startEditingSelectedNote() {
     body: note.body,
   };
   elements.workspaceInput.value = JSON.stringify(workspaceShell, null, 2);
-  renderWorkspaceChrome();
+  render();
 }
 
 function cancelEditingSelectedNote() {
   state.editorDraft = null;
-  renderWorkspaceChrome();
+  render();
 }
 
 function saveEditingSelectedNote() {
@@ -2691,7 +3001,7 @@ function saveEditingSelectedNote() {
     level: "success",
     detail: `${trimmedTitle} · 本地草稿已更新`,
   });
-  renderWorkspaceChrome();
+  render();
 }
 
 function buildQuickCaptureTitle(now = new Date()) {
@@ -2775,7 +3085,7 @@ function createQuickCaptureNote() {
     level: "info",
     detail: `${title} · Inbox`,
   });
-  renderWorkspaceChrome();
+  render();
 }
 
 elements.searchInput.addEventListener("input", (event) => {
