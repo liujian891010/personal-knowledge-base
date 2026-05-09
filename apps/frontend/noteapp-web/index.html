@@ -24,7 +24,7 @@
           <div class="hero-status-copy">
             <span class="hero-status-label">当前会话</span>
             <strong id="payload-kind">未加载</strong>
-            <span id="payload-detail">可先加载内置会话，再查看工作区与同步区联动效果。</span>
+            <span id="payload-detail">可先加载演示会话，再查看工作区、同步区和 AI 面板的联动效果。</span>
           </div>
         </div>
       </header>
@@ -64,68 +64,68 @@
           <section class="sidebar-session-card" id="workspace-rail"></section>
 
           <section class="control-card control-card-secondary" id="control-center-card">
-            <span class="card-section-label">接入中心</span>
-            <h2>本地设置与接入</h2>
-            <p>这里收纳低频接入动作、本地桥接状态和高级调试入口，避免占用主工作台的注意力。</p>
+            <span class="card-section-label">工作台入口</span>
+            <h2>本地会话与连接</h2>
+            <p>这里集中管理会话入口、桌面连接状态和少量低频操作，主工作区只保留整理、同步和 AI 主链路。</p>
             <div class="control-actions">
               <button id="toggle-advanced-controls-button" class="ghost" type="button">开启高级调试</button>
             </div>
-            <p id="control-mode-note" class="sidebar-helper">当前为普通工作台模式，原始 JSON 覆盖和桥接诊断默认收起。</p>
+            <p id="control-mode-note" class="sidebar-helper">当前为普通工作台模式，手动导入和桥接诊断默认收起。</p>
             <div class="control-hero-grid">
               <article class="control-status-card">
-                <span class="control-status-title">桥接状态</span>
-                <p id="bridge-status" class="bridge-status">正在检查本地桌面桥接状态...</p>
+                <span class="control-status-title">桌面连接</span>
+                <p id="bridge-status" class="bridge-status">正在检查桌面连接状态...</p>
               </article>
               <article class="control-status-card">
                 <span class="control-status-title">工作区来源</span>
-                <p id="workspace-status" class="bridge-status">工作区契约尚未加载。</p>
+                <p id="workspace-status" class="bridge-status">当前工作区尚未加载。</p>
               </article>
               <article class="control-status-card">
                 <span class="control-status-title">动作执行</span>
-                <p id="action-execution-status" class="bridge-status">只有本地桌面桥接可用时，才允许执行动作。</p>
+                <p id="action-execution-status" class="bridge-status">只有桌面连接可用时，才允许执行动作。</p>
               </article>
             </div>
             <details class="details-block" open>
-              <summary>常用接入</summary>
+              <summary>常用入口</summary>
               <div class="control-group">
-                <div class="control-group-title">应用会话</div>
+                <div class="control-group-title">工作会话</div>
                 <div class="control-actions">
                   <button id="load-app-session-button" class="solid">加载演示会话</button>
                   <button id="refresh-app-session-button" class="ghost">刷新实时会话</button>
                 </div>
               </div>
               <div class="control-group">
-                <div class="control-group-title">同步载荷</div>
+                <div class="control-group-title">同步连接</div>
                 <div class="control-actions">
                   <button id="refresh-local-button" class="ghost">刷新本地同步</button>
-                  <button id="reload-bridge-status-button" class="ghost">刷新桥接状态</button>
+                  <button id="reload-bridge-status-button" class="ghost">检查桌面连接</button>
                   <button id="load-live-button" class="ghost" type="button" data-advanced-control>加载本地快照</button>
                   <button id="load-sample-button" class="ghost" type="button" data-advanced-control>加载演示数据</button>
                   <label class="ghost file-picker" data-advanced-control>
-                    导入同步 JSON
+                    导入同步数据
                     <input id="file-input" type="file" accept="application/json" />
                   </label>
                 </div>
               </div>
             </details>
             <details class="details-block">
-              <summary>工作区来源</summary>
+              <summary>工作区导入</summary>
               <div class="control-actions">
                 <button id="load-workspace-sample-button" class="solid" data-advanced-control>加载演示工作区</button>
                 <label class="ghost file-picker" data-advanced-control>
-                  导入工作区 JSON
+                  导入工作区数据
                   <input id="workspace-file-input" type="file" accept="application/json" />
                 </label>
               </div>
               <details class="details-block details-block-nested" data-advanced-control>
-                <summary>手动粘贴工作区 JSON</summary>
+                <summary>手动粘贴工作区数据</summary>
                 <textarea
                   id="workspace-input"
                   spellcheck="false"
-                  placeholder="可在此粘贴工作区壳层 JSON 契约"
+                  placeholder="可在此粘贴工作区数据"
                 ></textarea>
                 <div class="control-actions">
-                  <button id="apply-workspace-input-button" class="solid">应用工作区 JSON</button>
+                  <button id="apply-workspace-input-button" class="solid">应用工作区数据</button>
                 </div>
               </details>
             </details>
@@ -139,7 +139,7 @@
                 <button id="execute-selected-button" class="solid">执行当前动作</button>
               </div>
               <details class="details-block details-block-nested" data-advanced-control>
-                <summary>查看动作契约</summary>
+                <summary>查看动作原始参数</summary>
                 <pre id="action-contract-output">尚未选择任何动作。</pre>
               </details>
               <details class="details-block details-block-nested" data-advanced-control>
@@ -147,27 +147,27 @@
                 <pre id="action-result-output">尚未执行任何动作。</pre>
               </details>
               <details class="details-block details-block-nested" data-advanced-control>
-                <summary>查看桥接错误</summary>
-                <pre id="bridge-error-output" class="compact-output">当前没有桥接错误。</pre>
+                <summary>查看连接错误</summary>
+                <pre id="bridge-error-output" class="compact-output">当前没有连接错误。</pre>
               </details>
             </details>
             <details class="details-block" data-advanced-control>
-              <summary>高级调试与 JSON 覆盖</summary>
+              <summary>高级调试与手动导入</summary>
               <details class="details-block details-block-nested">
-                <summary>查看桥接诊断</summary>
+                <summary>查看桌面连接诊断</summary>
                 <pre id="bridge-diagnostics-output" class="compact-output">
 等待桥接诊断...
                 </pre>
               </details>
               <details class="details-block details-block-nested">
-                <summary>手动覆盖同步 JSON</summary>
+                <summary>手动覆盖同步数据</summary>
                 <textarea
                   id="payload-input"
                   spellcheck="false"
-                  placeholder="可在此粘贴 sync-shell-snapshot / sync-center / sync-activity JSON"
+                  placeholder="可在此粘贴 sync-shell-snapshot / sync-center / sync-activity 数据"
                 ></textarea>
                 <div class="control-actions">
-                  <button id="apply-input-button" class="solid">应用同步 JSON</button>
+                  <button id="apply-input-button" class="solid">应用同步数据</button>
                   <button id="clear-input-button" class="ghost">清空同步区</button>
                 </div>
               </details>

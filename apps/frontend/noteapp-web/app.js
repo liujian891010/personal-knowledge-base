@@ -616,7 +616,7 @@ function renderActionExecutionPanel() {
       ? "当前不可执行"
       : bridgeReady
         ? "可以执行"
-        : "等待本地桥接"
+        : "等待桌面连接"
     : "等待选择动作";
   const readinessTone = selectedAction
     ? selectedAction.enabled === false
@@ -633,7 +633,7 @@ function renderActionExecutionPanel() {
         : "当前动作暂不可执行，请先处理前置条件。"
       : bridgeReady
         ? "可以直接执行当前动作，执行后结果会回写到这里。"
-        : "先连接本地桌面桥接，再执行当前动作。";
+        : "先接通桌面连接，再执行当前动作。";
 
   elements.actionExecutionCard.innerHTML = `
     <article class="session-rail-item">
@@ -651,7 +651,7 @@ function renderActionExecutionPanel() {
     </article>
     <article class="session-rail-item">
       <span class="session-rail-title">执行条件</span>
-      <strong>${escapeHtml(bridgeReady ? "本地桥接已就绪" : "本地桥接未就绪")}</strong>
+      <strong>${escapeHtml(bridgeReady ? "桌面连接已就绪" : "桌面连接未就绪")}</strong>
       <p class="session-rail-copy">${escapeHtml(nextStep)}</p>
       ${
         selectedAction?.command
@@ -717,7 +717,7 @@ function buildOfflineBridgeStatus(error = null) {
 
 function renderBridgeError(error) {
   if (!error) {
-    elements.bridgeErrorOutput.textContent = "当前没有桥接错误。";
+    elements.bridgeErrorOutput.textContent = "当前没有连接错误。";
     return;
   }
   elements.bridgeErrorOutput.textContent = JSON.stringify(
@@ -733,7 +733,7 @@ function renderBridgeError(error) {
 
 function renderBridgeDiagnostics(status) {
   if (!status) {
-    elements.bridgeDiagnosticsOutput.textContent = "等待 /api/bridge/status 返回...";
+    elements.bridgeDiagnosticsOutput.textContent = "等待桌面连接状态返回...";
     return;
   }
   elements.bridgeDiagnosticsOutput.textContent = JSON.stringify(
@@ -757,8 +757,9 @@ function renderBridgeDiagnostics(status) {
 
 function renderBridgeStatus() {
   const status = state.bridgeStatus;
+  const expertMode = Boolean(state.localUiSettings.expertMode);
   if (!status) {
-    elements.bridgeStatus.textContent = "正在检查本地桌面桥接状态...";
+    elements.bridgeStatus.textContent = "正在检查桌面连接状态...";
     elements.refreshLocalButton.disabled = true;
     elements.executeSelectedButton.disabled = true;
     elements.reloadBridgeStatusButton.disabled = true;
@@ -769,8 +770,9 @@ function renderBridgeStatus() {
 
   if (status.available) {
     const sourceLabel = formatBridgeConfigSource(status.config?.configSource || "env");
-    elements.bridgeStatus.textContent =
-      `本地桌面桥接已就绪：${status.config.vaultId} · ${status.config.vaultRoot} · ${sourceLabel}`;
+    elements.bridgeStatus.textContent = expertMode
+      ? `桌面连接已就绪：${status.config.vaultId} · ${status.config.vaultRoot} · ${sourceLabel}`
+      : "桌面连接已就绪，可直接刷新实时会话和执行同步动作。";
     elements.refreshLocalButton.disabled = false;
     elements.executeSelectedButton.disabled = !state.selectedAction;
     elements.reloadBridgeStatusButton.disabled = false;
@@ -779,7 +781,9 @@ function renderBridgeStatus() {
     return;
   }
 
-  elements.bridgeStatus.textContent = `本地桌面桥接不可用：缺少 ${(status.missing || []).map(formatBridgeMissingItem).join("、")}`;
+  elements.bridgeStatus.textContent = expertMode
+    ? `桌面连接暂不可用：缺少 ${(status.missing || []).map(formatBridgeMissingItem).join("、")}`
+    : "桌面连接暂不可用，可先继续本机草稿或切到演示会话。";
   elements.refreshLocalButton.disabled = true;
   elements.executeSelectedButton.disabled = true;
   elements.reloadBridgeStatusButton.disabled = false;
@@ -790,12 +794,12 @@ function renderBridgeStatus() {
 function renderControlCenterMode() {
   const expertMode = Boolean(state.localUiSettings.expertMode);
   if (elements.toggleAdvancedControlsButton) {
-    elements.toggleAdvancedControlsButton.textContent = expertMode ? "返回普通工作台模式" : "开启高级调试";
+    elements.toggleAdvancedControlsButton.textContent = expertMode ? "切回普通工作台" : "开启高级调试";
   }
   if (elements.controlModeNote) {
     elements.controlModeNote.textContent = expertMode
-      ? "当前为高级调试模式，原始 JSON、桥接诊断和手动契约覆盖入口已展开到设置页。"
-      : "当前为普通工作台模式，原始 JSON 覆盖和桥接诊断默认收起，只保留主工作链路。";
+      ? "当前为高级调试模式，手动导入、桌面连接诊断和原始参数入口已经展开。"
+      : "当前为普通工作台模式，只保留常用会话入口和动作执行，手动导入与诊断默认收起。";
   }
   if (elements.controlCenterCard) {
     elements.controlCenterCard
@@ -812,10 +816,10 @@ function setSelectedAction(action, source = "手动选择") {
 
   if (!action) {
     elements.actionContractHelp.textContent =
-      "请先从总览、仓库浏览或冲突处理中选中一个动作，再回到这里执行。";
+      "请先在总览、仓库浏览或冲突处理中选中一个动作，再回来执行。";
     elements.actionContractOutput.textContent = "尚未选择任何动作。";
     elements.actionExecutionStatus.textContent =
-      "只有本地桌面桥接可用，且动作本身未被门禁阻塞时，才允许执行。";
+      "只有桌面连接可用，且动作本身未被阻塞时，才允许执行。";
     elements.executeSelectedButton.disabled = true;
     renderActionExecutionPanel();
     refreshActionChipSelection();
@@ -838,10 +842,10 @@ function setSelectedAction(action, source = "手动选择") {
   }
 
   elements.actionContractHelp.textContent =
-    "普通模式下这里优先展示执行条件与结果；如需核对原始命令契约，可切到高级调试模式查看。";
+    "普通模式下这里优先展示执行条件与结果；如需核对原始参数，可切到高级调试模式查看。";
   elements.actionContractOutput.textContent = lines.join("\n");
   elements.actionExecutionStatus.textContent =
-    "点击“执行当前动作”后，会通过本地桌面 bridge 执行并把结果回写到当前面板。";
+    "点击“执行当前动作”后，会通过桌面连接执行，并把结果回写到当前面板。";
   elements.executeSelectedButton.disabled = !state.bridgeStatus?.available;
   pushSessionHistory({
     type: "sync_action_selected",
@@ -1162,8 +1166,8 @@ function formatSessionEventLabel(type) {
     sync_action_selected: "同步动作已选中",
     sync_action_executed: "同步动作已执行",
     quick_capture_created: "快速记录已创建",
-    sync_payload_loaded: "同步载荷已更新",
-    workspace_contract_loaded: "工作区契约已更新",
+    sync_payload_loaded: "同步数据已更新",
+    workspace_contract_loaded: "工作区数据已更新",
     workspace_note_saved: "工作区文档已保存",
     workspace_edit_blocked: "编辑切换已拦截",
     workspace_sync_blocked: "同步执行已拦截",
@@ -1686,8 +1690,8 @@ function renderViewDetailGrid() {
         </div>
         <div class="view-stack">
           <div class="detail-row detail-row-block">
-            <strong>${escapeHtml(state.bridgeStatus?.available ? "桌面桥接已连接" : "桌面桥接未连接")}</strong>
-            <span>${escapeHtml(state.bridgeStatus?.available ? "当前可以从工作台直接触发同步动作。" : "仍可整理本地草稿，但暂时无法直接执行桥接动作。")}</span>
+            <strong>${escapeHtml(state.bridgeStatus?.available ? "桌面连接已接通" : "桌面连接未接通")}</strong>
+            <span>${escapeHtml(state.bridgeStatus?.available ? "当前可以从工作台直接触发同步动作。" : "仍可整理本地草稿，但暂时无法直接执行实时同步动作。")}</span>
           </div>
           <div class="detail-row detail-row-block">
             <strong>${escapeHtml(blockingReasons.length ? `存在 ${blockingReasons.length} 个阻塞项` : "当前无提交阻塞项")}</strong>
@@ -1729,7 +1733,7 @@ function renderViewDetailGrid() {
           </div>
           <div class="detail-row detail-row-block">
             <strong>${escapeHtml(state.bridgeStatus?.available ? "桌面实时会话可直接进入" : "当前更适合先整理本机草稿")}</strong>
-            <span>${escapeHtml(state.bridgeStatus?.available ? "如果准备继续真实同步流程，可以直接拉取桌面实时会话。" : "桌面桥接还没接通时，继续本机草稿或演示会话会更顺畅。")}</span>
+            <span>${escapeHtml(state.bridgeStatus?.available ? "如果准备继续真实同步流程，可以直接拉取桌面实时会话。" : "桌面连接还没接通时，继续本机草稿或演示会话会更顺畅。")}</span>
           </div>
         </div>
         <div class="detail-actions">
@@ -1741,7 +1745,7 @@ function renderViewDetailGrid() {
           ${
             state.bridgeStatus?.available
               ? '<button class="ghost detail-inline-button" data-overview-command="refresh-session" type="button">进入桌面实时会话</button>'
-              : '<button class="ghost detail-inline-button" data-overview-command="check-bridge" type="button">检查桌面桥接</button>'
+              : '<button class="ghost detail-inline-button" data-overview-command="check-bridge" type="button">检查桌面连接</button>'
           }
           <button class="ghost detail-inline-button" data-overview-command="load-sample-session" type="button">切到演示会话</button>
           <button class="ghost detail-inline-button" data-overview-command="open-settings" type="button">更多入口</button>
@@ -2465,7 +2469,7 @@ function renderViewDetailGrid() {
         </div>
         <div class="detail-actions">
           <button class="ghost detail-inline-button" data-conflict-command="refresh-session" type="button">刷新实时会话</button>
-          <button class="ghost detail-inline-button" data-conflict-command="refresh-bridge" type="button">刷新桥接状态</button>
+          <button class="ghost detail-inline-button" data-conflict-command="refresh-bridge" type="button">检查桌面连接</button>
           ${
             conflictSnapshot.lastFailure
               ? `<button class="solid detail-inline-button" data-conflict-select-action="${escapeHtml(conflictSnapshot.lastFailure.action_id)}" type="button">选中最近失败动作</button>`
@@ -2636,7 +2640,7 @@ function renderViewDetailGrid() {
         <div class="view-stack">
           <div class="detail-row detail-row-block">
             <strong>${settings.expertMode ? "当前保留所有调试入口" : "当前只保留主链操作"}</strong>
-            <span>${escapeHtml(settings.expertMode ? "你现在可以直接查看桥接诊断、手动覆盖同步 JSON 和手动粘贴工作区契约。" : "原始 JSON、桥接诊断和手动契约输入已被收起，避免打断普通工作流。")}</span>
+            <span>${escapeHtml(settings.expertMode ? "你现在可以直接查看桌面连接诊断、手动导入同步数据，以及手动粘贴工作区数据。" : "手动导入、连接诊断和原始数据输入已被收起，避免打断普通工作流。")}</span>
           </div>
         </div>
         <div class="detail-actions">
@@ -2658,8 +2662,8 @@ function renderViewDetailGrid() {
         </div>
         <div class="view-stack">
           <div class="detail-row detail-row-block">
-            <strong>${settings.bridgeAvailable ? "桌面桥接已接通" : "桌面桥接暂未接通"}</strong>
-            <span>${escapeHtml(settings.bridgeAvailable ? "现在可以直接拉取桌面实时会话，并在当前工作台继续真实同步流程。" : "你仍可先整理本机草稿或切到演示会话，等桌面桥接就绪后再回来接入实时数据。")}</span>
+            <strong>${settings.bridgeAvailable ? "桌面连接已接通" : "桌面连接暂未接通"}</strong>
+            <span>${escapeHtml(settings.bridgeAvailable ? "现在可以直接拉取桌面实时会话，并在当前工作台继续真实同步流程。" : "你仍可先整理本机草稿或切到演示会话，等桌面连接就绪后再回来接入实时数据。")}</span>
           </div>
           <div class="detail-row">
             <span>配置来源</span>
@@ -2692,7 +2696,7 @@ function renderViewDetailGrid() {
           }
         </div>
         <div class="detail-actions">
-          <button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">刷新桥接状态</button>
+          <button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">检查桌面连接</button>
           <button class="solid detail-inline-button" data-view-command="refresh-session" type="button">刷新实时会话</button>
         </div>
       </article>
@@ -2776,7 +2780,7 @@ function renderViewDetailGrid() {
           ${
             settings.bridgeAvailable
               ? '<button class="ghost detail-inline-button" data-settings-command="load-bridge-session" type="button">切到桌面实时会话</button>'
-              : '<button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">检查桌面桥接</button>'
+              : '<button class="ghost detail-inline-button" data-view-command="refresh-bridge" type="button">检查桌面连接</button>'
           }
           <button class="ghost detail-inline-button" data-settings-command="load-sample-session" type="button">切到演示会话</button>
           <button class="ghost detail-inline-button" data-settings-command="load-workspace-sample" type="button">打开演示工作区</button>
@@ -3080,8 +3084,8 @@ function deriveWorkspaceSyncContext(note) {
 
   if (!summary || !panel) {
     return {
-      headline: "当前工作区文档还没有关联任何同步载荷。",
-      signals: [createSignal("info", "没有同步载荷")],
+      headline: "当前工作区文档还没有关联任何同步数据。",
+      signals: [createSignal("info", "没有同步数据")],
       actions: ["先加载 sync-shell-snapshot 或 sync-center，再让工作区与同步状态联动。"],
       relatedActivity: [],
     };
@@ -5431,6 +5435,25 @@ function buildPayloadDetail() {
   return `${formatSyncSourceLabel(state.sourceLabel)} | ${vault_id} | ${device_id} | ${vault_root} | ${formatDateTime(generated_at_ms)}`;
 }
 
+function buildHeroSessionLabel() {
+  if (state.appSession) {
+    return formatWorkspaceSourceLabel(state.workspaceSourceLabel);
+  }
+  if (state.workspaceShell) {
+    return formatWorkspaceSourceLabel(state.workspaceSourceLabel);
+  }
+  if (state.snapshotMetadata) {
+    return "同步快照";
+  }
+  if (state.syncCenter) {
+    return "同步中心";
+  }
+  if (state.activityFeed) {
+    return "同步活动流";
+  }
+  return "未加载";
+}
+
 function renderPanel(syncCenter) {
   const panel = syncCenter.panel;
   const tone = resolveTone(panel.level);
@@ -5631,10 +5654,10 @@ function renderEmptyDashboard(message) {
   elements.panelCard.innerHTML = `
     <div class="empty-state">
       <p>${escapeHtml(message)}</p>
-      <p>${escapeHtml(state.localUiSettings.expertMode ? "你也可以继续留在高级调试模式下手动导入契约，但普通使用建议先从内置会话开始。" : "建议先加载一个工作会话，再进入仓库浏览、编辑器和同步工作台。")}</p>
+      <p>${escapeHtml(state.localUiSettings.expertMode ? "你也可以继续留在高级调试模式下手动导入数据，但普通使用建议先从演示会话或桌面实时会话开始。" : "建议先加载一个工作会话，再进入仓库浏览、编辑器和同步工作台。")}</p>
       <div class="detail-actions">
         <button class="solid detail-inline-button" data-empty-command="load-sample-session" type="button">加载演示会话</button>
-        <button class="ghost detail-inline-button" data-empty-command="refresh-session" type="button">刷新本地会话</button>
+        <button class="ghost detail-inline-button" data-empty-command="refresh-session" type="button">刷新桌面实时会话</button>
         <button class="ghost detail-inline-button" data-empty-command="open-settings" type="button">打开设置</button>
       </div>
     </div>
@@ -5643,7 +5666,7 @@ function renderEmptyDashboard(message) {
   elements.cardsGrid.innerHTML = "";
   elements.activityCard.innerHTML = `
     <div class="empty-state">
-      <p>加载同步载荷后，这里才会显示同步看板。</p>
+      <p>加载同步数据后，这里才会显示同步看板。</p>
     </div>
   `;
   renderExecutionResult(state.lastExecution);
@@ -5692,13 +5715,7 @@ function render() {
     return;
   }
 
-  elements.payloadKind.textContent = state.appSession
-    ? `${formatSessionSourceLabel(state.appSession.source)}会话`
-    : state.snapshotMetadata
-      ? formatPayloadKindLabel("sync-shell-snapshot")
-      : state.syncCenter
-        ? formatPayloadKindLabel("sync-center")
-        : formatPayloadKindLabel("sync-activity");
+  elements.payloadKind.textContent = buildHeroSessionLabel();
   elements.payloadDetail.textContent = buildPayloadDetail();
 
   if (state.syncCenter) {
