@@ -1502,6 +1502,9 @@ function renderViewDetailGrid() {
     const dirtyDraftCount = collectDirtyEditorDrafts().length;
     const selectedEntry = repository.selectedEntry;
     const selectedRecommendation = selectedEntry ? findRecommendedSyncActionForNote(selectedEntry.note) : null;
+    const repositoryMoveTargets = (getCurrentWorkspaceShell().sections || []).filter(
+      (section) => section.id !== selectedEntry?.sectionId && ["inbox", "notes", "ai-wiki"].includes(section.id),
+    );
     elements.viewDetailGrid.hidden = false;
     elements.viewDetailGrid.innerHTML = `
       <article class="view-detail-card">
@@ -1583,6 +1586,16 @@ function renderViewDetailGrid() {
           ${
             selectedRecommendation
               ? `<button class="ghost detail-inline-button" data-note-select-action="${escapeHtml(selectedEntry.id)}" type="button">选中推荐动作</button>`
+              : ""
+          }
+          ${
+            selectedEntry
+              ? repositoryMoveTargets
+                  .map(
+                    (section) =>
+                      `<button class="ghost detail-inline-button" data-note-move="${escapeHtml(section.id)}" type="button">整理到 ${escapeHtml(section.label)}</button>`,
+                  )
+                  .join("")
               : ""
           }
           <button class="ghost detail-inline-button" data-view-command="clear-search" type="button">清空搜索</button>
@@ -1672,6 +1685,14 @@ function renderViewDetailGrid() {
     for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-select-action]")) {
       button.addEventListener("click", () => {
         selectRecommendedSyncActionForNote(button.dataset.noteSelectAction || state.selectedWorkspaceNoteId);
+      });
+    }
+    for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-move]")) {
+      button.addEventListener("click", () => {
+        moveWorkspaceNoteToSection(
+          selectedEntry?.id || state.selectedWorkspaceNoteId,
+          button.dataset.noteMove || "",
+        );
       });
     }
     for (const button of elements.viewDetailGrid.querySelectorAll("[data-note-execute-action]")) {
