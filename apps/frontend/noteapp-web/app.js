@@ -36,6 +36,13 @@ const DEFAULT_AI_COPILOT_STATE = {
   question: "",
   lastAnswer: null,
 };
+const DEFAULT_AI_COMPILE_STATE = {
+  anchorNoteId: null,
+  scope: "current-note",
+  targetTitle: "",
+  lastCompiledNoteId: null,
+  lastCompiledAtMs: null,
+};
 const draftAutosaveTimers = new Map();
 const WORKSPACE_SAMPLE = {
   sections: [
@@ -273,6 +280,7 @@ const state = {
   recoveryDrafts: [],
   localUiSettings: DEFAULT_LOCAL_UI_SETTINGS,
   aiCopilot: { ...DEFAULT_AI_COPILOT_STATE },
+  aiCompile: { ...DEFAULT_AI_COMPILE_STATE },
   runtimeSessionId: createRuntimeSessionId(),
 };
 
@@ -472,6 +480,21 @@ function parsePersistedExecution(raw) {
   return cloneJson(raw);
 }
 
+function parseAiCompileState(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ...DEFAULT_AI_COMPILE_STATE };
+  }
+
+  const allowedScopes = new Set(["current-note", "current-section", "search-results", "workspace"]);
+  return {
+    anchorNoteId: typeof raw.anchorNoteId === "string" ? raw.anchorNoteId : null,
+    scope: allowedScopes.has(raw.scope) ? raw.scope : DEFAULT_AI_COMPILE_STATE.scope,
+    targetTitle: typeof raw.targetTitle === "string" ? raw.targetTitle : "",
+    lastCompiledNoteId: typeof raw.lastCompiledNoteId === "string" ? raw.lastCompiledNoteId : null,
+    lastCompiledAtMs: typeof raw.lastCompiledAtMs === "number" ? raw.lastCompiledAtMs : null,
+  };
+}
+
 function readLocalWorkspaceSession() {
   try {
     const raw = window.localStorage.getItem(LOCAL_WORKSPACE_SESSION_STORAGE_KEY);
@@ -496,6 +519,7 @@ function readLocalWorkspaceSession() {
       lastExecution: parsePersistedExecution(parsed.lastExecution),
       lastExecutionAtMs: typeof parsed.lastExecutionAtMs === "number" ? parsed.lastExecutionAtMs : null,
       aiCopilot: parseAiCopilotState(parsed.aiCopilot),
+      aiCompile: parseAiCompileState(parsed.aiCompile),
       savedAtMs: typeof parsed.savedAtMs === "number" ? parsed.savedAtMs : Date.now(),
     };
   } catch {
@@ -519,6 +543,9 @@ function summarizeLocalWorkspaceSession() {
     aiQuestion: session.aiCopilot?.lastAnswer?.question || session.aiCopilot?.question || "",
     aiHeadline: session.aiCopilot?.lastAnswer?.headline || "",
     aiGeneratedAtMs: session.aiCopilot?.lastAnswer?.generatedAtMs || null,
+    aiCompileTitle: session.aiCompile?.targetTitle || "",
+    aiCompiledNoteId: session.aiCompile?.lastCompiledNoteId || null,
+    aiCompiledAtMs: session.aiCompile?.lastCompiledAtMs || null,
   };
 }
 
@@ -550,6 +577,7 @@ function persistLocalWorkspaceSession() {
         lastExecution: state.lastExecution,
         lastExecutionAtMs: state.lastExecutionAtMs,
         aiCopilot: state.aiCopilot,
+        aiCompile: state.aiCompile,
         savedAtMs: Date.now(),
       }),
     );
@@ -574,6 +602,7 @@ function restoreLocalWorkspaceSession(options = {}) {
   state.lastExecutionAtMs = session.lastExecutionAtMs || null;
   elements.searchInput.value = state.searchQuery;
   state.aiCopilot = parseAiCopilotState(session.aiCopilot);
+  state.aiCompile = parseAiCompileState(session.aiCompile);
   applyWorkspaceShell(session.workspaceShell, session.workspaceSourceLabel);
 
   if (options.pushHistory !== false) {
@@ -1264,6 +1293,7 @@ function formatSessionEventLabel(type) {
     workspace_draft_discarded: "恢复草稿已放弃",
     workspace_ai_applied: "AI 建议已写入草稿",
     ai_answer_generated: "AI 回答已生成",
+    ai_compile_generated: "AI 知识页已生成",
     workspace_followup_created: "跟进笔记已创建",
     workspace_note_moved: "工作区文档已归档",
     workspace_session_restored: "本地工作区已恢复",
@@ -3987,6 +4017,65 @@ function buildAiCopilotSuggestedQuestions(note, syncContext, draftInsight) {
   ];
 }
 
+function buildAiCompileTargetTitle(note) {
+  const scopeContext = resolveAiCopilotScopeContext(note);
+  if (scopeContext.id === "current-section") {
+    return `${scopeContext.label}知识页`;
+  }
+  if (scopeContext.id === "search-results") {
+    return state.searchQuery ? `搜索：${state.searchQuery}` : "当前筛选知识页";
+  }
+  if (scopeContext.id === "workspace") {
+    return "工作区知识总览";
+  }
+  return `${note.title}知识页`;
+}
+
+function buildAiCompileDraftBody({ note, syncContext, aiBriefing }) {
+  const scopeContext = resolveAiCopilotScopeContext(note);
+  const scopeNotes = scopeContext.notes;
+  const topEntities = Array.from(
+    new Set(scopeNotes.flatMap((entry) => entry.ai?.relatedEntities || [])),
+  ).slice(0, 8);
+  const topLint = Array.from(new Set(scopeNotes.flatMap((entry) => entry.ai?.lint || []))).slice(0, 4);
+  const topSuggestions = Array.from(
+    new Set(scopeNotes.flatMap((entry) => entry.ai?.suggestions || [])),
+  ).slice(0, 4);
+  const sourceRows = scopeNotes
+    .slice(0, 8)
+    .map((entry, index) => `${index + 1}. 《${entry.title}》\n   - 路径：${entry.path}\n   - 摘要：${summarizeRichText(getEditorDraftByNoteId(entry.id)?.body || entry.body, 80)}`);
+
+  return {
+    scopeContext,
+    topEntities,
+    body: `# ${state.aiCompile.targetTitle.trim() || buildAiCompileTargetTitle(note)}
+
+## 编译范围
+- 作用范围：${scopeContext.label}
+- 覆盖文档：${scopeNotes.length} 篇
+- 焦点文档：${note.title}
+- 生成时间：${formatDateTime(Date.now())}
+
+## 核心结论
+- ${aiBriefing.headline}
+- ${aiBriefing.summary}
+- ${scopeNotes.length > 1 ? `当前编译同时吸收了 ${scopeNotes.length} 篇相关文档的上下文。` : "当前编译主要围绕单篇笔记展开。"}
+
+## 关键实体
+${topEntities.length ? topEntities.map((entity) => `- ${entity}`).join("\n") : "- 当前没有稳定的实体提取结果，可先补正文再重新编译。"}
+
+## 同步与风险
+${[syncContext.signals[0]?.label, ...topLint].filter(Boolean).slice(0, 4).map((item) => `- ${item}`).join("\n") || "- 当前没有额外的同步或校对风险。"}
+
+## 来源文档
+${sourceRows.join("\n")}
+
+## 建议下一步
+${[...syncContext.actions, ...topSuggestions].filter(Boolean).slice(0, 5).map((item, index) => `${index + 1}. ${item}`).join("\n") || "1. 继续补充这篇知识页的结构和结论。"}
+`,
+  };
+}
+
 function buildAiCopilotAnswer({ note, noteBody, syncContext, draftInsight, aiBriefing }) {
   const question = (state.aiCopilot.question || "").trim() || "这篇内容下一步应该怎么推进？";
   const scopeContext = resolveAiCopilotScopeContext(note);
@@ -5136,6 +5225,14 @@ function renderWorkspaceAiPanel() {
     };
     persistLocalWorkspaceSession();
   }
+  if (state.aiCompile.anchorNoteId !== note.id) {
+    state.aiCompile = {
+      ...state.aiCompile,
+      anchorNoteId: note.id,
+      targetTitle: buildAiCompileTargetTitle(note),
+    };
+    persistLocalWorkspaceSession();
+  }
   const syncContext = deriveWorkspaceSyncContext(note);
   const editorDraft = getActiveEditorDraft();
   const draftInsight = buildEditorDraftInsight(note, editorDraft);
@@ -5161,6 +5258,10 @@ function renderWorkspaceAiPanel() {
   const aiSuggestedQuestions = buildAiCopilotSuggestedQuestions(note, syncContext, draftInsight);
   const aiLastAnswer =
     state.aiCopilot.lastAnswer?.anchorNoteId === note.id ? state.aiCopilot.lastAnswer : null;
+  const aiCompiledNote =
+    state.aiCompile.lastCompiledNoteId && getCurrentWorkspaceShell().notes[state.aiCompile.lastCompiledNoteId]
+      ? getCurrentWorkspaceShell().notes[state.aiCompile.lastCompiledNoteId]
+      : null;
   const aiCommands = [
     {
       id: "start-edit",
@@ -5253,6 +5354,37 @@ function renderWorkspaceAiPanel() {
             </article>
           `
           : '<p class="ai-copy">输入问题后，右侧会基于当前笔记、分区或工作区上下文生成一轮可写回草稿的回答。</p>'
+      }
+    </section>
+    <section class="ai-sync-box">
+      <h3>编译到知识页</h3>
+      <p class="ai-copy">把当前作用范围内的内容整理成 `.ai/wiki` 本地知识页，便于后续继续编辑、校对和纳入知识库。</p>
+      <div class="detail-actions">
+        ${aiScopeOptions
+          .map(
+            (scope) =>
+              `<button class="${scope.id === state.aiCompile.scope ? "solid" : "ghost"} detail-inline-button" data-ai-compile-scope="${escapeHtml(scope.id)}" type="button" ${scope.disabled ? "disabled" : ""}>${escapeHtml(scope.label)}</button>`,
+          )
+          .join("")}
+      </div>
+      <div class="editor-draft-panel">
+        <label class="editor-field">
+          <span class="metric-label">知识页标题</span>
+          <input id="ai-compile-title-input" class="editor-title-input" type="text" value="${escapeHtml(state.aiCompile.targetTitle)}" placeholder="例如：同步桥接知识页" />
+        </label>
+      </div>
+      <div class="detail-actions">
+        <button class="solid detail-inline-button" data-ai-command="compile-to-ai-wiki" type="button">生成知识页</button>
+        ${
+          aiCompiledNote
+            ? `<button class="ghost detail-inline-button" data-ai-source-note="${escapeHtml(state.aiCompile.lastCompiledNoteId)}" type="button">打开最近知识页</button>`
+            : ""
+        }
+      </div>
+      ${
+        aiCompiledNote
+          ? `<p class="ai-copy">${escapeHtml(`最近生成：${aiCompiledNote.title} · ${aiCompiledNote.lastSaved}`)}</p>`
+          : '<p class="ai-copy">生成后会自动落到 `.ai/wiki` 分区，并直接进入编辑状态。</p>'
       }
     </section>
     <section class="ai-brief-card">
@@ -5404,9 +5536,16 @@ function renderWorkspaceAiPanel() {
   `;
 
   const aiQuestionInput = elements.workspaceAiPanel.querySelector("#ai-question-input");
+  const aiCompileTitleInput = elements.workspaceAiPanel.querySelector("#ai-compile-title-input");
   if (aiQuestionInput) {
     aiQuestionInput.addEventListener("input", (event) => {
       state.aiCopilot.question = event.target.value;
+      persistLocalWorkspaceSession();
+    });
+  }
+  if (aiCompileTitleInput) {
+    aiCompileTitleInput.addEventListener("input", (event) => {
+      state.aiCompile.targetTitle = event.target.value;
       persistLocalWorkspaceSession();
     });
   }
@@ -5414,6 +5553,14 @@ function renderWorkspaceAiPanel() {
     button.addEventListener("click", () => {
       state.aiCopilot.scope = button.dataset.aiScope || "current-note";
       state.aiCopilot.lastAnswer = null;
+      persistLocalWorkspaceSession();
+      render();
+    });
+  }
+  for (const button of elements.workspaceAiPanel.querySelectorAll("[data-ai-compile-scope]")) {
+    button.addEventListener("click", () => {
+      state.aiCompile.scope = button.dataset.aiCompileScope || "current-note";
+      state.aiCompile.targetTitle = buildAiCompileTargetTitle(note);
       persistLocalWorkspaceSession();
       render();
     });
@@ -5537,6 +5684,10 @@ function renderWorkspaceAiPanel() {
             historyDetail: `${note.title} · 写入 AI 问答结论`,
           },
         );
+        return;
+      }
+      if (command === "compile-to-ai-wiki") {
+        compileCurrentScopeToAiWiki();
         return;
       }
       if (command === "create-followup") {
@@ -6359,6 +6510,95 @@ ${syncContext.actions.slice(0, 3).map((item, index) => `${index + 1}. ${item}`).
     type: "workspace_followup_created",
     level: "info",
     detail: `${title} · 来源 ${currentNote.title}`,
+  });
+  render();
+}
+
+function compileCurrentScopeToAiWiki() {
+  const currentNote = getSelectedWorkspaceNote();
+  if (!currentNote) {
+    return;
+  }
+
+  const syncContext = deriveWorkspaceSyncContext(currentNote);
+  const noteBody = getActiveEditorDraft()?.body || currentNote.body;
+  const aiBriefing = buildAiBriefing({
+    note: currentNote,
+    noteBody,
+    syncContext,
+    draftInsight: buildEditorDraftInsight(currentNote, getActiveEditorDraft()),
+  });
+  const compiledDraft = buildAiCompileDraftBody({
+    note: currentNote,
+    syncContext,
+    aiBriefing,
+  });
+  const workspaceShell = ensureEditableWorkspaceShell();
+  const wikiSection = ensureWorkspaceSectionById(workspaceShell, "ai-wiki");
+  const desiredTitle = state.aiCompile.targetTitle.trim() || buildAiCompileTargetTitle(currentNote);
+  const desiredPath = resolveWorkspaceNotePathForSection("ai-wiki", desiredTitle);
+  const existingItem = wikiSection.items.find((item) => item.title === desiredTitle) || null;
+  const compiledId = existingItem?.id || `ai-compile-${Date.now()}`;
+  const existingNote = workspaceShell.notes[compiledId] || null;
+
+  if (existingItem) {
+    existingItem.title = desiredTitle;
+    existingItem.path = desiredPath;
+    existingItem.status = "AI 知识页待校对";
+  } else {
+    wikiSection.items.unshift({
+      id: compiledId,
+      title: desiredTitle,
+      path: desiredPath,
+      status: "AI 知识页待校对",
+    });
+  }
+
+  workspaceShell.notes[compiledId] = {
+    title: desiredTitle,
+    path: desiredPath,
+    statusTone: "warning",
+    statusLabel: "AI 知识页待校对",
+    lastSaved: existingNote ? "刚刚更新" : "刚刚生成",
+    tags: Array.from(new Set([...(existingNote?.tags || []), "ai", "wiki", "draft"])),
+    syncContext: {
+      watchActionIds: ["show-vault-summary", "detect-local-changes"],
+      watchCardKinds: ["changes", "activity"],
+      watchBlockingReasons: ["requires_full_pull"],
+    },
+    body: compiledDraft.body,
+    ai: {
+      queueDepth: 0,
+      warnings: compiledDraft.topEntities.length ? 0 : 1,
+      relatedEntities: compiledDraft.topEntities.length ? compiledDraft.topEntities : [currentNote.title],
+      suggestions: [
+        "先人工核对这篇知识页，再决定是否继续补结构或进入正式同步。",
+        "如果范围过大，可切到单篇笔记或分区后重新编译。",
+      ],
+      lint: compiledDraft.topEntities.length ? [] : ["当前实体提取较弱，建议补充正文后重新编译。"],
+    },
+  };
+
+  state.selectedWorkspaceNoteId = compiledId;
+  state.workspaceSourceLabel = "浏览器本地草稿";
+  state.aiCompile = {
+    ...state.aiCompile,
+    anchorNoteId: currentNote.id,
+    targetTitle: desiredTitle,
+    lastCompiledNoteId: compiledId,
+    lastCompiledAtMs: Date.now(),
+  };
+  setEditorDraftForNote(compiledId, {
+    noteId: compiledId,
+    title: desiredTitle,
+    body: workspaceShell.notes[compiledId].body,
+  });
+  persistLocalWorkspaceSession();
+  elements.workspaceStatus.textContent = `已生成 AI 知识页：${desiredTitle}`;
+  pushSessionHistory({
+    type: "ai_compile_generated",
+    level: "success",
+    detail: `${desiredTitle} · ${compiledDraft.scopeContext.label}`,
   });
   render();
 }
