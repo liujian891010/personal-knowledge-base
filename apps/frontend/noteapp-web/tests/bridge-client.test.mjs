@@ -99,6 +99,10 @@ export async function runBridgeClientTests() {
       async json() {
         return {
           source: "sample",
+          aiBoundaryStatus: {
+            available: true,
+            mode: "dev-server-local",
+          },
           syncPayload: { generated_at_ms: 1 },
           workspaceShell: { sections: [], notes: {} },
         };
@@ -108,6 +112,7 @@ export async function runBridgeClientTests() {
 
   const sampleSession = await fetchSampleAppSession();
   assert.equal(sampleSession.source, "sample");
+  assert.equal(sampleSession.aiBoundaryStatus.mode, "dev-server-local");
   assert.equal(sampleRequest.url, "/api/app-session/sample");
   assert.deepEqual(sampleRequest.options, { cache: "no-store" });
   completed.push("fetchSampleAppSession requests the sample session endpoint");
@@ -123,6 +128,10 @@ export async function runBridgeClientTests() {
         return {
           source: "desktop-bridge",
           loadedAtMs: 1,
+          aiBoundaryStatus: {
+            available: true,
+            mode: "dev-server-local",
+          },
           syncPayload: { generated_at_ms: 1 },
           workspaceShell: { sections: [], notes: {} },
         };
@@ -132,6 +141,7 @@ export async function runBridgeClientTests() {
 
   const refreshedSession = await refreshAppSession({ activityLimit: 5 });
   assert.equal(refreshedSession.source, "desktop-bridge");
+  assert.equal(refreshedSession.aiBoundaryStatus.available, true);
   assert.equal(refreshSessionRequest.url, "/api/app-session/refresh");
   assert.equal(refreshSessionRequest.options.method, "POST");
   assert.equal(refreshSessionRequest.options.body, JSON.stringify({ activityLimit: 5 }));

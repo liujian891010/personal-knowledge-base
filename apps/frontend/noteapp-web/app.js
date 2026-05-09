@@ -1364,6 +1364,7 @@ function buildAppSessionState(session) {
     source: session.source,
     loadedAtMs: session.loadedAtMs,
     bridgeStatus: session.bridgeStatus || null,
+    aiBoundaryStatus: parseAiBoundaryStatus(session.aiBoundaryStatus),
     sessionId: session.meta?.sessionId || `${session.source}-${session.loadedAtMs}`,
     payloadKind,
     workspaceSummary,
@@ -3221,6 +3222,10 @@ function renderViewDetailGrid() {
                 <div class="detail-row">
                   <span>工作区摘要</span>
                   <strong>${escapeHtml(settings.appSession ? `${settings.appSession.workspaceSummary.sectionCount} 个分区 / ${settings.appSession.workspaceSummary.noteCount} 篇文档` : "无")}</strong>
+                </div>
+                <div class="detail-row">
+                  <span>AI 边界快照</span>
+                  <strong>${escapeHtml(settings.appSession?.aiBoundaryStatus ? `${settings.appSession.aiBoundaryStatus.available ? "AI 接口在线" : "本地回退"} / ${formatAiBoundaryModeLabel(settings.appSession.aiBoundaryStatus.mode)}` : "无")}</strong>
                 </div>
               `
               : ""
@@ -6832,6 +6837,10 @@ function applyAppSession(payload, sourceLabel) {
   if (session.bridgeStatus) {
     state.bridgeStatus = session.bridgeStatus;
     state.bridgeCheckedAtMs = session.loadedAtMs;
+  }
+  if (session.aiBoundaryStatus) {
+    applyAiBoundaryStatus(parseAiBoundaryStatus(session.aiBoundaryStatus), { origin: "session" });
+    state.aiBoundaryCheckedAtMs = session.aiBoundaryStatus.checkedAtMs || session.loadedAtMs;
   }
   state.lastBridgeError = null;
   elements.actionExecutionStatus.textContent =
