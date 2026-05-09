@@ -253,6 +253,7 @@ const state = {
   appSession: null,
   sessionHistory: [],
   editorDrafts: {},
+  draftRecoveryMeta: {},
   recoveryDrafts: [],
   runtimeSessionId: createRuntimeSessionId(),
 };
@@ -1741,6 +1742,35 @@ function setEditorDraftForNote(noteId, draft) {
   };
 }
 
+function getDraftRecoveryMeta(noteId) {
+  if (!noteId) {
+    return null;
+  }
+  return state.draftRecoveryMeta[noteId] || null;
+}
+
+function setDraftRecoveryMeta(noteId, patch) {
+  if (!noteId || !patch) {
+    return;
+  }
+  state.draftRecoveryMeta = {
+    ...state.draftRecoveryMeta,
+    [noteId]: {
+      ...(state.draftRecoveryMeta[noteId] || {}),
+      ...patch,
+    },
+  };
+}
+
+function removeDraftRecoveryMeta(noteId) {
+  if (!noteId || !state.draftRecoveryMeta[noteId]) {
+    return;
+  }
+  const nextMeta = { ...state.draftRecoveryMeta };
+  delete nextMeta[noteId];
+  state.draftRecoveryMeta = nextMeta;
+}
+
 function removeEditorDraftForNote(noteId) {
   if (!noteId || !state.editorDrafts[noteId]) {
     return;
@@ -1752,6 +1782,7 @@ function removeEditorDraftForNote(noteId) {
 
 function pruneEditorDrafts(workspaceShell) {
   const nextDrafts = {};
+  const nextRecoveryMeta = {};
   for (const [noteId, draft] of Object.entries(state.editorDrafts)) {
     const note = workspaceShell.notes?.[noteId];
     if (!note) {
@@ -1762,8 +1793,12 @@ function pruneEditorDrafts(workspaceShell) {
       title: typeof draft.title === "string" ? draft.title : note.title,
       body: typeof draft.body === "string" ? draft.body : note.body,
     };
+    if (state.draftRecoveryMeta[noteId]) {
+      nextRecoveryMeta[noteId] = { ...state.draftRecoveryMeta[noteId] };
+    }
   }
   state.editorDrafts = nextDrafts;
+  state.draftRecoveryMeta = nextRecoveryMeta;
 }
 
 function collectDirtyEditorDrafts() {
@@ -1826,6 +1861,12 @@ function persistRecoveryDraftForNote(noteId, options = {}) {
 
   const store = upsertDraftRecoveryEntry(readDraftRecoveryStore(), entry);
   const persisted = writeDraftRecoveryStore(store);
+  if (persisted) {
+    setDraftRecoveryMeta(noteId, {
+      pending: false,
+      lastPersistedAtMs: entry.updatedAtMs,
+    });
+  }
   if (options.refresh !== false) {
     refreshRecoveryDrafts();
   }
@@ -1836,6 +1877,7 @@ function discardPersistedRecoveryDraft(noteId, options = {}) {
   clearDraftAutosaveTimer(noteId);
   const store = removeDraftRecoveryEntry(readDraftRecoveryStore(), noteId);
   const persisted = writeDraftRecoveryStore(store);
+  removeDraftRecoveryMeta(noteId);
   if (options.refresh !== false) {
     refreshRecoveryDrafts();
   }
@@ -1844,12 +1886,20 @@ function discardPersistedRecoveryDraft(noteId, options = {}) {
 
 function scheduleRecoveryDraftAutosave(noteId) {
   clearDraftAutosaveTimer(noteId);
+  setDraftRecoveryMeta(noteId, {
+    pending: true,
+  });
   const timerId = window.setTimeout(() => {
     const persisted = persistRecoveryDraftForNote(noteId, { refresh: false });
     draftAutosaveTimers.delete(noteId);
     if (!persisted) {
       return;
     }
+    setDraftRecoveryMeta(noteId, {
+      pending: false,
+      lastPersistedAtMs: Date.now(),
+      restoredFromPreviousSession: false,
+    });
     elements.workspaceStatus.textContent = `已自动保存恢复草稿：${getEditorDraftByNoteId(noteId)?.title || noteId}`;
   }, 1000);
   draftAutosaveTimers.set(noteId, timerId);
@@ -1922,6 +1972,11 @@ function restoreRecoveryDraft(noteId) {
     title: recoveryEntry.title,
     body: recoveryEntry.body,
   });
+  setDraftRecoveryMeta(targetNoteId, {
+    pending: false,
+    lastPersistedAtMs: Date.now(),
+    restoredFromPreviousSession: true,
+  });
   state.selectedWorkspaceNoteId = targetNoteId;
   state.activeNavView = "overview";
   persistRecoveryDraftForNote(targetNoteId);
@@ -1941,6 +1996,7 @@ function restoreRecoveryDraft(noteId) {
 function discardRecoveryDraft(noteId) {
   const recoveryEntry = state.recoveryDrafts.find((entry) => entry.noteId === noteId);
   discardPersistedRecoveryDraft(noteId, { refresh: true });
+  removeDraftRecoveryMeta(noteId);
   if (recoveryEntry) {
     elements.workspaceStatus.textContent = `已放弃恢复草稿：${recoveryEntry.title}`;
     pushSessionHistory({
@@ -1963,6 +2019,7 @@ function discardAllRecoveryDrafts() {
   const noteIds = state.recoveryDrafts.map((entry) => entry.noteId);
   for (const noteId of noteIds) {
     discardPersistedRecoveryDraft(noteId, { refresh: false });
+    removeDraftRecoveryMeta(noteId);
   }
   refreshRecoveryDrafts();
   elements.workspaceStatus.textContent = "已清空本地恢复区中的未恢复草稿。";
@@ -2022,6 +2079,35 @@ function buildEditorDraftInsight(note, draft) {
     delta,
     lines: countDraftLines(draft.body),
   };
+}
+
+function buildDraftRecoveryStatus(noteId) {
+  const meta = getDraftRecoveryMeta(noteId);
+  if (!meta) {
+    return null;
+  }
+  if (meta.pending) {
+    return {
+      tone: "warning",
+      label: "等待自动保存",
+      detail: "停止输入 1 秒后，会写入本地恢复区。",
+    };
+  }
+  if (typeof meta.lastPersistedAtMs === "number" && Number.isFinite(meta.lastPersistedAtMs)) {
+    return {
+      tone: meta.restoredFromPreviousSession ? "warning" : "success",
+      label: meta.restoredFromPreviousSession ? "已恢复并保护" : "已写入恢复区",
+      detail: `${formatDateTime(meta.lastPersistedAtMs)} · 刷新或异常退出后可恢复。`,
+    };
+  }
+  if (meta.restoredFromPreviousSession) {
+    return {
+      tone: "warning",
+      label: "已从上次会话恢复",
+      detail: "建议保存一次，确认已回到当前工作区。",
+    };
+  }
+  return null;
 }
 
 function summaryHasBlockingSyncWork() {
@@ -2336,6 +2422,7 @@ function renderWorkspaceRail() {
   const editorDraft = getActiveEditorDraft();
   const dirtyDrafts = collectDirtyEditorDrafts();
   const draftInsight = buildEditorDraftInsight(note, editorDraft);
+  const draftRecoveryStatus = note ? buildDraftRecoveryStatus(state.selectedWorkspaceNoteId) : null;
   const lastExecution = buildLastExecutionSummary();
   const visibleCount = getVisibleWorkspaceNoteIds(workspaceShell).length;
   const summary = state.syncCenter?.summary || null;
@@ -2424,6 +2511,11 @@ function renderWorkspaceRail() {
                 }
               </p>
               <p class="session-rail-copy">${escapeHtml(dirtyDrafts.length ? dirtyDrafts.map((draft) => draft.title).join(" · ") : "其余文档当前没有挂起的未保存修改。")}</p>
+              ${
+                draftRecoveryStatus
+                  ? `<p class="session-rail-copy">${escapeHtml(`${draftRecoveryStatus.label} · ${draftRecoveryStatus.detail}`)}</p>`
+                  : ""
+              }
             </article>
           `
           : ""
@@ -2471,6 +2563,7 @@ function renderWorkspaceEditor() {
   const draftDirty = isEditorDraftDirty(note, editorDraft);
   const draftWordCount = editorDraft ? countDraftCharacters(editorDraft.body) : 0;
   const draftInsight = buildEditorDraftInsight(note, editorDraft);
+  const draftRecoveryStatus = buildDraftRecoveryStatus(state.selectedWorkspaceNoteId);
   const workspaceSyncActions = collectWorkspaceSyncActions(note);
   const canEnterSyncFlow = !draftInsight || !draftInsight.dirty;
   const lastExecution = buildLastExecutionSummary();
@@ -2496,6 +2589,7 @@ function renderWorkspaceEditor() {
     <div class="editor-meta-row">
       <span class="mini-pill tone-info">${escapeHtml(note.path)}</span>
       <span class="mini-pill tone-info">${escapeHtml(note.lastSaved)}</span>
+      <span id="editor-recovery-pill" class="mini-pill tone-${draftRecoveryStatus?.tone || "info"}">${escapeHtml(draftRecoveryStatus?.label || "尚未写入恢复区")}</span>
     </div>
     <ul class="editor-tags">
       ${note.tags.map((tag) => `<li>${escapeHtml(tag)}</li>`).join("")}
@@ -2537,6 +2631,30 @@ function renderWorkspaceEditor() {
       </p>
       <div class="editor-sync-actions" id="editor-sync-actions"></div>
     </section>
+    ${
+      editorDraft
+        ? `
+          <section class="editor-sync-box">
+            <h3>本地恢复保护</h3>
+            <div class="editor-sync-checklist">
+              <div class="editor-sync-item">
+                <span>离开页面保护</span>
+                <strong class="${draftInsight?.dirty ? "tone-warning-inline" : "tone-success-inline"}">${draftInsight?.dirty ? "已开启提醒" : "当前无需提醒"}</strong>
+              </div>
+              <div class="editor-sync-item">
+                <span>恢复区状态</span>
+                <strong id="editor-recovery-status" class="tone-${draftRecoveryStatus?.tone || "info"}-inline">${escapeHtml(draftRecoveryStatus?.label || "尚未写入恢复区")}</strong>
+              </div>
+              <div class="editor-sync-item">
+                <span>说明</span>
+                <strong id="editor-recovery-detail">${escapeHtml(draftRecoveryStatus?.detail || "开始输入后，系统会在 1 秒静默后写入本地恢复区。")}</strong>
+              </div>
+            </div>
+            <p class="summary-copy">恢复草稿仅保留在本地浏览器，不参与同步。保存正式草稿后，会自动清理对应恢复记录。</p>
+          </section>
+        `
+        : ""
+    }
     ${
       lastExecution
         ? `
@@ -2599,6 +2717,9 @@ function renderWorkspaceEditor() {
   const bodyInput = elements.workspaceEditor.querySelector("#editor-body-input");
   const dirtyIndicator = elements.workspaceEditor.querySelector("#editor-dirty-indicator");
   const wordCount = elements.workspaceEditor.querySelector("#editor-word-count");
+  const recoveryPill = elements.workspaceEditor.querySelector("#editor-recovery-pill");
+  const recoveryStatus = elements.workspaceEditor.querySelector("#editor-recovery-status");
+  const recoveryDetail = elements.workspaceEditor.querySelector("#editor-recovery-detail");
   const editorSyncActions = elements.workspaceEditor.querySelector("#editor-sync-actions");
   if (editorSyncActions) {
     if (!canEnterSyncFlow) {
@@ -2645,6 +2766,19 @@ function renderWorkspaceEditor() {
       if (wordCount) {
         const count = countDraftCharacters(currentDraft.body);
         wordCount.textContent = `字数 ${count}`;
+      }
+      const currentRecoveryStatus = buildDraftRecoveryStatus(editorDraft.noteId);
+      if (recoveryPill && currentRecoveryStatus) {
+        recoveryPill.className = `mini-pill tone-${currentRecoveryStatus.tone}`;
+        recoveryPill.textContent = currentRecoveryStatus.label;
+      }
+      if (recoveryStatus) {
+        recoveryStatus.className = `tone-${currentRecoveryStatus?.tone || "info"}-inline`;
+        recoveryStatus.textContent = currentRecoveryStatus?.label || "尚未写入恢复区";
+      }
+      if (recoveryDetail) {
+        recoveryDetail.textContent =
+          currentRecoveryStatus?.detail || "开始输入后，系统会在 1 秒静默后写入本地恢复区。";
       }
     };
     titleInput.addEventListener("input", (event) => {
@@ -3627,11 +3761,16 @@ elements.applyWorkspaceInputButton.addEventListener("click", () => {
 
 elements.clearInputButton.addEventListener("click", () => {
   elements.payloadInput.value = "";
+  for (const timerId of draftAutosaveTimers.values()) {
+    window.clearTimeout(timerId);
+  }
+  draftAutosaveTimers.clear();
   state.syncCenter = null;
   state.activityFeed = null;
   state.snapshotMetadata = null;
   state.appSession = null;
   state.editorDrafts = {};
+  state.draftRecoveryMeta = {};
   state.selectedAction = null;
   state.lastBridgeError = null;
   state.lastExecution = null;
