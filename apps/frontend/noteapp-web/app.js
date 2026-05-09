@@ -507,6 +507,19 @@ function parseAiCompileState(raw) {
   };
 }
 
+function parseAiBoundaryStatus(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  return {
+    available: raw.available === true,
+    mode: typeof raw.mode === "string" ? raw.mode : null,
+    checkedAtMs: typeof raw.checkedAtMs === "number" ? raw.checkedAtMs : null,
+    message: typeof raw.message === "string" ? raw.message : "",
+    capabilities: Array.isArray(raw.capabilities) ? raw.capabilities.filter((item) => typeof item === "string").slice(0, 8) : [],
+  };
+}
+
 function readLocalWorkspaceSession() {
   try {
     const raw = window.localStorage.getItem(LOCAL_WORKSPACE_SESSION_STORAGE_KEY);
@@ -532,6 +545,7 @@ function readLocalWorkspaceSession() {
       lastExecutionAtMs: typeof parsed.lastExecutionAtMs === "number" ? parsed.lastExecutionAtMs : null,
       aiCopilot: parseAiCopilotState(parsed.aiCopilot),
       aiCompile: parseAiCompileState(parsed.aiCompile),
+      aiBoundaryStatus: parseAiBoundaryStatus(parsed.aiBoundaryStatus),
       savedAtMs: typeof parsed.savedAtMs === "number" ? parsed.savedAtMs : Date.now(),
     };
   } catch {
@@ -560,6 +574,7 @@ function summarizeLocalWorkspaceSession() {
     aiCompiledNoteId: session.aiCompile?.lastCompiledNoteId || null,
     aiCompiledAtMs: session.aiCompile?.lastCompiledAtMs || null,
     aiCompileSource: session.aiCompile?.lastSource || null,
+    aiBoundaryStatus: session.aiBoundaryStatus || null,
   };
 }
 
@@ -592,6 +607,12 @@ function persistLocalWorkspaceSession() {
         lastExecutionAtMs: state.lastExecutionAtMs,
         aiCopilot: state.aiCopilot,
         aiCompile: state.aiCompile,
+        aiBoundaryStatus: state.aiBoundaryStatus
+          ? {
+              ...state.aiBoundaryStatus,
+              checkedAtMs: state.aiBoundaryCheckedAtMs,
+            }
+          : null,
         savedAtMs: Date.now(),
       }),
     );
@@ -617,6 +638,8 @@ function restoreLocalWorkspaceSession(options = {}) {
   elements.searchInput.value = state.searchQuery;
   state.aiCopilot = parseAiCopilotState(session.aiCopilot);
   state.aiCompile = parseAiCompileState(session.aiCompile);
+  state.aiBoundaryStatus = parseAiBoundaryStatus(session.aiBoundaryStatus);
+  state.aiBoundaryCheckedAtMs = session.aiBoundaryStatus?.checkedAtMs || null;
   applyWorkspaceShell(session.workspaceShell, session.workspaceSourceLabel);
 
   if (options.pushHistory !== false) {
@@ -3212,6 +3235,18 @@ function renderViewDetailGrid() {
                   <strong>最近 AI 问答</strong>
                   <span>${escapeHtml(settings.localWorkspaceSession.aiQuestion)}</span>
                   ${settings.localWorkspaceSession.aiHeadline ? `<span>${escapeHtml(settings.localWorkspaceSession.aiHeadline)}</span>` : ""}
+                </div>
+              `
+              : ""
+          }
+          ${
+            settings.localWorkspaceSession?.aiBoundaryStatus
+              ? `
+                <div class="detail-row detail-row-block">
+                  <strong>最近 AI 边界状态</strong>
+                  <span>${escapeHtml(settings.localWorkspaceSession.aiBoundaryStatus.available ? "AI 接口在线" : "本地回退")}</span>
+                  <span>${escapeHtml(formatAiBoundaryModeLabel(settings.localWorkspaceSession.aiBoundaryStatus.mode))}</span>
+                  ${settings.localWorkspaceSession.aiBoundaryStatus.checkedAtMs ? `<span>${escapeHtml(formatDateTime(settings.localWorkspaceSession.aiBoundaryStatus.checkedAtMs))}</span>` : ""}
                 </div>
               `
               : ""
