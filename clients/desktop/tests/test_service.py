@@ -324,6 +324,43 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             self.assertEqual(content_by_file_id, {"file-live": payload})
 
+    def test_list_workspace_files_returns_filemap_disk_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, payload, _ = self._seed_workspace(root)
+
+            snapshot = service.list_workspace_files()
+
+            self.assertEqual(snapshot.schema_version, "v1")
+            self.assertEqual(snapshot.vault_id, "vault-001")
+            self.assertEqual(snapshot.device_id, "desktop-shanghai")
+            self.assertEqual(snapshot.vault_root, root)
+            self.assertEqual(snapshot.total_count, 1)
+            self.assertEqual(snapshot.active_count, 1)
+            self.assertEqual(snapshot.missing_count, 0)
+            self.assertEqual(len(snapshot.files), 1)
+            self.assertEqual(snapshot.files[0].file_id, "file-live")
+            self.assertEqual(snapshot.files[0].path, "Notes/Live.md")
+            self.assertEqual(snapshot.files[0].type, "note")
+            self.assertEqual(snapshot.files[0].status, "active")
+            self.assertTrue(snapshot.files[0].exists_on_disk)
+            self.assertEqual(snapshot.files[0].size_bytes, len(payload))
+            self.assertTrue(snapshot.files[0].content_hash.startswith("sha256:"))
+
+    def test_list_workspace_files_marks_missing_active_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            (root / "Notes" / "Live.md").unlink()
+
+            snapshot = service.list_workspace_files()
+
+            self.assertEqual(snapshot.total_count, 1)
+            self.assertEqual(snapshot.active_count, 1)
+            self.assertEqual(snapshot.missing_count, 1)
+            self.assertFalse(snapshot.files[0].exists_on_disk)
+            self.assertIsNone(snapshot.files[0].size_bytes)
+
     def test_export_vault_package_excludes_runtime_state_and_optional_raw(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "vault"
