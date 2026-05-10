@@ -9,6 +9,7 @@ const scriptPath = fileURLToPath(import.meta.url);
 const appRoot = resolve(scriptPath, '..', '..');
 const defaultSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'live-sync-shell.json');
 const defaultSettingsSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'local-settings-snapshot.json');
+const defaultWorkspaceFilesPath = resolve(appRoot, 'public', 'fixtures', 'workspace-files.json');
 const host = process.env.NOTEAPP_SYNC_BRIDGE_HOST || '127.0.0.1';
 const port = Number(process.env.NOTEAPP_SYNC_BRIDGE_PORT || 3187);
 const allowRemoteHost = process.env.NOTEAPP_SYNC_BRIDGE_ALLOW_REMOTE === 'true';
@@ -19,6 +20,9 @@ const snapshotPath = process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT
 const settingsSnapshotPath = process.env.NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT
   ? resolve(process.env.NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT)
   : defaultSettingsSnapshotPath;
+const workspaceFilesPath = process.env.NOTEAPP_WORKSPACE_FILES_OUTPUT
+  ? resolve(process.env.NOTEAPP_WORKSPACE_FILES_OUTPUT)
+  : defaultWorkspaceFilesPath;
 
 const args = new Set(process.argv.slice(2));
 
@@ -36,6 +40,7 @@ Environment:
   NOTEAPP_SYNC_SNAPSHOT_OUTPUT   Output JSON path, default public/fixtures/live-sync-shell.json
   NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT
                                   Output JSON path, default public/fixtures/local-settings-snapshot.json
+  NOTEAPP_WORKSPACE_FILES_OUTPUT  Output JSON path, default public/fixtures/workspace-files.json
 
 It forwards to:
   GET  /api/sync/snapshot        npm run sync:snapshot equivalent
@@ -44,6 +49,8 @@ It forwards to:
   GET  /api/settings/snapshot    npm run settings:snapshot equivalent
   POST /api/settings/snapshot    npm run settings:write equivalent
   GET  /api/settings/live        Read current settings snapshot without running CLI
+  GET  /api/workspace/files      npm run workspace:files equivalent
+  GET  /api/workspace/live       Read current workspace files without running CLI
   GET  /health                   Health check
 `);
 }
@@ -132,6 +139,13 @@ function readSettingsSnapshot() {
     throw new Error(`settings snapshot was not found: ${settingsSnapshotPath}`);
   }
   return JSON.parse(readFileSync(settingsSnapshotPath, 'utf8'));
+}
+
+function readWorkspaceFiles() {
+  if (!existsSync(workspaceFilesPath)) {
+    throw new Error(`workspace files snapshot was not found: ${workspaceFilesPath}`);
+  }
+  return JSON.parse(readFileSync(workspaceFilesPath, 'utf8'));
 }
 
 function actionIdFromPath(pathname) {
@@ -232,6 +246,7 @@ const server = createServer(async (request, response) => {
         allowRemoteHost,
         snapshotPath,
         settingsSnapshotPath,
+        workspaceFilesPath,
         allowedOrigin,
       });
       return;
@@ -278,6 +293,19 @@ const server = createServer(async (request, response) => {
         rmSync(tempRoot, { recursive: true, force: true });
       }
       jsonResponse(request, response, 200, readSettingsSnapshot());
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/workspace/live') {
+      jsonResponse(request, response, 200, readWorkspaceFiles());
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/workspace/files') {
+      runScript('write-workspace-files.mjs', {
+        NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+      });
+      jsonResponse(request, response, 200, readWorkspaceFiles());
       return;
     }
 

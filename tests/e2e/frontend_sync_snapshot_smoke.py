@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -21,6 +22,12 @@ BRIDGE_PORT = int(os.environ.get("NOTEAPP_FRONTEND_SNAPSHOT_BRIDGE_PORT", "3192"
 BASE_URL = f"http://127.0.0.1:{PORT}"
 BRIDGE_URL = f"http://127.0.0.1:{BRIDGE_PORT}"
 VAULT_ID = "vault-frontend-snapshot-smoke"
+
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(VAULT_CORE_SRC))
+
+from vault_core import FileMapDocument, FileRecord, write_filemap_atomic  # noqa: E402
+from clients.desktop.workspace import DesktopVaultPaths  # noqa: E402
 
 
 def request_json(
@@ -183,6 +190,7 @@ def main() -> int:
             vault_root = Path(work_dir) / "vault"
             output_path = Path(work_dir) / "live-sync-shell.json"
             settings_output_path = Path(work_dir) / "local-settings-snapshot.json"
+            workspace_files_output_path = Path(work_dir) / "workspace-files.json"
             pythonpath = os.pathsep.join([str(VAULT_CORE_SRC), str(ROOT)])
             cli_env = {
                 **os.environ,
@@ -212,6 +220,35 @@ def main() -> int:
                 env=cli_env,
             )
 
+            note_path = vault_root / "Notes" / "Bridge Smoke.md"
+            note_path.parent.mkdir(parents=True, exist_ok=True)
+            note_path.write_text("# Bridge Smoke\n\nworkspace files\n", encoding="utf-8", newline="\n")
+            note_payload = note_path.read_bytes()
+            note_mtime_ms = note_path.stat().st_mtime_ns // 1_000_000
+            write_filemap_atomic(
+                DesktopVaultPaths.from_root(vault_root).filemap_path,
+                FileMapDocument(
+                    vault_id=VAULT_ID,
+                    updated_at=1770002000050,
+                    files=[
+                        FileRecord(
+                            file_id="file-bridge-smoke",
+                            path="Notes/Bridge Smoke.md",
+                            type="note",
+                            status="active",
+                            updated_at=note_mtime_ms,
+                            content_hash="sha256:" + hashlib.sha256(note_payload).hexdigest(),
+                            last_known_revision=0,
+                            meta={
+                                "size": len(note_payload),
+                                "mtime": note_mtime_ms,
+                                "mime_type": "text/markdown",
+                            },
+                        )
+                    ],
+                ),
+            )
+
             settings_path = vault_root / ".noteapp" / "settings.json"
             settings_path.write_text(
                 json.dumps(
@@ -239,6 +276,7 @@ def main() -> int:
                 "NOTEAPP_ACTIVITY_LIMIT": "5",
                 "NOTEAPP_SYNC_SNAPSHOT_OUTPUT": str(output_path),
                 "NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT": str(settings_output_path),
+                "NOTEAPP_WORKSPACE_FILES_OUTPUT": str(workspace_files_output_path),
             }
             run_checked(
                 ["node", "scripts/write-live-sync-shell.mjs"],
@@ -247,6 +285,11 @@ def main() -> int:
             )
             run_checked(
                 ["node", "scripts/write-local-settings-snapshot.mjs"],
+                cwd=FRONTEND_ROOT,
+                env=snapshot_env,
+            )
+            run_checked(
+                ["node", "scripts/write-workspace-files.mjs"],
                 cwd=FRONTEND_ROOT,
                 env=snapshot_env,
             )
@@ -265,6 +308,15 @@ def main() -> int:
             assert settings_payload["ai"]["embedding_status"] == "indexing", settings_payload
             assert settings_payload["sync"]["base_url"] == BASE_URL, settings_payload
             assert settings_payload["sync"]["bearer_token_configured"] is True, settings_payload
+            workspace_payload = json.loads(workspace_files_output_path.read_text(encoding="utf-8"))
+            assert workspace_payload["schema_version"] == "v1", workspace_payload
+            assert workspace_payload["vault_id"] == VAULT_ID, workspace_payload
+            assert workspace_payload["device_id"] == device_id, workspace_payload
+            assert workspace_payload["total_count"] == 1, workspace_payload
+            assert workspace_payload["active_count"] == 1, workspace_payload
+            assert workspace_payload["missing_count"] == 0, workspace_payload
+            assert workspace_payload["files"][0]["path"] == "Notes/Bridge Smoke.md", workspace_payload
+            assert workspace_payload["files"][0]["exists_on_disk"] is True, workspace_payload
 
             bridge_env = {
                 **snapshot_env,
@@ -291,6 +343,7 @@ def main() -> int:
                 assert allowed_origin["port"] == BRIDGE_PORT, allowed_origin
                 assert allowed_origin["allowRemoteHost"] is False, allowed_origin
                 assert allowed_origin["settingsSnapshotPath"] == str(settings_output_path), allowed_origin
+                assert allowed_origin["workspaceFilesPath"] == str(workspace_files_output_path), allowed_origin
                 status, rejected_origin = request_bridge_json(
                     "/health",
                     headers={"Origin": "http://evil.example"},
@@ -343,6 +396,14 @@ def main() -> int:
                 status, live_settings_payload = request_bridge_json("/api/settings/live")
                 assert status == 200, live_settings_payload
                 assert live_settings_payload == written_settings_payload, live_settings_payload
+                status, workspace_bridge_payload = request_bridge_json("/api/workspace/files")
+                assert status == 200, workspace_bridge_payload
+                assert workspace_bridge_payload["vault_id"] == VAULT_ID, workspace_bridge_payload
+                assert workspace_bridge_payload["device_id"] == device_id, workspace_bridge_payload
+                assert workspace_bridge_payload["files"][0]["path"] == "Notes/Bridge Smoke.md", workspace_bridge_payload
+                status, live_workspace_payload = request_bridge_json("/api/workspace/live")
+                assert status == 200, live_workspace_payload
+                assert live_workspace_payload == workspace_bridge_payload, live_workspace_payload
                 status, missing_action = request_bridge_json(
                     "/api/sync/actions/not-a-real-action",
                     method="POST",
@@ -366,6 +427,7 @@ def main() -> int:
                         "device_id": payload["device_id"],
                         "level": payload["sync_center"]["panel"]["level"],
                         "settings_source": settings_payload["source"],
+                        "workspace_files": workspace_payload["total_count"],
                         "bridge_url": BRIDGE_URL,
                     },
                     indent=2,

@@ -1,0 +1,33 @@
+{
+  "active_count": 2,
+  "device_id": "desktop-shanghai",
+  "files": [
+    {
+      "content_hash": "sha256:aaa",
+      "exists_on_disk": true,
+      "file_id": "file-roadmap",
+      "last_known_revision": 7,
+      "path": "Notes/Product Roadmap.md",
+      "size_bytes": 1240,
+      "status": "active",
+      "type": "note",
+      "updated_at": 1770000040901
+    },
+    {
+      "content_hash": "sha256:bbb",
+      "exists_on_disk": true,
+      "file_id": "file-ai",
+      "last_known_revision": 7,
+      "path": "Notes/AI Plan.md",
+      "size_bytes": 860,
+      "status": "active",
+      "type": "note",
+      "updated_at": 1770000030901
+    }
+  ],
+  "missing_count": 0,
+  "schema_version": "v1",
+  "total_count": 2,
+  "vault_id": "vault-001",
+  "vault_root": "C:/vaults/pkb"
+}
