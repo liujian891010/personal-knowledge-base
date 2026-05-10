@@ -73,7 +73,7 @@ function corsOrigin(origin) {
 function jsonResponse(request, response, statusCode, payload) {
   response.writeHead(statusCode, {
     'access-control-allow-origin': corsOrigin(request.headers.origin),
-    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
     'access-control-allow-headers': 'content-type',
     'cache-control': 'no-store',
     'content-type': 'application/json; charset=utf-8',
@@ -356,6 +356,9 @@ const server = createServer(async (request, response) => {
         });
         runScript('write-workspace-files.mjs', {
           NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+        });
+        runScript('write-live-sync-shell.mjs', {
+          NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
         });
         jsonResponse(request, response, 200, JSON.parse(readFileSync(outputPath, 'utf8')));
       } finally {

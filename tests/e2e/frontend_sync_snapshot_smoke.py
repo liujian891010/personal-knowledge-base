@@ -409,6 +409,15 @@ def main() -> int:
                 assert file_content_payload["path"] == "Notes/Bridge Smoke.md", file_content_payload
                 assert file_content_payload["encoding"] == "utf-8", file_content_payload
                 assert "# Bridge Smoke" in file_content_payload["text"], file_content_payload
+                status, put_preflight = request_bridge_json(
+                    "/api/workspace/files/file-bridge-smoke/content",
+                    method="OPTIONS",
+                    headers={
+                        "Origin": "http://127.0.0.1:3000",
+                        "Access-Control-Request-Method": "PUT",
+                    },
+                )
+                assert status == 204, put_preflight
                 status, written_content_payload = request_bridge_json(
                     "/api/workspace/files/file-bridge-smoke/content",
                     method="PUT",
@@ -423,6 +432,19 @@ def main() -> int:
                 status, live_workspace_payload = request_bridge_json("/api/workspace/live")
                 assert status == 200, live_workspace_payload
                 assert live_workspace_payload["files"][0]["path"] == "Notes/Bridge Smoke.md", live_workspace_payload
+                status, live_sync_payload = request_bridge_json("/api/sync/live")
+                assert status == 200, live_sync_payload
+                assert live_sync_payload["sync_center"]["panel"]["change_badge_count"] == 1, live_sync_payload
+                local_change_cards = [
+                    card
+                    for card in live_sync_payload["sync_center"]["cards"]
+                    if card["card_id"] == "local-changes"
+                ]
+                assert len(local_change_cards) == 1, live_sync_payload
+                assert local_change_cards[0]["badge_count"] == 1, local_change_cards
+                assert {
+                    action["action_id"] for action in local_change_cards[0]["actions"]
+                } == {"detect-local-changes", "submit-detected-commit"}, local_change_cards
                 status, missing_action = request_bridge_json(
                     "/api/sync/actions/not-a-real-action",
                     method="POST",
