@@ -9,6 +9,7 @@
 3. tombstone
 4. vault_state
 5. AI wiki page schema
+6. local settings schema
 
 当前包含三类产物：
 

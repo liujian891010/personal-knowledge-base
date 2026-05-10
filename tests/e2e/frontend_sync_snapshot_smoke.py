@@ -332,6 +332,7 @@ def main() -> int:
                 assert written_settings_payload["ai"]["local_model_status"] == "disabled", written_settings_payload
                 assert written_settings_payload["ai"]["embedding_status"] == "ready", written_settings_payload
                 assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+                    "schema_version": "v1",
                     "appearance": {"theme": "system"},
                     "ai": {
                         "local_model_status": "disabled",

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LocalSettings",
+  "description": "Device-local settings stored at .noteapp/settings.json. This file is intentionally not synchronized across devices.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "appearance",
+    "ai"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "appearance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "theme"
+      ],
+      "properties": {
+        "theme": {
+          "type": "string",
+          "enum": [
+            "dark",
+            "light",
+            "system"
+          ]
+        }
+      }
+    },
+    "ai": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "local_model_status",
+        "embedding_status"
+      ],
+      "properties": {
+        "local_model_status": {
+          "type": "string",
+          "enum": [
+            "not_configured",
+            "available",
+            "unavailable",
+            "disabled",
+            "error"
+          ]
+        },
+        "embedding_status": {
+          "type": "string",
+          "enum": [
+            "not_configured",
+            "ready",
+            "indexing",
+            "disabled",
+            "error"
+          ]
+        }
+      }
+    }
+  }
+}

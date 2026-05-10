@@ -9,3 +9,4 @@
 3. `sync-api.md`
 4. `ai-boundary.md`
 5. `protocol-schema-overview.md`
+6. `local-settings.md`
