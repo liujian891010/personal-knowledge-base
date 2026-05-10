@@ -6,7 +6,6 @@ import {
   Code2,
   Edit3,
   Eye,
-  FileType2,
   Folder,
   Info,
   PanelRightClose,
@@ -55,12 +54,16 @@ type MarkdownEditorMode = 'edit' | 'preview' | 'split';
 function MarkdownFileIcon({ size = 16, tone = 'normal' }: { size?: number; tone?: 'normal' | 'danger' }) {
   const iconClassName = tone === 'danger' ? 'text-[#e94560]' : 'text-[#a9c8fc]';
   return (
-    <span className="relative inline-flex h-5 w-5 flex-shrink-0 items-center justify-center">
-      <FileType2 size={size} className={iconClassName} />
-      <span className="absolute -bottom-1 -right-1 rounded-sm border border-[#0f3460] bg-[#121316] px-0.5 font-mono text-[7px] font-bold leading-3 text-[#ffb782]">
-        MD
-      </span>
-    </span>
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 512 512"
+      width={size}
+      height={size}
+      className={`flex-shrink-0 ${iconClassName}`}
+      fill="currentColor"
+    >
+      <path d="M475.64 95.36H36.36A36.4 36.4 0 0 0 0 131.72v248.56a36.4 36.4 0 0 0 36.36 36.36h439.28A36.4 36.4 0 0 0 512 380.28V131.72a36.4 36.4 0 0 0-36.36-36.36ZM283.91 320h-54.82v-94.55l-40.91 51.14-40.91-51.14V320H92.45V192h54.82l40.91 54.55L229.09 192h54.82Zm68.36 0-68.36-64h45.45v-64h45.46v64h45.45Z" />
+    </svg>
   );
 }
 
