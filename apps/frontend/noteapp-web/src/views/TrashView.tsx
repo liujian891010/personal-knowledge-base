@@ -27,7 +27,7 @@ export default function TrashView() {
 
       <div className="flex-1 overflow-y-auto p-6 md:p-8">
         <div className="max-w-5xl mx-auto">
-          {/* Search/Filter Bar */}
+          {/* 搜索筛选栏 */}
           <div className="flex items-center gap-4 mb-6">
             <div className="relative flex-1 max-w-md">
               <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -35,7 +35,7 @@ export default function TrashView() {
             </div>
           </div>
 
-          {/* Deleted Items List */}
+          {/* 已删除项目列表 */}
           <div className="bg-[#16213e] rounded-xl border border-[#0f3460] overflow-hidden shadow-lg shadow-black/20">
             <div className="hidden md:grid grid-cols-12 gap-4 border-b border-[#0f3460] bg-[#1f2b4a]/50 p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">
               <div className="col-span-5">名称</div>

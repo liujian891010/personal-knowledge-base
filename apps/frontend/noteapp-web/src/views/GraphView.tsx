@@ -4,14 +4,14 @@ import { Search, Plus, Minus, LocateFixed } from 'lucide-react';
 export default function GraphView() {
   return (
     <div className="flex flex-1 h-full overflow-hidden bg-[#1a1a2e]">
-      {/* Search Layout */}
+      {/* 搜索布局 */}
       <aside className="w-full md:w-96 flex-shrink-0 border-r border-[#0f3460] bg-[#1a1c1f] flex flex-col h-full overflow-hidden z-20">
         <div className="p-4 border-b border-[#43474f]/30 flex justify-between items-center bg-[#1e2023]/50">
           <h2 className="text-[13px] font-medium text-slate-400 uppercase tracking-wider">搜索结果</h2>
           <span className="text-xs text-slate-500">找到12个匹配项</span>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#121316]">
-          {/* Result Card 1 */}
+          {/* 搜索结果卡片 */}
           <div className="bg-[#1f2b4a] rounded-lg p-4 border border-[#e94560]/30 shadow-md shadow-[#e94560]/5 cursor-pointer relative overflow-hidden">
             <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#e94560]"></div>
             <div className="flex justify-between items-start mb-2">
@@ -55,12 +55,12 @@ export default function GraphView() {
         </div>
       </aside>
 
-      {/* Graph Area */}
+      {/* 图谱区域 */}
       <div className="hidden md:block flex-1 bg-[#0d0e11] relative overflow-hidden">
-        {/* Background Texture */}
+        {/* 背景纹理 */}
         <div className="absolute inset-0 opacity-[0.05]" style={{ backgroundImage: 'radial-gradient(#a9c8fc 1px, transparent 1px)', backgroundSize: '24px 24px' }}></div>
         
-        {/* Graph Controls Float */}
+        {/* 图谱控制按钮 */}
         <div className="absolute bottom-6 right-6 flex flex-col space-y-2 z-10 bg-[#1e2023]/80 backdrop-blur border border-[#43474f]/30 rounded-lg p-1 shadow-lg">
           <button className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded transition-colors" title="放大"><Plus size={16} /></button>
           <button className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded transition-colors" title="缩小"><Minus size={16} /></button>
@@ -68,7 +68,7 @@ export default function GraphView() {
           <button className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded transition-colors" title="居中"><LocateFixed size={16} /></button>
         </div>
 
-        {/* SVG Edges */}
+        {/* 图谱连线 */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{zIndex: 0}}>
           <g stroke="#0f3460" strokeOpacity="0.6" strokeWidth="1.5">
             <line x1="50%" y1="50%" x2="30%" y2="20%"></line>
@@ -80,14 +80,14 @@ export default function GraphView() {
           </g>
         </svg>
 
-        {/* Nodes */}
-        {/* Center Node */}
+        {/* 图谱节点 */}
+        {/* 中心节点 */}
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center group cursor-pointer z-10">
           <div className="w-4 h-4 rounded-full bg-[#e94560] shadow-[0_0_20px_rgba(233,69,96,0.8)] border-2 border-[#121316] ring-2 ring-[#e94560]/30 transform scale-125"></div>
            <span className="mt-2 text-[12px] font-bold text-white bg-[#121316]/80 px-2 py-1 rounded backdrop-blur whitespace-nowrap border border-[#e94560]/50 shadow-lg">神经网络简介</span>
         </div>
         
-        {/* Peripheral Nodes */}
+        {/* 周边节点 */}
         <div className="absolute left-[30%] top-[20%] -translate-x-1/2 -translate-y-1/2 flex flex-col items-center cursor-pointer">
           <div className="w-3 h-3 rounded-full bg-[#0f3460] border-2 border-[#121316] hover:bg-[#a9c8fc] transition-colors shadow-[0_0_10px_rgba(15,52,96,0.5)]"></div>
           <span className="mt-2 text-[11px] text-slate-400 bg-[#121316]/80 px-2 py-0.5 rounded backdrop-blur whitespace-nowrap">反向传播</span>

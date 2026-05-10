@@ -52,7 +52,7 @@ function Sidebar({ currentView, setView }: { currentView: string, setView: (v: s
         </ul>
       </nav>
 
-      {/* Embedded File Tree (Visible mostly when expanding Vault Explorer, but we'll show it generally) */}
+      {/* 嵌入式文件树 */}
       <div className="flex-1 overflow-y-auto px-2 py-2">
         <div className="flex flex-col mb-4">
           <div className="flex items-center gap-2 px-2 py-1 text-slate-300">
@@ -93,7 +93,7 @@ function Sidebar({ currentView, setView }: { currentView: string, setView: (v: s
           <span>同步状态</span>
         </button>
         <div className="mt-4 flex items-center gap-3 px-4 py-2">
-            <img src="https://ui-avatars.com/api/?name=Alex+Chen&background=e94560&color=fff" alt="User" className="w-8 h-8 rounded-full border border-[#0f3460]" />
+            <img src="https://ui-avatars.com/api/?name=Alex+Chen&background=e94560&color=fff" alt="用户头像" className="w-8 h-8 rounded-full border border-[#0f3460]" />
             <div className="flex-1 min-w-0 text-left">
                 <p className="text-[13px] font-medium text-[#e3e2e6] truncate">Alex Chen</p>
                 <p className="text-xs text-slate-500 truncate">专业版</p>
@@ -118,7 +118,7 @@ function TopBar() {
         <div className="flex items-center space-x-2 text-slate-400">
           <button className="p-2 hover:text-[#e94560] hover:bg-white/5 rounded-full"><Bell size={20} /></button>
           <button className="p-2 hover:text-[#e94560] hover:bg-white/5 rounded-full"><MoreVertical size={20} /></button>
-          <img src="https://ui-avatars.com/api/?name=Alex+Chen&background=e94560&color=fff" alt="Avatar" className="w-8 h-8 rounded-full border border-[#0f3460] md:hidden" />
+          <img src="https://ui-avatars.com/api/?name=Alex+Chen&background=e94560&color=fff" alt="头像" className="w-8 h-8 rounded-full border border-[#0f3460] md:hidden" />
         </div>
       </div>
     </header>

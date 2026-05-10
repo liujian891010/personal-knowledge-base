@@ -11,7 +11,7 @@ export default function WikiView() {
   return (
     <div className="flex h-full bg-[#1a1a2e] overflow-hidden">
       <div className="flex-1 flex flex-col min-w-0 bg-[#121316]">
-        {/* Header */}
+        {/* 页头 */}
         <div className="px-6 py-6 border-b border-[#292a2d] bg-[#16213e] sticky top-0 z-10 shadow-lg shadow-black/40">
           <div className="flex justify-between items-end">
             <div>
@@ -32,7 +32,7 @@ export default function WikiView() {
           </div>
         </div>
 
-        {/* Content */}
+        {/* 内容 */}
         <div className="p-6 overflow-y-auto flex-1">
           <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-6">
             {wikis.map((wiki, i) => (
@@ -68,7 +68,7 @@ export default function WikiView() {
         </div>
       </div>
 
-      {/* Right Sidebar Copilot */}
+      {/* 右侧副驾驶 */}
       <aside className="w-80 bg-[#1a1c1f] flex flex-col border-l border-[#292a2d]">
         <div className="h-14 border-b border-[#292a2d] flex items-center px-4 justify-between bg-[#1e2023]/50">
            <div className="flex items-center gap-2 text-white text-[13px] font-medium">
