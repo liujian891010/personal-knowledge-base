@@ -435,6 +435,8 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
 
   const selectedFile = visibleFiles.find((file) => file.file_id === selectedFileId) ?? null;
   const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(false);
+  const [draftText, setDraftText] = useState('');
+  const [editorMode, setEditorMode] = useState<MarkdownEditorMode>('preview');
 
   useEffect(() => {
     if (!selectedFile || !selectedFile.exists_on_disk || selectedFile.status !== 'active') {
@@ -444,12 +446,14 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
     void loadContent(selectedFile.file_id);
   }, [clearContent, loadContent, selectedFile]);
 
-  const [draftText, setDraftText] = useState('');
-  const [editorMode, setEditorMode] = useState<MarkdownEditorMode>('edit');
   const isContentDirty = Boolean(selectedContent && draftText !== selectedContent.text);
   const canEditContent = Boolean(
     selectedFile && selectedFile.exists_on_disk && selectedFile.status === 'active' && selectedContent,
   );
+
+  useEffect(() => {
+    setEditorMode('preview');
+  }, [selectedFileId]);
 
   useEffect(() => {
     setDraftText(selectedContent?.text ?? '');
