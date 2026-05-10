@@ -4,6 +4,9 @@ import {
   Cloud,
   FileText,
   Folder,
+  Info,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   RefreshCw,
   Save,
@@ -196,6 +199,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
   }, [clearContent, selectedFileId, visibleFiles]);
 
   const selectedFile = visibleFiles.find((file) => file.file_id === selectedFileId) ?? null;
+  const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(false);
 
   useEffect(() => {
     if (!selectedFile || !selectedFile.exists_on_disk || selectedFile.status !== 'active') {
@@ -314,7 +318,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto bg-[#121316] p-6 md:p-8">
+        <div className="flex-1 overflow-hidden bg-[#121316] p-4 md:p-6">
           {lastError && (
             <div className="mb-4 rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782] line-clamp-3">
               {lastError}
@@ -327,8 +331,8 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
           )}
 
           {selectedFile ? (
-            <div className="max-w-4xl flex flex-col gap-6">
-              <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-5 shadow-lg shadow-black/20">
+            <div className="relative flex h-full min-h-0 w-full gap-4">
+              <section className="hidden border border-[#0f3460] rounded-xl bg-[#16213e] p-5 shadow-lg shadow-black/20">
                 <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2 mb-3">
@@ -349,7 +353,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                 </div>
               </section>
 
-              <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <section className="hidden grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="border border-[#0f3460] rounded-xl bg-[#16213e] p-5">
                   <h3 className="text-[15px] font-bold text-[#e3e2e6] mb-4">文件元数据</h3>
                   <dl className="grid grid-cols-1 gap-3 text-[13px]">
@@ -395,7 +399,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                 </div>
               </section>
 
-              <section className="border border-[#0f3460] rounded-xl bg-[#16213e] shadow-lg shadow-black/20 overflow-hidden">
+              <section className="flex min-h-0 flex-1 flex-col border border-[#0f3460] rounded-xl bg-[#16213e] shadow-lg shadow-black/20 overflow-hidden">
                 <div className="flex items-center justify-between gap-3 border-b border-[#0f3460] px-5 py-3">
                   <div className="flex items-center gap-3 min-w-0">
                     <h3 className="text-[15px] font-bold text-[#e3e2e6]">内容编辑器</h3>
@@ -409,6 +413,14 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                     )}
                   </div>
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setIsInfoPanelOpen((value) => !value)}
+                      title={isInfoPanelOpen ? '收起详情' : '显示详情'}
+                      className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white transition-colors"
+                    >
+                      {isInfoPanelOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+                      <span>详情</span>
+                    </button>
                     {savedAtMs && !isContentDirty && (
                       <button
                         onClick={() => setView('sync')}
@@ -435,12 +447,93 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                   onChange={(event) => setDraftText(event.target.value)}
                   disabled={!canEditContent || isContentLoading || isContentSaving}
                   spellCheck={false}
-                  className="block h-[420px] w-full resize-y overflow-auto bg-[#121316] p-5 font-mono text-[13px] leading-relaxed text-slate-300 outline-none placeholder:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-500"
+                  className="block min-h-0 flex-1 w-full resize-none overflow-auto bg-[#121316] p-5 font-mono text-[13px] leading-relaxed text-slate-300 outline-none placeholder:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-500"
                   placeholder="此文件内容不可用。"
                 />
               </section>
 
-              <div className="inline-flex w-fit items-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-3 py-2 text-[13px] text-slate-500">
+              {isInfoPanelOpen && (
+                <aside className="absolute bottom-0 right-0 top-0 z-20 h-full min-h-0 w-80 flex-shrink-0 overflow-y-auto rounded-xl border border-[#0f3460] bg-[#16213e] p-4 shadow-lg shadow-black/30 xl:static xl:shadow-black/20">
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Info size={16} className="text-[#a9c8fc]" />
+                      <h3 className="truncate text-[15px] font-bold text-[#e3e2e6]">文件详情</h3>
+                    </div>
+                    <button
+                      onClick={() => setIsInfoPanelOpen(false)}
+                      title="收起详情"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded border border-[#0f3460] bg-[#121316] text-slate-400 hover:text-white"
+                    >
+                      <PanelRightClose size={14} />
+                    </button>
+                  </div>
+
+                  <div className="mb-4 min-w-0 rounded border border-[#0f3460] bg-[#121316] p-3">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded border font-mono text-[10px] uppercase tracking-wider font-bold ${statusClasses(selectedFile)}`}>
+                        {statusLabel(selectedFile)}
+                      </span>
+                      <span className="font-mono text-[10px] text-slate-500">{fileTypeLabel(selectedFile.type)}</span>
+                    </div>
+                    <p className="truncate text-[14px] font-bold text-[#e3e2e6]" title={fileName(selectedFile.path)}>
+                      {fileName(selectedFile.path)}
+                    </p>
+                    <p className="mt-2 break-words font-mono text-[11px] text-slate-500">{selectedFile.path}</p>
+                    {!selectedFile.exists_on_disk && (
+                      <div className="mt-3 flex items-center gap-2 text-[12px] text-[#e94560]">
+                        <AlertTriangle size={15} />
+                        <span>磁盘文件缺失</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mb-4">
+                    <h4 className="mb-2 text-[12px] font-bold text-slate-300">文件元数据</h4>
+                    <dl className="grid grid-cols-1 gap-3 text-[12px]">
+                      <div>
+                        <dt className="text-[10px] uppercase tracking-wider text-slate-500">文件 ID</dt>
+                        <dd className="mt-1 break-words font-mono text-[#e3e2e6]">{selectedFile.file_id}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-[10px] uppercase tracking-wider text-slate-500">更新时间</dt>
+                        <dd className="mt-1 font-mono text-[#e3e2e6]">{formatFileTime(selectedFile.updated_at)}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-[10px] uppercase tracking-wider text-slate-500">大小</dt>
+                        <dd className="mt-1 font-mono text-[#e3e2e6]">{formatBytes(selectedFile.size_bytes)}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-[10px] uppercase tracking-wider text-slate-500">版本</dt>
+                        <dd className="mt-1 font-mono text-[#e3e2e6]">{selectedFile.last_known_revision ?? '本地'}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-[10px] uppercase tracking-wider text-slate-500">内容哈希</dt>
+                        <dd className="mt-1 break-words font-mono text-[#e3e2e6]">{selectedFile.content_hash ?? '无'}</dd>
+                      </div>
+                    </dl>
+                  </div>
+
+                  <div>
+                    <h4 className="mb-2 text-[12px] font-bold text-slate-300">工作区</h4>
+                    <dl className="grid grid-cols-1 gap-3 text-[12px]">
+                      <div>
+                        <dt className="text-[10px] uppercase tracking-wider text-slate-500">知识库</dt>
+                        <dd className="mt-1 break-words font-mono text-[#e3e2e6]">{summary.vaultId}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-[10px] uppercase tracking-wider text-slate-500">设备</dt>
+                        <dd className="mt-1 break-words font-mono text-[#e3e2e6]">{summary.deviceId}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-[10px] uppercase tracking-wider text-slate-500">根目录</dt>
+                        <dd className="mt-1 break-words font-mono text-[#e3e2e6]">{summary.vaultRoot}</dd>
+                      </div>
+                    </dl>
+                  </div>
+                </aside>
+              )}
+
+              <div className="hidden w-fit items-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-3 py-2 text-[13px] text-slate-500">
                 知识图谱暂不进入当前收口版本
               </div>
             </div>
