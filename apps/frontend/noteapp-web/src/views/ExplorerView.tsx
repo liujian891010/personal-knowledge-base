@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronRight,
   Columns2,
   Cloud,
   Code2,
@@ -33,6 +35,25 @@ function folderName(path: string, rootName: string): string {
   return parts.length > 1 ? parts.slice(0, -1).join('/') : rootName;
 }
 
+function folderPathForFile(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts.slice(0, -1).join('/');
+}
+
+function isDescendantOfCollapsedFolder(path: string, collapsedFolders: Set<string>): boolean {
+  if (path === '') {
+    return collapsedFolders.has('');
+  }
+  const parts = path.split('/').filter(Boolean);
+  for (let index = 0; index < parts.length; index += 1) {
+    const ancestorPath = parts.slice(0, index + 1).join('/');
+    if (collapsedFolders.has(ancestorPath)) {
+      return true;
+    }
+  }
+  return collapsedFolders.has('');
+}
+
 type ExplorerRow =
   | {
     kind: 'folder';
@@ -50,6 +71,18 @@ type ExplorerRow =
   };
 
 type MarkdownEditorMode = 'edit' | 'preview' | 'split';
+
+function isRowVisible(row: ExplorerRow, collapsedFolders: Set<string>): boolean {
+  if (row.kind === 'folder') {
+    if (row.path === '') {
+      return true;
+    }
+    const parentPath = row.path.split('/').slice(0, -1).join('/');
+    return !isDescendantOfCollapsedFolder(parentPath, collapsedFolders);
+  }
+
+  return !isDescendantOfCollapsedFolder(folderPathForFile(row.file.path), collapsedFolders);
+}
 
 function MarkdownFileIcon({ size = 16, tone = 'normal' }: { size?: number; tone?: 'normal' | 'danger' }) {
   const iconClassName = tone === 'danger' ? 'text-[#e94560]' : 'text-[#a9c8fc]';
@@ -420,6 +453,11 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
   );
   const rootName = useMemo(() => workspaceRootName(summary.vaultRoot), [summary.vaultRoot]);
   const explorerRows = useMemo(() => buildExplorerRows(visibleFiles, rootName), [rootName, visibleFiles]);
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
+  const visibleExplorerRows = useMemo(
+    () => explorerRows.filter((row) => isRowVisible(row, collapsedFolders)),
+    [collapsedFolders, explorerRows],
+  );
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -471,6 +509,18 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
     }
   }
 
+  function toggleFolder(folderPath: string) {
+    setCollapsedFolders((current) => {
+      const next = new Set(current);
+      if (next.has(folderPath)) {
+        next.delete(folderPath);
+      } else {
+        next.add(folderPath);
+      }
+      return next;
+    });
+  }
+
   return (
     <div className="flex h-full bg-[#1a1a2e] overflow-hidden">
       <aside className="hidden md:flex w-72 border-r border-[#0f3460] bg-[#16213e]/80 flex-shrink-0 flex-col max-h-full overflow-hidden">
@@ -501,18 +551,25 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
           {explorerRows.length === 0 ? (
             <div className="p-4 text-[13px] text-slate-400">暂无已跟踪文件。</div>
           ) : (
-            explorerRows.map((row) => (
+            visibleExplorerRows.map((row) => (
               row.kind === 'folder' ? (
-                <div
+                <button
                   key={row.id}
-                  className="flex items-center gap-2 py-2 pr-4 text-slate-300"
+                  type="button"
+                  onClick={() => toggleFolder(row.path)}
+                  className="flex w-full items-center gap-2 py-2 pr-4 text-left text-slate-300 transition-colors hover:bg-[#1f2b4a] hover:text-slate-100"
                   style={{ paddingLeft: `${16 + row.depth * 14}px` }}
-                  title={row.path || summary.vaultRoot || rootName}
+                  title={`${collapsedFolders.has(row.path) ? '展开目录' : '折叠目录'}：${row.path || summary.vaultRoot || rootName}`}
                 >
+                  {collapsedFolders.has(row.path) ? (
+                    <ChevronRight size={14} className="text-slate-500" />
+                  ) : (
+                    <ChevronDown size={14} className="text-slate-500" />
+                  )}
                   <Folder size={16} className="text-[#a9c8fc]" />
                   <span className="text-[13px] font-semibold flex-1 font-sans truncate">{row.name}</span>
                   <span className="font-mono text-[10px] text-slate-500">{row.count}</span>
-                </div>
+                </button>
               ) : (
                 <button
                   key={row.id}
@@ -542,11 +599,6 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
               <span className="text-[13px] font-semibold truncate">
                 {selectedFile ? fileName(selectedFile.path) : '工作区'}
               </span>
-            </div>
-            <div className="h-4 w-px bg-[#0f3460] hidden sm:block" />
-            <div className="hidden sm:flex items-center gap-2 text-slate-500 font-mono text-[11px] min-w-0">
-              <span>{summary.totalCount} 个已跟踪</span>
-              {selectedFile && <span className="truncate">{formatBytes(selectedFile.size_bytes)}</span>}
             </div>
           </div>
           <div className="flex items-center gap-4">
