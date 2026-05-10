@@ -91,6 +91,44 @@ class SyncStoreTests(unittest.TestCase):
             self.store.complete_blob_upload(capability_token, b"payload")
         self.assertEqual(context.exception.code, "capability_not_found")
 
+    def test_delete_device_revokes_unconsumed_download_capability(self) -> None:
+        registered = self.store.register_device(
+            {
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+            }
+        )
+        upload = self.store.init_blob_upload(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-1",
+                        "encrypted_size": 7,
+                        "content_hash": "sha256:plain",
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id=registered["device_id"],
+        )
+        upload_token = upload["uploads"][0]["upload_url"].rsplit("/", 1)[-1]
+        self.store.complete_blob_upload(upload_token, b"payload")
+        download = self.store.init_blob_download(
+            "vault-1",
+            {"blob_ids": ["blob-1"]},
+            request_base_url="http://127.0.0.1:8000/",
+            device_id=registered["device_id"],
+        )
+        download_token = download["downloads"][0]["download_url"].rsplit("/", 1)[-1]
+
+        self.assertTrue(self.store.delete_device(registered["device_id"]))
+
+        with self.assertRaises(BlobCapabilityError) as context:
+            self.store.read_blob_download(download_token)
+        self.assertEqual(context.exception.code, "capability_not_found")
+
     def test_blob_capability_upload_check_and_download(self) -> None:
         upload = self.store.init_blob_upload(
             "vault-1",

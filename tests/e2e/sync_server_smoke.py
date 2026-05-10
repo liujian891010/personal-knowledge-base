@@ -50,8 +50,11 @@ def request_json(
 
 def request_bytes(method: str, url: str, payload: Optional[bytes] = None) -> tuple[int, bytes]:
     request = urllib.request.Request(url, data=payload, method=method)
-    with urllib.request.urlopen(request, timeout=10) as response:
-        return response.status, response.read()
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read()
 
 
 def wait_for_server() -> None:
@@ -185,12 +188,23 @@ def main() -> int:
             assert status == 200
             assert downloaded == payload
 
+            status, stale_download_init = request_json(
+                "POST",
+                "/vaults/vault-smoke/blobs/download-init",
+                {"blob_ids": [blob_id]},
+                token=token,
+            )
+            assert status == 200, stale_download_init
+            stale_download_url = stale_download_init["downloads"][0]["download_url"]
+
             status, unauthenticated_delete = request_json("DELETE", f"/devices/{registered['device_id']}")
             assert status == 401, unauthenticated_delete
             status, deleted = request_json("DELETE", f"/devices/{registered['device_id']}", token=token)
             assert status == 204, deleted
             status, revoked = request_json("GET", "/vaults/vault-smoke/head", token=token)
             assert status == 403, revoked
+            status, stale_download = request_bytes("GET", stale_download_url)
+            assert status in {403, 404}, stale_download
 
             print(
                 json.dumps(
