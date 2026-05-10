@@ -267,8 +267,8 @@ def main() -> int:
                     "/api/sync/actions/not-a-real-action",
                     method="POST",
                 )
-                assert status == 500, missing_action
-                assert missing_action["code"] == "sync_bridge_error", missing_action
+                assert status == 404, missing_action
+                assert missing_action["code"] == "sync_action_not_found", missing_action
                 assert "sync action not found" in missing_action["message"], missing_action
             finally:
                 bridge.terminate()
