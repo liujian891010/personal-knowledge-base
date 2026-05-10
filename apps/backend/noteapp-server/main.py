@@ -64,6 +64,16 @@ def _authorized_device_id(request: Request) -> Optional[str]:
     return device_id
 
 
+def _required_authorized_device_id(request: Request) -> str:
+    token = _bearer_token(request)
+    if token is None:
+        raise _error(401, "missing_authorization", "Authorization bearer token is required.")
+    device_id = store.device_id_for_token(token)
+    if device_id is None:
+        raise _error(403, "device_revoked", "Device token is invalid or revoked.")
+    return device_id
+
+
 def _body_mapping(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise _error(400, "invalid_json_body", "Request body must be a JSON object.")
@@ -85,7 +95,7 @@ def register_device(payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.delete("/devices/{device_id}")
 def delete_device(device_id: str, request: Request) -> Response:
-    _authorized_device_id(request)
+    _required_authorized_device_id(request)
     if not store.delete_device(device_id):
         raise _error(404, "device_not_found", "Device was not found.")
     return Response(status_code=204)

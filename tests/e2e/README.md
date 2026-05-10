@@ -14,6 +14,7 @@ End-to-end checks for the sync loop.
 6. manifest fetch
 7. blob download capability
 8. blob download
+9. authenticated device revocation
 
 Run from the repository root:
 

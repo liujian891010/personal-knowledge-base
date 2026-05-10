@@ -9,7 +9,7 @@ import sys
 SERVER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVER_ROOT))
 
-from sync_store import CommitConflict, SyncStore  # noqa: E402
+from sync_store import BlobCapabilityError, CommitConflict, SyncStore  # noqa: E402
 
 
 def _manifest(vault_id: str, *, base_revision: int, blob_id: str = "blob-1") -> dict[str, object]:
@@ -59,6 +59,37 @@ class SyncStoreTests(unittest.TestCase):
             self.store.device_id_for_token(response["access_token"]),
             response["device_id"],
         )
+
+    def test_delete_device_revokes_token_and_device_capabilities(self) -> None:
+        registered = self.store.register_device(
+            {
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+            }
+        )
+        upload = self.store.init_blob_upload(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-1",
+                        "encrypted_size": 7,
+                        "content_hash": "sha256:plain",
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id=registered["device_id"],
+        )
+        capability_token = upload["uploads"][0]["upload_url"].rsplit("/", 1)[-1]
+
+        self.assertTrue(self.store.delete_device(registered["device_id"]))
+
+        self.assertIsNone(self.store.device_id_for_token(registered["access_token"]))
+        with self.assertRaises(BlobCapabilityError) as context:
+            self.store.complete_blob_upload(capability_token, b"payload")
+        self.assertEqual(context.exception.code, "capability_not_found")
 
     def test_blob_capability_upload_check_and_download(self) -> None:
         upload = self.store.init_blob_upload(

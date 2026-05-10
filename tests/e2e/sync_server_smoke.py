@@ -185,6 +185,13 @@ def main() -> int:
             assert status == 200
             assert downloaded == payload
 
+            status, unauthenticated_delete = request_json("DELETE", f"/devices/{registered['device_id']}")
+            assert status == 401, unauthenticated_delete
+            status, deleted = request_json("DELETE", f"/devices/{registered['device_id']}", token=token)
+            assert status == 204, deleted
+            status, revoked = request_json("GET", "/vaults/vault-smoke/head", token=token)
+            assert status == 403, revoked
+
             print(
                 json.dumps(
                     {
