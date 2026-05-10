@@ -72,6 +72,7 @@ export interface SyncShellSummary {
   changeBadgeCount: number;
   cardCount: number;
   recentActivityCount: number;
+  primaryActionId: string;
   primaryActionLabel: string;
   primaryActionEnabled: boolean;
   primaryActionRequiresConfirmation: boolean;
@@ -239,6 +240,7 @@ export function summarizeSyncShellSnapshot(snapshot: SyncShellSnapshot): SyncShe
     changeBadgeCount: snapshot.sync_center.panel.change_badge_count,
     cardCount: snapshot.sync_center.cards.length,
     recentActivityCount: snapshot.activity_feed.total_count,
+    primaryActionId: snapshot.sync_center.panel.primary_action.action_id,
     primaryActionLabel: snapshot.sync_center.panel.primary_action.label,
     primaryActionEnabled: snapshot.sync_center.panel.primary_action.enabled,
     primaryActionRequiresConfirmation: snapshot.sync_center.panel.primary_action.requires_confirmation ?? false,

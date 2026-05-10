@@ -34,6 +34,7 @@ export interface SyncShellController {
   lastError: string | null;
   isRefreshing: boolean;
   isExecuting: boolean;
+  executingActionId: string | null;
   refresh: () => Promise<void>;
   executePrimaryAction: () => Promise<void>;
   executeSyncAction: (action: SyncShellAction) => Promise<void>;
@@ -122,6 +123,7 @@ export function useSyncShellController(): SyncShellController {
   const [lastError, setLastError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [executingActionId, setExecutingActionId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -167,6 +169,7 @@ export function useSyncShellController(): SyncShellController {
       return;
     }
     setIsExecuting(true);
+    setExecutingActionId(action.action_id);
     try {
       setSnapshot(await executeBridgeAction(action.action_id));
       setSource('bridge');
@@ -175,6 +178,7 @@ export function useSyncShellController(): SyncShellController {
       setLastError(errorMessage(error));
     } finally {
       setIsExecuting(false);
+      setExecutingActionId(null);
     }
   };
 
@@ -192,6 +196,7 @@ export function useSyncShellController(): SyncShellController {
     lastError,
     isRefreshing,
     isExecuting,
+    executingActionId,
     refresh,
     executePrimaryAction,
     executeSyncAction,
