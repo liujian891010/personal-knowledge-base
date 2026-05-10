@@ -1,7 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  Columns2,
   Cloud,
+  Code2,
+  Edit3,
+  Eye,
   FileText,
   Folder,
   Info,
@@ -41,6 +45,217 @@ type ExplorerRow =
     file: WorkspaceFileEntry;
     depth: number;
   };
+
+type MarkdownEditorMode = 'edit' | 'preview' | 'split';
+
+function isMarkdownBoundary(line: string): boolean {
+  return (
+    /^```/.test(line)
+    || /^#{1,6}\s+/.test(line)
+    || /^\s*[-*+]\s+/.test(line)
+    || /^\s*\d+\.\s+/.test(line)
+    || /^>\s?/.test(line)
+    || /^\s*([-*_])\s*(\1\s*){2,}$/.test(line)
+  );
+}
+
+function renderInlineMarkdown(text: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  const pattern = /(`[^`]+`|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*|\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+
+    const token = match[0];
+    const key = `${match.index}-${token}`;
+    const linkMatch = /^\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)$/.exec(token);
+
+    if (token.startsWith('`') && token.endsWith('`')) {
+      nodes.push(
+        <code key={key} className="rounded bg-[#0b1020] px-1.5 py-0.5 font-mono text-[0.92em] text-[#ffb782]">
+          {token.slice(1, -1)}
+        </code>,
+      );
+    } else if (token.startsWith('**') && token.endsWith('**')) {
+      nodes.push(<strong key={key} className="font-bold text-[#f3f4f6]">{token.slice(2, -2)}</strong>);
+    } else if (token.startsWith('*') && token.endsWith('*')) {
+      nodes.push(<em key={key} className="italic text-slate-200">{token.slice(1, -1)}</em>);
+    } else if (linkMatch) {
+      nodes.push(
+        <a
+          key={key}
+          href={linkMatch[2]}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[#a9c8fc] underline decoration-[#a9c8fc]/40 underline-offset-4 hover:text-white"
+        >
+          {linkMatch[1]}
+        </a>,
+      );
+    } else {
+      nodes.push(token);
+    }
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+
+  return nodes;
+}
+
+function renderMarkdownBlocks(markdown: string): React.ReactNode[] {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  const nodes: React.ReactNode[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+
+    const fenceMatch = /^```([\w-]+)?\s*$/.exec(line);
+    if (fenceMatch) {
+      const language = fenceMatch[1];
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^```\s*$/.test(lines[index])) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) {
+        index += 1;
+      }
+      nodes.push(
+        <pre key={`code-${index}`} className="overflow-auto rounded-lg border border-[#0f3460] bg-[#0b1020] p-4 text-[12px] leading-relaxed text-slate-200">
+          {language && <div className="mb-3 font-mono text-[10px] uppercase tracking-wider text-slate-500">{language}</div>}
+          <code>{codeLines.join('\n')}</code>
+        </pre>,
+      );
+      continue;
+    }
+
+    const headingMatch = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (headingMatch) {
+      const level = Math.min(headingMatch[1].length, 6);
+      const headingClass = [
+        'text-3xl',
+        'text-2xl',
+        'text-xl',
+        'text-lg',
+        'text-base',
+        'text-sm',
+      ][level - 1];
+      nodes.push(
+        React.createElement(
+          `h${level}`,
+          {
+            key: `heading-${index}`,
+            className: `${headingClass} font-bold leading-tight text-[#f3f4f6]`,
+          },
+          renderInlineMarkdown(headingMatch[2]),
+        ),
+      );
+      index += 1;
+      continue;
+    }
+
+    if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) {
+      nodes.push(<hr key={`hr-${index}`} className="border-[#0f3460]" />);
+      index += 1;
+      continue;
+    }
+
+    if (/^>\s?/.test(line)) {
+      const quoteLines: string[] = [];
+      while (index < lines.length && /^>\s?/.test(lines[index])) {
+        quoteLines.push(lines[index].replace(/^>\s?/, ''));
+        index += 1;
+      }
+      nodes.push(
+        <blockquote key={`quote-${index}`} className="border-l-4 border-[#a9c8fc] bg-[#0f3460]/20 py-2 pl-4 text-slate-300">
+          {quoteLines.map((quoteLine, quoteIndex) => (
+            <p key={quoteIndex} className="my-1 leading-relaxed">
+              {renderInlineMarkdown(quoteLine)}
+            </p>
+          ))}
+        </blockquote>,
+      );
+      continue;
+    }
+
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length && /^\s*[-*+]\s+/.test(lines[index])) {
+        items.push(lines[index].replace(/^\s*[-*+]\s+/, ''));
+        index += 1;
+      }
+      nodes.push(
+        <ul key={`ul-${index}`} className="list-disc space-y-1 pl-6 text-slate-300">
+          {items.map((item, itemIndex) => (
+            <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
+          ))}
+        </ul>,
+      );
+      continue;
+    }
+
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length && /^\s*\d+\.\s+/.test(lines[index])) {
+        items.push(lines[index].replace(/^\s*\d+\.\s+/, ''));
+        index += 1;
+      }
+      nodes.push(
+        <ol key={`ol-${index}`} className="list-decimal space-y-1 pl-6 text-slate-300">
+          {items.map((item, itemIndex) => (
+            <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
+          ))}
+        </ol>,
+      );
+      continue;
+    }
+
+    const paragraphLines: string[] = [];
+    while (index < lines.length && lines[index].trim() && !isMarkdownBoundary(lines[index])) {
+      paragraphLines.push(lines[index].trim());
+      index += 1;
+    }
+    nodes.push(
+      <p key={`p-${index}`} className="leading-7 text-slate-300">
+        {renderInlineMarkdown(paragraphLines.join(' '))}
+      </p>,
+    );
+  }
+
+  return nodes;
+}
+
+function MarkdownPreview({ markdown }: { markdown: string }) {
+  const blocks = useMemo(() => renderMarkdownBlocks(markdown), [markdown]);
+
+  if (!markdown.trim()) {
+    return (
+      <div className="flex h-full items-center justify-center text-[13px] text-slate-500">
+        暂无 Markdown 内容。
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-full space-y-4 p-5 text-[14px]">
+      {blocks}
+    </div>
+  );
+}
 
 function buildExplorerRows(files: WorkspaceFileEntry[]): ExplorerRow[] {
   const folderCounts = new Map<string, number>();
@@ -210,6 +425,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
   }, [clearContent, loadContent, selectedFile]);
 
   const [draftText, setDraftText] = useState('');
+  const [editorMode, setEditorMode] = useState<MarkdownEditorMode>('edit');
   const isContentDirty = Boolean(selectedContent && draftText !== selectedContent.text);
   const canEditContent = Boolean(
     selectedFile && selectedFile.exists_on_disk && selectedFile.status === 'active' && selectedContent,
@@ -400,9 +616,10 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
               </section>
 
               <section className="flex min-h-0 flex-1 flex-col border border-[#0f3460] rounded-xl bg-[#16213e] shadow-lg shadow-black/20 overflow-hidden">
-                <div className="flex items-center justify-between gap-3 border-b border-[#0f3460] px-5 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#0f3460] px-5 py-3">
                   <div className="flex items-center gap-3 min-w-0">
-                    <h3 className="text-[15px] font-bold text-[#e3e2e6]">内容编辑器</h3>
+                    <Code2 size={16} className="flex-shrink-0 text-[#a9c8fc]" />
+                    <h3 className="text-[15px] font-bold text-[#e3e2e6]">Markdown 编辑器</h3>
                     <span className="font-mono text-[11px] text-slate-500">
                       {isContentLoading ? '加载中' : selectedContent ? selectedContent.encoding : '不可用'}
                     </span>
@@ -412,7 +629,39 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex items-center rounded border border-[#0f3460] bg-[#121316] p-0.5">
+                      <button
+                        onClick={() => setEditorMode('edit')}
+                        title="编辑 Markdown"
+                        className={`inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-[12px] font-semibold transition-colors ${
+                          editorMode === 'edit' ? 'bg-[#0f3460] text-white' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <Edit3 size={13} />
+                        <span>编辑</span>
+                      </button>
+                      <button
+                        onClick={() => setEditorMode('preview')}
+                        title="预览 Markdown"
+                        className={`inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-[12px] font-semibold transition-colors ${
+                          editorMode === 'preview' ? 'bg-[#0f3460] text-white' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <Eye size={13} />
+                        <span>预览</span>
+                      </button>
+                      <button
+                        onClick={() => setEditorMode('split')}
+                        title="分栏编辑和预览"
+                        className={`inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-[12px] font-semibold transition-colors ${
+                          editorMode === 'split' ? 'bg-[#0f3460] text-white' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <Columns2 size={13} />
+                        <span>分栏</span>
+                      </button>
+                    </div>
                     <button
                       onClick={() => setIsInfoPanelOpen((value) => !value)}
                       title={isInfoPanelOpen ? '收起详情' : '显示详情'}
@@ -442,14 +691,40 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                     </button>
                   </div>
                 </div>
-                <textarea
-                  value={isContentLoading ? '正在加载文件内容...' : draftText}
-                  onChange={(event) => setDraftText(event.target.value)}
-                  disabled={!canEditContent || isContentLoading || isContentSaving}
-                  spellCheck={false}
-                  className="block min-h-0 flex-1 w-full resize-none overflow-auto bg-[#121316] p-5 font-mono text-[13px] leading-relaxed text-slate-300 outline-none placeholder:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-500"
-                  placeholder="此文件内容不可用。"
-                />
+                <div className="min-h-0 flex-1 overflow-hidden bg-[#121316]">
+                  {editorMode === 'edit' && (
+                    <textarea
+                      value={isContentLoading ? '正在加载文件内容...' : draftText}
+                      onChange={(event) => setDraftText(event.target.value)}
+                      disabled={!canEditContent || isContentLoading || isContentSaving}
+                      spellCheck={false}
+                      className="block h-full min-h-0 w-full resize-none overflow-auto bg-[#121316] p-5 font-mono text-[13px] leading-relaxed text-slate-300 outline-none placeholder:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-500"
+                      placeholder="此文件内容不可用。"
+                    />
+                  )}
+
+                  {editorMode === 'preview' && (
+                    <div className="h-full overflow-auto">
+                      <MarkdownPreview markdown={isContentLoading ? '正在加载文件内容...' : draftText} />
+                    </div>
+                  )}
+
+                  {editorMode === 'split' && (
+                    <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-2">
+                      <textarea
+                        value={isContentLoading ? '正在加载文件内容...' : draftText}
+                        onChange={(event) => setDraftText(event.target.value)}
+                        disabled={!canEditContent || isContentLoading || isContentSaving}
+                        spellCheck={false}
+                        className="block h-full min-h-0 w-full resize-none overflow-auto border-b border-[#0f3460] bg-[#121316] p-5 font-mono text-[13px] leading-relaxed text-slate-300 outline-none placeholder:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-500 md:border-b-0 md:border-r"
+                        placeholder="此文件内容不可用。"
+                      />
+                      <div className="h-full min-h-0 overflow-auto bg-[#101827]">
+                        <MarkdownPreview markdown={isContentLoading ? '正在加载文件内容...' : draftText} />
+                      </div>
+                    </div>
+                  )}
+                </div>
               </section>
 
               {isInfoPanelOpen && (
