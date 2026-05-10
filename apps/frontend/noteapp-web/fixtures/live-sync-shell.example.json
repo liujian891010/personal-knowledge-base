@@ -1,0 +1,86 @@
+{
+  "activity_feed": {
+    "records": [
+      {
+        "action_id": "show-vault-summary",
+        "activity_id": "activity-001",
+        "command": "vault-summary",
+        "level": "info",
+        "message": null,
+        "occurred_at_ms": 1770000040901,
+        "source": "panel",
+        "status": "executed"
+      }
+    ],
+    "total_count": 1
+  },
+  "device_id": "desktop-shanghai",
+  "generated_at_ms": 1770000040999,
+  "sync_center": {
+    "cards": [
+      {
+        "actions": [
+          {
+            "action_id": "submit-detected-commit",
+            "argv": [
+              "submit-detected-commit",
+              "--created-at",
+              "1770000040999"
+            ],
+            "command": "submit-detected-commit",
+            "emphasis": "primary",
+            "enabled": true,
+            "label": "Sync local changes",
+            "reason": null,
+            "requires_confirmation": false
+          }
+        ],
+        "badge_count": 2,
+        "body": "2 local changes are ready to sync.",
+        "card_id": "local-changes",
+        "kind": "changes",
+        "level": "warning",
+        "title": "Local changes"
+      }
+    ],
+    "panel": {
+      "change_badge_count": 2,
+      "conflict_badge_count": 0,
+      "detail": "2 local changes are ready to sync.",
+      "headline": "Local changes pending",
+      "level": "warning",
+      "primary_action": {
+        "action_id": "submit-detected-commit",
+        "argv": [
+          "submit-detected-commit",
+          "--created-at",
+          "1770000040999"
+        ],
+        "command": "submit-detected-commit",
+        "emphasis": "primary",
+        "enabled": true,
+        "label": "Sync local changes",
+        "reason": null,
+        "requires_confirmation": false
+      },
+      "secondary_actions": []
+    },
+    "recent_activity": {
+      "records": [
+        {
+          "action_id": "show-vault-summary",
+          "activity_id": "activity-001",
+          "command": "vault-summary",
+          "level": "info",
+          "message": null,
+          "occurred_at_ms": 1770000040901,
+          "source": "panel",
+          "status": "executed"
+        }
+      ],
+      "total_count": 1
+    }
+  },
+  "vault_id": "vault-001",
+  "vault_root": "C:/vaults/pkb"
+}
