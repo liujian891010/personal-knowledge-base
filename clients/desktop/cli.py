@@ -191,6 +191,7 @@ def create_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--now-ms", type=int)
 
     subparsers.add_parser("status")
+    subparsers.add_parser("import-existing-workspace-files")
     subparsers.add_parser("workspace-files")
     workspace_file_content_parser = subparsers.add_parser("workspace-file-content")
     workspace_file_content_parser.add_argument("--file-id", required=True)
@@ -384,6 +385,8 @@ def run_cli(
         result = service.ensure_initialized(now_ms=args.now_ms)
     elif args.command == "status":
         result = service.load_snapshot()
+    elif args.command == "import-existing-workspace-files":
+        result = service.import_existing_workspace_files_if_empty()
     elif args.command == "workspace-files":
         result = service.list_workspace_files()
     elif args.command == "workspace-file-content":

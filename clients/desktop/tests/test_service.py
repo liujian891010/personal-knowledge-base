@@ -433,6 +433,32 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertFalse(snapshot.files[0].exists_on_disk)
             self.assertIsNone(snapshot.files[0].size_bytes)
 
+    def test_import_existing_workspace_files_if_empty_preserves_chinese_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service = build_desktop_sync_service(
+                DesktopSyncHttpConfig(
+                    base_url="https://sync.example.com",
+                    vault_id="vault-001",
+                    device_id="desktop-shanghai",
+                ),
+                root,
+                file_id_builder=lambda path: "file-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            service.ensure_initialized(now_ms=1770000030000)
+            (root / "中文路径.md").write_bytes("# 中文标题\n".encode("gb18030"))
+            (root / ".noteapp" / "ignored.md").write_text("# ignored\n", encoding="utf-8")
+
+            snapshot = service.import_existing_workspace_files_if_empty()
+
+            self.assertEqual(snapshot.total_count, 1)
+            self.assertEqual(snapshot.files[0].path, "中文路径.md")
+            self.assertEqual(snapshot.files[0].type, "note")
+            self.assertTrue(snapshot.files[0].exists_on_disk)
+            self.assertEqual(snapshot.files[0].size_bytes, len("# 中文标题\n".encode("gb18030")))
+            document = load_filemap(service.workspace.paths.filemap_path)
+            self.assertEqual(document.files[0].path, "中文路径.md")
+
     def test_load_workspace_file_content_returns_utf8_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -467,7 +493,32 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(content.content_hash, "sha256:" + hashlib.sha256(edited_payload).hexdigest())
             self.assertNotEqual(content.tracked_content_hash, content.content_hash)
 
-    def test_load_workspace_file_content_rejects_non_utf8(self) -> None:
+    def test_load_workspace_file_content_returns_gb18030_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            gb_payload = "# 中文标题\n\n本地内容\n".encode("gb18030")
+            live_path = root / "Notes" / "Live.md"
+            live_path.write_bytes(gb_payload)
+
+            content = service.load_workspace_file_content("file-live")
+
+            self.assertEqual(content.encoding, "gb18030")
+            self.assertEqual(content.text, "# 中文标题\n\n本地内容\n")
+
+    def test_write_workspace_file_content_preserves_gb18030_encoding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            live_path = root / "Notes" / "Live.md"
+            live_path.write_bytes("# 中文标题\n".encode("gb18030"))
+
+            content = service.write_workspace_file_content("file-live", "# 已编辑\n")
+
+            self.assertEqual(content.encoding, "gb18030")
+            self.assertEqual(live_path.read_bytes(), "# 已编辑\n".encode("gb18030"))
+
+    def test_load_workspace_file_content_rejects_unsupported_text_encoding(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             service, _, _, _, _ = self._seed_workspace(root)
@@ -496,7 +547,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 ),
             )
 
-            with self.assertRaisesRegex(ValueError, "workspace file is not valid UTF-8: file-live"):
+            with self.assertRaisesRegex(ValueError, "workspace file is not valid UTF-8 or GB18030 text: file-live"):
                 service.load_workspace_file_content("file-live")
 
     def test_write_workspace_file_content_writes_disk_without_updating_filemap(self) -> None:

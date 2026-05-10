@@ -90,6 +90,8 @@ try {
   const env = {
     ...process.env,
     PYTHONPATH: buildPythonPath(),
+    PYTHONIOENCODING: 'utf-8',
+    PYTHONUTF8: '1',
   };
 
   if (isDryRun) {

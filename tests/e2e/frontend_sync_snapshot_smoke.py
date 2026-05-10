@@ -194,7 +194,7 @@ def main() -> int:
             workspace_root_output_path = Path(work_dir) / "workspace-root.json"
             picked_vault_root = Path(work_dir) / "picked-vault"
             picked_vault_root.mkdir()
-            (picked_vault_root / "Picked.md").write_text("# Picked\n\nfrom folder picker\n", encoding="utf-8", newline="\n")
+            (picked_vault_root / "中文路径.md").write_bytes("# 中文标题\n\n从文件夹选择\n".encode("gb18030"))
             pythonpath = os.pathsep.join([str(VAULT_CORE_SRC), str(ROOT)])
             cli_env = {
                 **os.environ,
@@ -395,7 +395,15 @@ def main() -> int:
                 status, picked_workspace_payload = request_bridge_json("/api/workspace/files")
                 assert status == 200, picked_workspace_payload
                 assert picked_workspace_payload["total_count"] == 1, picked_workspace_payload
-                assert picked_workspace_payload["files"][0]["path"] == "Picked.md", picked_workspace_payload
+                assert picked_workspace_payload["files"][0]["path"] == "中文路径.md", picked_workspace_payload
+                picked_file_id = picked_workspace_payload["files"][0]["file_id"]
+                status, picked_content_payload = request_bridge_json(
+                    f"/api/workspace/files/{picked_file_id}/content"
+                )
+                assert status == 200, picked_content_payload
+                assert picked_content_payload["path"] == "中文路径.md", picked_content_payload
+                assert picked_content_payload["encoding"] == "gb18030", picked_content_payload
+                assert picked_content_payload["text"] == "# 中文标题\n\n从文件夹选择\n", picked_content_payload
                 status, _ = request_bridge_json(
                     "/api/workspace/root",
                     method="POST",
