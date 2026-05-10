@@ -42,7 +42,7 @@ python tests\e2e\desktop_sync_smoke.py
 
 ## Frontend Sync Snapshot Smoke
 
-`frontend_sync_snapshot_smoke.py` starts the local FastAPI sync server, initializes a temporary desktop vault, then runs the frontend `sync:snapshot` bridge script to generate a live sync-shell JSON snapshot.
+`frontend_sync_snapshot_smoke.py` starts the local FastAPI sync server, initializes a temporary desktop vault, then runs the frontend `sync:snapshot` and `settings:snapshot` bridge scripts to generate live sync-shell and settings JSON snapshots.
 
 Run from the repository root:
 

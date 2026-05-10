@@ -79,6 +79,8 @@ def main() -> int:
         assert status == 200, status
         assert "Sync Status" in bundle, "settings sync view was not bundled"
         assert "Sync cards" in bundle, "sync cards view was not bundled"
+        assert "Connection" in bundle, "settings snapshot connection view was not bundled"
+        assert "Local model" in bundle, "settings AI view was not bundled"
 
         print(
             {
