@@ -63,6 +63,13 @@ Generate the local workspace file index consumed by the Explorer:
 npm run workspace:files
 ```
 
+Read a single workspace file content fixture:
+
+```powershell
+$env:NOTEAPP_WORKSPACE_FILE_ID='file-roadmap'
+npm run workspace:content
+```
+
 Write local settings and refresh the same live fixture:
 
 ```powershell
@@ -95,6 +102,7 @@ GET  http://127.0.0.1:3187/api/settings/snapshot
 POST http://127.0.0.1:3187/api/settings/snapshot
 GET  http://127.0.0.1:3187/api/settings/live
 GET  http://127.0.0.1:3187/api/workspace/files
+GET  http://127.0.0.1:3187/api/workspace/files/<file-id>/content
 GET  http://127.0.0.1:3187/api/workspace/live
 ```
 
@@ -104,4 +112,5 @@ Validate the checked-in example fixture and TypeScript adapter:
 npm run validate:sync-shell
 npm run validate:settings-snapshot
 npm run validate:workspace-files
+npm run validate:workspace-file-content
 ```

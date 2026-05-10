@@ -1,0 +1,15 @@
+{
+  "content_hash": "sha256:aaa",
+  "device_id": "desktop-shanghai",
+  "encoding": "utf-8",
+  "file_id": "file-roadmap",
+  "path": "Notes/Product Roadmap.md",
+  "schema_version": "v1",
+  "size_bytes": 63,
+  "status": "active",
+  "text": "# Product Roadmap\n\n- Sync real workspace file content\n",
+  "type": "note",
+  "updated_at": 1770000040901,
+  "vault_id": "vault-001",
+  "vault_root": "C:/vaults/pkb"
+}

@@ -160,6 +160,19 @@ function actionIdFromPath(pathname) {
   return decodeURIComponent(encoded);
 }
 
+function workspaceContentFileIdFromPath(pathname) {
+  const prefix = '/api/workspace/files/';
+  const suffix = '/content';
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+    return null;
+  }
+  const encoded = pathname.slice(prefix.length, -suffix.length);
+  if (!encoded) {
+    return null;
+  }
+  return decodeURIComponent(encoded);
+}
+
 function errorPayload(error) {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('request body is too large') || message.includes('Unexpected end of JSON input')) {
@@ -306,6 +319,22 @@ const server = createServer(async (request, response) => {
         NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
       });
       jsonResponse(request, response, 200, readWorkspaceFiles());
+      return;
+    }
+
+    const workspaceContentFileId = workspaceContentFileIdFromPath(url.pathname);
+    if (request.method === 'GET' && workspaceContentFileId) {
+      const tempRoot = mkdtempSync(resolve(tmpdir(), 'noteapp-workspace-content-'));
+      try {
+        const outputPath = resolve(tempRoot, 'workspace-file-content.json');
+        runScript('write-workspace-file-content.mjs', {
+          NOTEAPP_WORKSPACE_FILE_ID: workspaceContentFileId,
+          NOTEAPP_WORKSPACE_FILE_CONTENT_OUTPUT: outputPath,
+        });
+        jsonResponse(request, response, 200, JSON.parse(readFileSync(outputPath, 'utf8')));
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
+      }
       return;
     }
 

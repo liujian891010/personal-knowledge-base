@@ -401,6 +401,14 @@ def main() -> int:
                 assert workspace_bridge_payload["vault_id"] == VAULT_ID, workspace_bridge_payload
                 assert workspace_bridge_payload["device_id"] == device_id, workspace_bridge_payload
                 assert workspace_bridge_payload["files"][0]["path"] == "Notes/Bridge Smoke.md", workspace_bridge_payload
+                status, file_content_payload = request_bridge_json(
+                    "/api/workspace/files/file-bridge-smoke/content"
+                )
+                assert status == 200, file_content_payload
+                assert file_content_payload["file_id"] == "file-bridge-smoke", file_content_payload
+                assert file_content_payload["path"] == "Notes/Bridge Smoke.md", file_content_payload
+                assert file_content_payload["encoding"] == "utf-8", file_content_payload
+                assert "# Bridge Smoke" in file_content_payload["text"], file_content_payload
                 status, live_workspace_payload = request_bridge_json("/api/workspace/live")
                 assert status == 200, live_workspace_payload
                 assert live_workspace_payload == workspace_bridge_payload, live_workspace_payload
