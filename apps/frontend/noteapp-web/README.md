@@ -47,6 +47,13 @@ Preview the generated command without contacting the server:
 npm run sync:snapshot -- --dry-run
 ```
 
+Execute an action id from the snapshot and refresh the same live fixture:
+
+```powershell
+$env:NOTEAPP_SYNC_ACTION_ID='submit-detected-commit'
+npm run sync:action
+```
+
 Validate the checked-in example fixture and TypeScript adapter:
 
 ```powershell
