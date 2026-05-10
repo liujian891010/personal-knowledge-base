@@ -39,6 +39,7 @@ python -m clients.desktop.cli `
 ```
 
 The app falls back to `fixtures/live-sync-shell.example.json` when no live public fixture exists.
+Generated files under `public/fixtures/` are local runtime artifacts and are ignored by git.
 
 Validate the checked-in example fixture and TypeScript adapter:
 
