@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { Settings, Cloud, Palette, Bot, Key, Laptop, Smartphone as Phone, Monitor, ChevronRight, Activity } from 'lucide-react';
-import { useSyncShellSummary } from '../useSyncShellSnapshot';
+import { useSyncShellController } from '../useSyncShellSnapshot';
 
 export default function SettingsView() {
   const [activeTab, setActiveTab] = useState('sync');
-  const syncSummary = useSyncShellSummary();
+  const { summary: syncSummary, isExecuting, isRefreshing, executePrimaryAction } = useSyncShellController();
   const syncLevelClass = {
     success: 'text-emerald-300 bg-emerald-400/10 border-emerald-400/30',
     info: 'text-[#a9c8fc] bg-[#0f3460]/30 border-[#0f3460]',
@@ -81,10 +81,11 @@ export default function SettingsView() {
                       {syncSummary.conflictBadgeCount} conflicts
                     </span>
                     <button
-                      disabled={!syncSummary.primaryActionEnabled}
+                      disabled={!syncSummary.primaryActionEnabled || isExecuting || isRefreshing}
+                      onClick={executePrimaryAction}
                       className="px-3 py-1.5 rounded bg-[#0f3460]/30 border border-[#0f3460] text-[13px] font-medium text-[#a9c8fc] disabled:opacity-50 disabled:cursor-not-allowed hover:text-white transition-colors"
                     >
-                      {syncSummary.primaryActionLabel}
+                      {isExecuting ? 'Working...' : syncSummary.primaryActionLabel}
                     </button>
                   </div>
                 </div>

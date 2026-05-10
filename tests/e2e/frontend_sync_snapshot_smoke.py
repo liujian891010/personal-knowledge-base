@@ -65,8 +65,8 @@ def wait_for_server() -> None:
     raise RuntimeError("server did not become ready")
 
 
-def request_bridge_json(path: str) -> tuple[int, dict[str, Any]]:
-    request = urllib.request.Request(f"{BRIDGE_URL}{path}", method="GET")
+def request_bridge_json(path: str, *, method: str = "GET") -> tuple[int, dict[str, Any]]:
+    request = urllib.request.Request(f"{BRIDGE_URL}{path}", method=method)
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             raw = response.read()
@@ -218,6 +218,14 @@ def main() -> int:
                 assert bridge_payload["generated_at_ms"] == 1770002000100, bridge_payload
                 assert bridge_payload["vault_id"] == VAULT_ID, bridge_payload
                 assert bridge_payload["device_id"] == device_id, bridge_payload
+                status, action_payload = request_bridge_json(
+                    "/api/sync/actions/show-vault-summary",
+                    method="POST",
+                )
+                assert status == 200, action_payload
+                assert action_payload["vault_id"] == VAULT_ID, action_payload
+                assert action_payload["device_id"] == device_id, action_payload
+                assert "snapshot" not in action_payload, action_payload
             finally:
                 bridge.terminate()
                 try:

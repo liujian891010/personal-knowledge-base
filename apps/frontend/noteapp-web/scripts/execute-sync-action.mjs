@@ -1,3 +1,4 @@
+import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import { delimiter, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -98,6 +99,13 @@ function buildCommand() {
   return { python, commandArgs };
 }
 
+function normalizeSnapshotOutput() {
+  const payload = JSON.parse(readFileSync(outputPath, 'utf8'));
+  if (payload && typeof payload === 'object' && payload.snapshot) {
+    writeFileSync(outputPath, `${JSON.stringify(payload.snapshot, null, 2)}\n`, 'utf8');
+  }
+}
+
 if (isHelp) {
   printHelp();
   process.exit(0);
@@ -142,6 +150,7 @@ try {
     process.exit(result.status ?? 1);
   }
 
+  normalizeSnapshotOutput();
   console.log(`wrote ${outputPath}`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
