@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 
 import type { SyncShellAction, SyncShellActionEmphasis, SyncShellLevel } from '../syncShell';
+import { useLocalSettingsController } from '../useLocalSettingsSnapshot';
 import { useSyncShellController } from '../useSyncShellSnapshot';
 
 type SettingsTab = 'general' | 'sync' | 'appearance' | 'ai';
@@ -47,6 +48,29 @@ function formatActivityTime(ms: number): string {
   }).format(new Date(ms));
 }
 
+function SettingsDetailRow({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string | number | boolean;
+  mono?: boolean;
+}) {
+  const renderedValue = typeof value === 'boolean' ? (value ? 'Configured' : 'Not configured') : value;
+  return (
+    <div className="flex flex-col gap-1 py-3 border-b border-[#0f3460]/70 last:border-b-0 min-w-0">
+      <span className="text-[11px] uppercase tracking-wider text-slate-500">{label}</span>
+      <span
+        title={String(renderedValue)}
+        className={`${mono ? 'font-mono' : ''} text-[13px] text-[#e3e2e6] break-words`}
+      >
+        {renderedValue}
+      </span>
+    </div>
+  );
+}
+
 export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const {
@@ -59,10 +83,17 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     isExecuting,
     executingActionId,
     isRefreshing,
-    refresh,
+    refresh: refreshSync,
     executePrimaryAction,
     executeSyncAction,
   } = useSyncShellController();
+  const {
+    summary: settingsSummary,
+    source: settingsSource,
+    lastError: settingsError,
+    isRefreshing: isSettingsRefreshing,
+    refresh: refreshSettings,
+  } = useLocalSettingsController();
 
   const renderActionButton = (
     action: SyncShellAction,
@@ -150,7 +181,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                     </span>
                     <button
                       disabled={isRefreshing || isExecuting}
-                      onClick={refresh}
+                      onClick={refreshSync}
                       title="Refresh sync status"
                       className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
@@ -245,33 +276,105 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                     </div>
                   </div>
                 </div>
+
+                <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-5 shadow-lg shadow-black/20">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <h3 className="text-[15px] font-bold text-[#e3e2e6]">Connection</h3>
+                    <span className="font-mono text-[11px] text-slate-500">{settingsSource}</span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+                    <SettingsDetailRow label="Base URL" value={settingsSummary.syncBaseUrl} mono />
+                    <SettingsDetailRow label="Bearer token" value={settingsSummary.bearerTokenConfigured} />
+                    <SettingsDetailRow label="Request timeout" value={`${settingsSummary.requestTimeoutSeconds}s`} mono />
+                    <SettingsDetailRow label="Blob timeout" value={`${settingsSummary.blobTimeoutSeconds}s`} mono />
+                    <SettingsDetailRow label="User agent" value={settingsSummary.userAgent} mono />
+                    <SettingsDetailRow label="Settings source" value={settingsSummary.source} mono />
+                  </div>
+                </section>
               </>
             )}
 
             {activeTab === 'appearance' && (
               <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-6 shadow-lg shadow-black/20">
-                <h2 className="text-2xl font-bold text-[#e3e2e6]">Appearance</h2>
-                <p className="text-[13px] text-slate-400 mt-2">
-                  Theme controls will be wired after the sync shell integration is complete.
-                </p>
+                <div className="flex items-center justify-between gap-3 mb-5">
+                  <div>
+                    <h2 className="text-2xl font-bold text-[#e3e2e6]">Appearance</h2>
+                    <p className="font-mono text-[11px] text-slate-500 mt-1">{settingsSummary.settingsPath}</p>
+                  </div>
+                  <button
+                    disabled={isSettingsRefreshing}
+                    onClick={refreshSettings}
+                    title="Refresh settings"
+                    className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <RefreshCw size={15} className={isSettingsRefreshing ? 'animate-spin' : ''} />
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+                  <SettingsDetailRow label="Theme" value={settingsSummary.theme} />
+                  <SettingsDetailRow label="Settings source" value={settingsSummary.source} mono />
+                  <SettingsDetailRow label="Snapshot source" value={settingsSource} mono />
+                  <SettingsDetailRow label="Schema" value={settingsSummary.schemaVersion} mono />
+                </div>
               </section>
             )}
 
             {activeTab === 'ai' && (
               <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-6 shadow-lg shadow-black/20">
-                <h2 className="text-2xl font-bold text-[#e3e2e6]">AI Model</h2>
-                <p className="text-[13px] text-slate-400 mt-2">
-                  Local model configuration remains a placeholder until the AI runtime boundary lands.
-                </p>
+                <div className="flex items-center justify-between gap-3 mb-5">
+                  <div>
+                    <h2 className="text-2xl font-bold text-[#e3e2e6]">AI Model</h2>
+                    <p className="font-mono text-[11px] text-slate-500 mt-1">
+                      {settingsSummary.vaultId} / {settingsSummary.deviceId}
+                    </p>
+                  </div>
+                  <button
+                    disabled={isSettingsRefreshing}
+                    onClick={refreshSettings}
+                    title="Refresh settings"
+                    className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <RefreshCw size={15} className={isSettingsRefreshing ? 'animate-spin' : ''} />
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+                  <SettingsDetailRow label="Local model" value={settingsSummary.localModelStatus} />
+                  <SettingsDetailRow label="Embeddings" value={settingsSummary.embeddingStatus} />
+                  <SettingsDetailRow label="Snapshot source" value={settingsSource} mono />
+                  <SettingsDetailRow label="Settings source" value={settingsSummary.source} mono />
+                </div>
               </section>
             )}
 
             {activeTab === 'general' && (
               <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-6 shadow-lg shadow-black/20">
-                <h2 className="text-2xl font-bold text-[#e3e2e6]">General</h2>
-                <p className="text-[13px] text-slate-400 mt-2">
-                  General vault preferences will be connected after the desktop settings contract is defined.
-                </p>
+                <div className="flex items-start justify-between gap-3 mb-5">
+                  <div className="min-w-0">
+                    <h2 className="text-2xl font-bold text-[#e3e2e6]">General</h2>
+                    <p className="font-mono text-[11px] text-slate-500 mt-1 truncate" title={settingsSummary.vaultRoot}>
+                      {settingsSummary.vaultRoot}
+                    </p>
+                  </div>
+                  <button
+                    disabled={isSettingsRefreshing}
+                    onClick={refreshSettings}
+                    title="Refresh settings"
+                    className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <RefreshCw size={15} className={isSettingsRefreshing ? 'animate-spin' : ''} />
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+                  <SettingsDetailRow label="Vault ID" value={settingsSummary.vaultId} mono />
+                  <SettingsDetailRow label="Device ID" value={settingsSummary.deviceId} mono />
+                  <SettingsDetailRow label="Settings path" value={settingsSummary.settingsPath} mono />
+                  <SettingsDetailRow label="Settings source" value={settingsSummary.source} mono />
+                  <SettingsDetailRow label="Snapshot source" value={settingsSource} mono />
+                  <SettingsDetailRow label="Schema" value={settingsSummary.schemaVersion} mono />
+                </div>
+                {settingsError && (
+                  <p className="text-[12px] text-[#ffb782] mt-4 line-clamp-3">{settingsError}</p>
+                )}
               </section>
             )}
           </div>
