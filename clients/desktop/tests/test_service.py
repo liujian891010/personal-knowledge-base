@@ -461,6 +461,47 @@ class DesktopSyncServiceTests(unittest.TestCase):
             document = load_filemap(service.workspace.paths.filemap_path)
             self.assertEqual(document.files[0].path, "二级目录/中文路径.md")
 
+    def test_import_existing_workspace_files_repairs_local_only_stale_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service = build_desktop_sync_service(
+                DesktopSyncHttpConfig(
+                    base_url="https://sync.example.com",
+                    vault_id="vault-001",
+                    device_id="desktop-shanghai",
+                ),
+                root,
+                file_id_builder=lambda path: "file-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            service.ensure_initialized(now_ms=1770000030000)
+            nested_path = root / "二级目录" / "中文路径.md"
+            nested_path.parent.mkdir()
+            nested_path.write_bytes("# 中文标题\n".encode("gb18030"))
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                FileMapDocument(
+                    vault_id="vault-001",
+                    updated_at=1770000030100,
+                    files=[
+                        FileRecord(
+                            file_id="file-stale",
+                            path="乱码路径.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000030100,
+                        )
+                    ],
+                ),
+            )
+
+            snapshot = service.import_existing_workspace_files_if_empty()
+
+            self.assertEqual(snapshot.total_count, 1)
+            self.assertEqual(snapshot.files[0].path, "二级目录/中文路径.md")
+            self.assertTrue(snapshot.files[0].exists_on_disk)
+            document = load_filemap(service.workspace.paths.filemap_path)
+            self.assertEqual(document.files[0].path, "二级目录/中文路径.md")
+
     def test_load_workspace_file_content_returns_utf8_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

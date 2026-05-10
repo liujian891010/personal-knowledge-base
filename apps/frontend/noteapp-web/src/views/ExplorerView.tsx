@@ -23,6 +23,73 @@ function folderName(path: string): string {
   return parts.length > 1 ? parts.slice(0, -1).join('/') : '知识库根目录';
 }
 
+type ExplorerRow =
+  | {
+    kind: 'folder';
+    id: string;
+    name: string;
+    path: string;
+    depth: number;
+    count: number;
+  }
+  | {
+    kind: 'file';
+    id: string;
+    file: WorkspaceFileEntry;
+    depth: number;
+  };
+
+function buildExplorerRows(files: WorkspaceFileEntry[]): ExplorerRow[] {
+  const folderCounts = new Map<string, number>();
+  for (const file of files) {
+    const parts = file.path.split(/[\\/]/).filter(Boolean);
+    const folderParts = parts.slice(0, -1);
+    if (folderParts.length === 0) {
+      folderCounts.set('', (folderCounts.get('') ?? 0) + 1);
+      continue;
+    }
+    for (let index = 0; index < folderParts.length; index += 1) {
+      const folderPath = folderParts.slice(0, index + 1).join('/');
+      folderCounts.set(folderPath, (folderCounts.get(folderPath) ?? 0) + 1);
+    }
+  }
+
+  const rows: ExplorerRow[] = [];
+  const sortedFolders = Array.from(folderCounts.keys()).sort((left, right) => {
+    if (left === '') {
+      return -1;
+    }
+    if (right === '') {
+      return 1;
+    }
+    return left.localeCompare(right);
+  });
+
+  for (const folderPath of sortedFolders) {
+    const depth = folderPath === '' ? 0 : folderPath.split('/').length - 1;
+    const folderFiles = files
+      .filter((file) => folderName(file.path) === (folderPath || '知识库根目录'))
+      .sort((left, right) => left.path.localeCompare(right.path));
+    rows.push({
+      kind: 'folder',
+      id: `folder:${folderPath || '__root__'}`,
+      name: folderPath ? fileName(folderPath) : '知识库根目录',
+      path: folderPath,
+      depth,
+      count: folderCounts.get(folderPath) ?? 0,
+    });
+    for (const file of folderFiles) {
+      rows.push({
+        kind: 'file',
+        id: `file:${file.file_id}`,
+        file,
+        depth: folderPath === '' ? 1 : folderPath.split('/').length,
+      });
+    }
+  }
+  return rows;
+}
+
 function formatBytes(value: number | null): string {
   if (value === null) {
     return '缺失';
@@ -114,14 +181,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
     () => files.filter((file) => file.status !== 'deleted'),
     [files],
   );
-  const filesByFolder = useMemo(() => {
-    const grouped = new Map<string, WorkspaceFileEntry[]>();
-    for (const file of visibleFiles) {
-      const folder = folderName(file.path);
-      grouped.set(folder, [...(grouped.get(folder) ?? []), file]);
-    }
-    return Array.from(grouped.entries()).sort(([left], [right]) => left.localeCompare(right));
-  }, [visibleFiles]);
+  const explorerRows = useMemo(() => buildExplorerRows(visibleFiles), [visibleFiles]);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -194,34 +254,37 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
           </div>
         </div>
         <div className="flex-1 overflow-y-auto py-2">
-          {filesByFolder.length === 0 ? (
+          {explorerRows.length === 0 ? (
             <div className="p-4 text-[13px] text-slate-400">暂无已跟踪文件。</div>
           ) : (
-            filesByFolder.map(([folder, folderFiles]) => (
-              <div key={folder} className="flex flex-col">
-                <div className="flex items-center gap-2 px-4 py-2 text-slate-300">
+            explorerRows.map((row) => (
+              row.kind === 'folder' ? (
+                <div
+                  key={row.id}
+                  className="flex items-center gap-2 py-2 pr-4 text-slate-300"
+                  style={{ paddingLeft: `${16 + row.depth * 14}px` }}
+                  title={row.path || '知识库根目录'}
+                >
                   <Folder size={16} className="text-[#a9c8fc]" />
-                  <span className="text-[13px] font-semibold flex-1 font-sans truncate">{folder}</span>
-                  <span className="font-mono text-[10px] text-slate-500">{folderFiles.length}</span>
+                  <span className="text-[13px] font-semibold flex-1 font-sans truncate">{row.name}</span>
+                  <span className="font-mono text-[10px] text-slate-500">{row.count}</span>
                 </div>
-                <div className="flex flex-col">
-                  {folderFiles.map((file) => (
-                    <button
-                      key={file.file_id}
-                      onClick={() => setSelectedFileId(file.file_id)}
-                      title={file.path}
-                      className={`flex items-center gap-2 px-8 py-2 text-[13px] font-sans truncate text-left transition-colors ${
-                        selectedFileId === file.file_id
-                          ? 'bg-[#1f2b4a] text-[#e3e2e6] border-r-2 border-[#e94560]'
-                          : 'text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a]'
-                      }`}
-                    >
-                      <FileText size={14} className={file.exists_on_disk ? 'text-slate-500' : 'text-[#e94560]'} />
-                      <span className="truncate">{fileName(file.path)}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
+              ) : (
+                <button
+                  key={row.id}
+                  onClick={() => setSelectedFileId(row.file.file_id)}
+                  title={row.file.path}
+                  style={{ paddingLeft: `${24 + row.depth * 14}px` }}
+                  className={`flex w-full items-center gap-2 py-2 pr-4 text-[13px] font-sans truncate text-left transition-colors ${
+                    selectedFileId === row.file.file_id
+                      ? 'bg-[#1f2b4a] text-[#e3e2e6] border-r-2 border-[#e94560]'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a]'
+                  }`}
+                >
+                  <FileText size={14} className={row.file.exists_on_disk ? 'text-slate-500' : 'text-[#e94560]'} />
+                  <span className="truncate">{fileName(row.file.path)}</span>
+                </button>
+              )
             ))
           )}
         </div>

@@ -289,6 +289,24 @@ def _iter_existing_workspace_import_files(vault_root: Path) -> Iterable[tuple[st
             yield relative_path, path
 
 
+def _is_local_import_record(record: FileRecord) -> bool:
+    return (
+        record.status == "active"
+        and record.content_hash is None
+        and record.last_known_revision is None
+        and record.conflict_source_file_id is None
+    )
+
+
+def _should_replace_local_import_filemap(document: FileMapDocument, import_paths: list[str]) -> bool:
+    if not document.files:
+        return True
+    if not all(_is_local_import_record(record) for record in document.files):
+        return False
+    existing_paths = sorted(record.path for record in document.files)
+    return existing_paths != sorted(import_paths)
+
+
 def _build_pull_apply_ops_hash(plan: "DesktopPullRequiredBlobPlan") -> str:
     payload = {
         "vault_id": plan.vault_id,
@@ -905,14 +923,16 @@ class DesktopSyncService:
 
     def import_existing_workspace_files_if_empty(self) -> DesktopWorkspaceFilesSnapshot:
         snapshot = self.load_snapshot()
-        if snapshot.document.files:
+        importable_files = sorted(
+            _iter_existing_workspace_import_files(self.workspace.vault_root),
+            key=lambda item: item[0],
+        )
+        import_paths = [relative_path for relative_path, _ in importable_files]
+        if not _should_replace_local_import_filemap(snapshot.document, import_paths):
             return self.list_workspace_files()
 
         records: list[FileRecord] = []
-        for relative_path, disk_path in sorted(
-            _iter_existing_workspace_import_files(self.workspace.vault_root),
-            key=lambda item: item[0],
-        ):
+        for relative_path, disk_path in importable_files:
             payload_size = disk_path.stat().st_size
             mtime_ms = disk_path.stat().st_mtime_ns // 1_000_000
             mime_type = _infer_imported_workspace_mime_type(relative_path)
