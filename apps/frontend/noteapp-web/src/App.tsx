@@ -88,7 +88,7 @@ function Sidebar({ currentView, setView }: { currentView: string, setView: (v: s
           <Settings size={20} />
           <span>设置</span>
         </button>
-        <button className="w-full flex items-center space-x-3 text-slate-400 px-4 py-3 hover:text-slate-200 hover:bg-[#1f2b4a] rounded transition-colors duration-200">
+        <button onClick={() => setView('sync')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded transition-colors duration-200 ${currentView === 'sync' ? 'bg-[#0f3460]/20 text-[#e94560] border-l-2 border-[#e94560]' : 'text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a]'}`}>
           <Cloud size={20} />
           <span>同步状态</span>
         </button>
@@ -150,7 +150,8 @@ export default function App() {
               {currentView === 'wiki' && <WikiView />}
               {currentView === 'graph' && <GraphView />}
               {currentView === 'conflicts' && <ConflictsView />}
-              {currentView === 'settings' && <SettingsView />}
+              {currentView === 'settings' && <SettingsView initialTab="general" />}
+              {currentView === 'sync' && <SettingsView initialTab="sync" />}
               {currentView === 'trash' && <TrashView />}
             </motion.div>
           </AnimatePresence>
