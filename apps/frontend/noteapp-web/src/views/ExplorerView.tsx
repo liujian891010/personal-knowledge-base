@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Brain,
   ChevronRight,
+  Cloud,
   FileText,
   Folder,
   Network,
@@ -307,19 +308,31 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                     </span>
                     {savedAtMs && !isContentDirty && (
                       <span className="hidden sm:inline font-mono text-[11px] text-emerald-300">
-                        saved {formatFileTime(savedAtMs)}
+                        saved locally {formatFileTime(savedAtMs)}
                       </span>
                     )}
                   </div>
-                  <button
-                    onClick={handleSaveContent}
-                    disabled={!canEditContent || !isContentDirty || isContentLoading || isContentSaving}
-                    title="Save file content"
-                    className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
-                  >
-                    <Save size={14} />
-                    <span>{isContentSaving ? 'Saving' : 'Save'}</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {savedAtMs && !isContentDirty && (
+                      <button
+                        onClick={() => setView('sync')}
+                        title="Open sync status"
+                        className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-3 text-[12px] font-semibold text-[#a9c8fc] hover:text-white transition-colors"
+                      >
+                        <Cloud size={14} />
+                        <span>Open Sync</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={handleSaveContent}
+                      disabled={!canEditContent || !isContentDirty || isContentLoading || isContentSaving}
+                      title="Save file content"
+                      className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                    >
+                      <Save size={14} />
+                      <span>{isContentSaving ? 'Saving' : 'Save'}</span>
+                    </button>
+                  </div>
                 </div>
                 <textarea
                   value={isContentLoading ? 'Loading file content...' : draftText}

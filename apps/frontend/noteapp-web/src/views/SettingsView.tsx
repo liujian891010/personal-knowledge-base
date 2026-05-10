@@ -3,7 +3,10 @@ import {
   Activity,
   Bot,
   ChevronRight,
+  CheckCircle2,
   Cloud,
+  GitCommitHorizontal,
+  ListChecks,
   Palette,
   RefreshCw,
   Save,
@@ -162,6 +165,14 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     || embeddingStatusDraft !== settingsSummary.embeddingStatus
   );
   const savedAtLabel = savedAtMs ? `Saved ${formatActivityTime(savedAtMs)}` : null;
+  const localChangesCard = syncCards.find((card) => card.card_id === 'local-changes') ?? null;
+  const inspectLocalChangesAction = localChangesCard?.actions.find(
+    (action) => action.action_id === 'detect-local-changes',
+  );
+  const submitLocalChangesAction = localChangesCard?.actions.find(
+    (action) => action.action_id === 'submit-detected-commit',
+  );
+  const hasPendingLocalChanges = syncSummary.changeBadgeCount > 0;
 
   const renderActionButton = (
     action: SyncShellAction,
@@ -268,6 +279,62 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                     {secondaryActions.map((action) => renderActionButton(action))}
                   </div>
                 </div>
+
+                {hasPendingLocalChanges && (
+                  <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-4 md:p-5 shadow-lg shadow-black/20">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-[#ffb782]/30 bg-[#ffb782]/10 text-[#ffb782] font-mono text-[11px] uppercase tracking-wider font-bold">
+                            <Cloud size={13} />
+                            Pending sync
+                          </span>
+                          <span className="font-mono text-[11px] text-slate-500">
+                            {syncSummary.changeBadgeCount} local changes
+                          </span>
+                        </div>
+                        <h3 className="text-[15px] font-bold text-[#e3e2e6] truncate">
+                          Local edits are ready to submit
+                        </h3>
+                        <p className="text-[13px] text-slate-400 mt-1 line-clamp-2">
+                          {localChangesCard?.body
+                            ?? 'Saved workspace edits are waiting for local change inspection and submit.'}
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 lg:min-w-[420px]">
+                        <div className="rounded border border-[#0f3460] bg-[#121316] px-3 py-2 min-w-0">
+                          <div className="flex items-center gap-2 text-emerald-300">
+                            <CheckCircle2 size={15} />
+                            <span className="text-[12px] font-semibold">Saved</span>
+                          </div>
+                          <p className="font-mono text-[11px] text-slate-500 mt-1 truncate">workspace file</p>
+                        </div>
+                        <div className="rounded border border-[#0f3460] bg-[#121316] px-3 py-2 min-w-0">
+                          <div className="flex items-center gap-2 text-[#a9c8fc]">
+                            <ListChecks size={15} />
+                            <span className="text-[12px] font-semibold">Inspect</span>
+                          </div>
+                          <div className="mt-2">
+                            {inspectLocalChangesAction
+                              ? renderActionButton(inspectLocalChangesAction)
+                              : <span className="font-mono text-[11px] text-slate-500">Unavailable</span>}
+                          </div>
+                        </div>
+                        <div className="rounded border border-[#0f3460] bg-[#121316] px-3 py-2 min-w-0">
+                          <div className="flex items-center gap-2 text-[#e94560]">
+                            <GitCommitHorizontal size={15} />
+                            <span className="text-[12px] font-semibold">Submit</span>
+                          </div>
+                          <div className="mt-2">
+                            {submitLocalChangesAction
+                              ? renderActionButton(submitLocalChangesAction, 'primary')
+                              : <span className="font-mono text-[11px] text-slate-500">Unavailable</span>}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                )}
 
                 <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                   <div className="xl:col-span-2 flex flex-col gap-3">
