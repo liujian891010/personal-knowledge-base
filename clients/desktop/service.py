@@ -705,6 +705,7 @@ class DesktopWorkspaceFileContent:
     updated_at: int
     size_bytes: int
     content_hash: Optional[str]
+    tracked_content_hash: Optional[str]
     text: str
     encoding: str = "utf-8"
 
@@ -886,13 +887,17 @@ class DesktopSyncService:
             raise KeyError(f"file_id not found in workspace filemap: {file_id}")
         if record.status != "active":
             raise ValueError(f"workspace file is not active: {file_id}")
-        payload = self._load_workspace_content_for_records([record])[file_id]
+        content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+        if not content_path.exists() or not content_path.is_file():
+            raise FileNotFoundError(f"workspace file content not found: {file_id}")
+        payload = content_path.read_bytes()
         if len(payload) > _WORKSPACE_FILE_CONTENT_MAX_BYTES:
             raise ValueError(f"workspace file is too large to render: {file_id}")
         try:
             text = payload.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ValueError(f"workspace file is not valid UTF-8: {file_id}") from exc
+        stat = content_path.stat()
         return DesktopWorkspaceFileContent(
             schema_version="v1",
             vault_id=self.vault_id,
@@ -902,11 +907,25 @@ class DesktopSyncService:
             path=record.path,
             type=record.type,
             status=record.status,
-            updated_at=record.updated_at,
+            updated_at=stat.st_mtime_ns // 1_000_000,
             size_bytes=len(payload),
-            content_hash=record.content_hash,
+            content_hash=_compute_content_hash(payload),
+            tracked_content_hash=record.content_hash,
             text=text,
         )
+
+    def write_workspace_file_content(self, file_id: str, text: str) -> DesktopWorkspaceFileContent:
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        if record.status != "active":
+            raise ValueError(f"workspace file is not active: {file_id}")
+        content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+        if not content_path.exists() or not content_path.is_file():
+            raise FileNotFoundError(f"workspace file content not found: {file_id}")
+        _write_bytes_atomic(content_path, text.encode("utf-8"))
+        return self.load_workspace_file_content(file_id)
 
     def load_local_settings_snapshot(self) -> DesktopLocalSettingsSnapshot:
         settings_path = self.workspace.paths.settings_path

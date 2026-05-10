@@ -186,8 +186,28 @@ class FakeService:
             "updated_at": 1770000040000,
             "size_bytes": 8,
             "content_hash": "sha256:aaa",
+            "tracked_content_hash": "sha256:old",
             "encoding": "utf-8",
             "text": "# A\n",
+        }
+
+    def write_workspace_file_content(self, file_id, text):
+        self.calls.append(("write-workspace-file-content", file_id, text))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "file_id": file_id,
+            "path": "Notes/A.md",
+            "type": "note",
+            "status": "active",
+            "updated_at": 1770000040001,
+            "size_bytes": len(text.encode("utf-8")),
+            "content_hash": "sha256:bbb",
+            "tracked_content_hash": "sha256:aaa",
+            "encoding": "utf-8",
+            "text": text,
         }
 
     def load_local_settings_snapshot(self):
@@ -946,6 +966,60 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(payload["path"], "Notes/A.md")
         self.assertEqual(payload["text"], "# A\n")
         self.assertEqual(self.service.calls, [("workspace-file-content", "file-a")])
+
+    def test_write_workspace_file_content_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "write-workspace-file-content",
+            "--file-id",
+            "file-a",
+            "--input-text",
+            "# Updated\n",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["file_id"], "file-a")
+        self.assertEqual(payload["text"], "# Updated\n")
+        self.assertEqual(payload["tracked_content_hash"], "sha256:aaa")
+        self.assertEqual(
+            self.service.calls,
+            [("write-workspace-file-content", "file-a", "# Updated\n")],
+        )
+
+    def test_write_workspace_file_content_command_reads_input_text_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "note.md"
+            input_path.write_text("# File Input\n", encoding="utf-8")
+
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "write-workspace-file-content",
+                "--file-id",
+                "file-a",
+                "--input-text-file",
+                str(input_path),
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["text"], "# File Input\n")
+        self.assertEqual(
+            self.service.calls,
+            [("write-workspace-file-content", "file-a", "# File Input\n")],
+        )
 
     def test_write_local_settings_command_routes_to_service(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -379,6 +379,21 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(content.size_bytes, len(payload))
             self.assertEqual(content.encoding, "utf-8")
             self.assertEqual(content.text, payload.decode("utf-8"))
+            self.assertEqual(content.content_hash, "sha256:" + hashlib.sha256(payload).hexdigest())
+            self.assertEqual(content.tracked_content_hash, content.content_hash)
+
+    def test_load_workspace_file_content_allows_local_edit_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            edited_payload = b"# Local edit\n"
+            (root / "Notes" / "Live.md").write_bytes(edited_payload)
+
+            content = service.load_workspace_file_content("file-live")
+
+            self.assertEqual(content.text, edited_payload.decode("utf-8"))
+            self.assertEqual(content.content_hash, "sha256:" + hashlib.sha256(edited_payload).hexdigest())
+            self.assertNotEqual(content.tracked_content_hash, content.content_hash)
 
     def test_load_workspace_file_content_rejects_non_utf8(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -411,6 +426,31 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "workspace file is not valid UTF-8: file-live"):
                 service.load_workspace_file_content("file-live")
+
+    def test_write_workspace_file_content_writes_disk_without_updating_filemap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, original_payload, _ = self._seed_workspace(root)
+            original_snapshot = service.load_snapshot()
+            original_hash = original_snapshot.document.files[0].content_hash
+
+            content = service.write_workspace_file_content("file-live", "# Edited\n")
+
+            self.assertEqual((root / "Notes" / "Live.md").read_text(encoding="utf-8"), "# Edited\n")
+            self.assertEqual(content.text, "# Edited\n")
+            self.assertNotEqual(content.content_hash, "sha256:" + hashlib.sha256(original_payload).hexdigest())
+            self.assertEqual(content.tracked_content_hash, original_hash)
+            reloaded = service.load_snapshot()
+            self.assertEqual(reloaded.document.files[0].content_hash, original_hash)
+            changes = service.detect_local_changes()
+            self.assertEqual(changes.modified_file_ids, ["file-live"])
+
+    def test_write_workspace_file_content_rejects_missing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+
+            with self.assertRaisesRegex(KeyError, "file_id not found in workspace filemap: missing"):
+                service.write_workspace_file_content("missing", "# Missing\n")
 
     def test_export_vault_package_excludes_runtime_state_and_optional_raw(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
