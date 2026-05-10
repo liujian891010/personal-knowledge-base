@@ -56,6 +56,7 @@ from vault_core import (
     VaultHeadResponsePayload,
     VaultStateRecord,
     load_commit_intent_journal,
+    load_filemap,
     load_sync_apply_journal,
     load_vault_state,
     open_database,
@@ -3868,6 +3869,13 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 blob_opener.calls[0][2],
                 build_placeholder_encrypted_blob_payload(updated_payload),
             )
+            filemap = load_filemap(service.workspace.paths.filemap_path)
+            self.assertEqual(filemap.files[0].content_hash, updated_hash)
+            self.assertEqual(
+                filemap.files[0].last_known_revision,
+                result.network.commit.response.new_revision,
+            )
+            self.assertEqual(service.detect_local_changes().change_count, 0)
 
     def test_submit_detected_changes_rejects_workspace_snapshot_drift_after_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3970,6 +3978,9 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(blob_opener.calls, [])
             self.assertEqual(result.prepared.submission.manifest.files, [])
             self.assertEqual(len(result.prepared.submission.manifest.tombstones), 1)
+            filemap = load_filemap(service.workspace.paths.filemap_path)
+            self.assertEqual([record for record in filemap.files if record.status == "active"], [])
+            self.assertEqual(service.detect_local_changes().change_count, 0)
 
     def test_submit_detected_changes_commits_untracked_file_as_new_active_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3995,6 +4006,12 @@ class DesktopSyncServiceTests(unittest.TestCase):
             )
             self.assertEqual(len(blob_opener.calls), 1)
             self.assertEqual(blob_opener.calls[0][2], build_placeholder_encrypted_blob_payload(new_payload))
+            filemap = load_filemap(service.workspace.paths.filemap_path)
+            active_records = [record for record in filemap.files if record.status == "active"]
+            self.assertEqual(len(active_records), 1)
+            self.assertEqual(active_records[0].path, "Notes/New.md")
+            self.assertEqual(active_records[0].last_known_revision, result.network.commit.response.new_revision)
+            self.assertEqual(service.detect_local_changes().change_count, 0)
 
     def test_submit_detected_changes_uses_injected_file_id_builder_for_untracked_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
