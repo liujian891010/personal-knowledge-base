@@ -4,6 +4,7 @@ import bundledExampleSnapshot from '../fixtures/live-sync-shell.example.json';
 import {
   parseSyncShellSnapshot,
   summarizeSyncShellSnapshot,
+  type SyncShellAction,
   type SyncShellSnapshot,
   type SyncShellSummary,
 } from './syncShell';
@@ -85,6 +86,13 @@ async function executeAction(actionId: string): Promise<SyncShellSnapshot> {
   return parseSyncShellSnapshot(await response.json());
 }
 
+function confirmAction(action: SyncShellAction): boolean {
+  if (!action.requires_confirmation) {
+    return true;
+  }
+  return window.confirm(`Run sync action "${action.label}"?`);
+}
+
 export function useSyncShellController(): SyncShellController {
   const [snapshot, setSnapshot] = useState<SyncShellSnapshot>(fallbackSnapshot);
   const [source, setSource] = useState<SyncShellSource>('example');
@@ -131,6 +139,9 @@ export function useSyncShellController(): SyncShellController {
   const executePrimaryAction = async () => {
     const action = snapshot.sync_center.panel.primary_action;
     if (!action.enabled || isExecuting) {
+      return;
+    }
+    if (!confirmAction(action)) {
       return;
     }
     setIsExecuting(true);
