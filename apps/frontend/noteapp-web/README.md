@@ -60,6 +60,8 @@ Run the local HTTP bridge used by the browser UI:
 npm run sync:bridge
 ```
 
+The bridge binds to `127.0.0.1` and defaults CORS to `http://127.0.0.1:3000`. Set `NOTEAPP_SYNC_BRIDGE_ORIGIN` if the frontend runs elsewhere.
+
 Bridge endpoints:
 
 ```text
