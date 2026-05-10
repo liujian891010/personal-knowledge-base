@@ -218,6 +218,12 @@ def main() -> int:
             )
             try:
                 wait_for_bridge()
+                status, allowed_origin = request_bridge_json(
+                    "/health",
+                    headers={"Origin": "http://127.0.0.1:3000"},
+                )
+                assert status == 200, allowed_origin
+                assert allowed_origin["allowedOrigin"] == "http://127.0.0.1:3000", allowed_origin
                 status, rejected_origin = request_bridge_json(
                     "/health",
                     headers={"Origin": "http://evil.example"},
