@@ -118,6 +118,10 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                     </div>
                     <h3 className="text-[15px] font-bold text-[#e3e2e6] truncate">{syncSummary.headline}</h3>
                     <p className="text-[13px] text-slate-400 mt-1 line-clamp-2">{syncSummary.detail}</p>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 font-mono text-[11px] text-slate-500">
+                      <span>Generated {formatActivityTime(syncSummary.generatedAtMs)}</span>
+                      <span className="truncate" title={syncSummary.vaultRoot}>{syncSummary.vaultRoot}</span>
+                    </div>
                     {lastError && (
                       <p className="text-[12px] text-[#ffb782] mt-2 line-clamp-2">{lastError}</p>
                     )}
