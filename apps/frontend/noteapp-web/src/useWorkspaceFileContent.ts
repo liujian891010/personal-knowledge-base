@@ -14,7 +14,10 @@ export interface WorkspaceFileContentController {
   content: WorkspaceFileContent | null;
   lastError: string | null;
   isLoading: boolean;
+  isSaving: boolean;
+  savedAtMs: number | null;
   loadContent: (fileId: string) => Promise<void>;
+  saveContent: (fileId: string, text: string) => Promise<void>;
   clearContent: () => void;
 }
 
@@ -50,16 +53,39 @@ async function fetchWorkspaceFileContent(fileId: string): Promise<WorkspaceFileC
   return parseWorkspaceFileContent(await response.json());
 }
 
+async function putWorkspaceFileContent(
+  fileId: string,
+  text: string,
+): Promise<WorkspaceFileContent> {
+  const response = await fetch(
+    `${syncBridgeUrl}/api/workspace/files/${encodeURIComponent(fileId)}/content`,
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, 'workspace file content save'));
+  }
+  return parseWorkspaceFileContent(await response.json());
+}
+
 export function useWorkspaceFileContentController(): WorkspaceFileContentController {
   const [content, setContent] = useState<WorkspaceFileContent | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedAtMs, setSavedAtMs] = useState<number | null>(null);
 
   const loadContent = useCallback(async (fileId: string) => {
     setIsLoading(true);
     try {
       setContent(await fetchWorkspaceFileContent(fileId));
       setLastError(null);
+      setSavedAtMs(null);
     } catch (error) {
       setLastError(errorMessage(error));
       setContent(null);
@@ -68,16 +94,34 @@ export function useWorkspaceFileContentController(): WorkspaceFileContentControl
     }
   }, []);
 
+  const saveContent = useCallback(async (fileId: string, text: string) => {
+    setIsSaving(true);
+    try {
+      setContent(await putWorkspaceFileContent(fileId, text));
+      setLastError(null);
+      setSavedAtMs(Date.now());
+    } catch (error) {
+      setLastError(errorMessage(error));
+      throw error;
+    } finally {
+      setIsSaving(false);
+    }
+  }, []);
+
   const clearContent = useCallback(() => {
     setContent(null);
     setLastError(null);
+    setSavedAtMs(null);
   }, []);
 
   return {
     content,
     lastError,
     isLoading,
+    isSaving,
+    savedAtMs,
     loadContent,
+    saveContent,
     clearContent,
   };
 }

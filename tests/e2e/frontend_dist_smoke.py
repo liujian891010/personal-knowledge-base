@@ -83,7 +83,7 @@ def main() -> int:
         assert "Local model" in bundle, "settings AI view was not bundled"
         assert "Workspace" in bundle, "workspace explorer view was not bundled"
         assert "File metadata" in bundle, "workspace file metadata view was not bundled"
-        assert "Content preview" in bundle, "workspace file content preview was not bundled"
+        assert "Content editor" in bundle, "workspace file content editor was not bundled"
 
         print(
             {

@@ -10,6 +10,7 @@ export interface WorkspaceFileContent {
   updated_at: number;
   size_bytes: number;
   content_hash?: string | null;
+  tracked_content_hash?: string | null;
   text: string;
   encoding: 'utf-8';
 }
@@ -54,6 +55,8 @@ export function parseWorkspaceFileContent(payload: unknown): WorkspaceFileConten
     updated_at: requireNumber(payload, 'updated_at'),
     size_bytes: requireNumber(payload, 'size_bytes'),
     content_hash: typeof payload.content_hash === 'string' ? payload.content_hash : null,
+    tracked_content_hash:
+      typeof payload.tracked_content_hash === 'string' ? payload.tracked_content_hash : null,
     text: requireString(payload, 'text'),
     encoding,
   };
