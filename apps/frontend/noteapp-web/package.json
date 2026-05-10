@@ -19,6 +19,7 @@
     "settings:write": "node scripts/write-local-settings.mjs",
     "workspace:files": "node scripts/write-workspace-files.mjs",
     "workspace:content": "node scripts/write-workspace-file-content.mjs",
+    "workspace:write": "node scripts/write-workspace-file-content-update.mjs",
     "sync:action": "node scripts/execute-sync-action.mjs",
     "sync:bridge": "node scripts/sync-shell-bridge.mjs"
   },
