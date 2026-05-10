@@ -564,6 +564,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'GET' && url.pathname === '/api/workspace/files') {
+      runDesktopCli(['import-existing-workspace-files']);
       runScript('write-workspace-files.mjs', {
         NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
       });
