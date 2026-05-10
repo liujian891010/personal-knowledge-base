@@ -12,3 +12,6 @@
 
 当前阶段已经进入 MVP 收口。可用范围、延后范围和发布前验收命令见
 [`docs/develop/mvp-scope.md`](docs/develop/mvp-scope.md)。
+
+MVP 启动、验收和交付口径见
+[`docs/develop/mvp-handoff.md`](docs/develop/mvp-handoff.md)。
