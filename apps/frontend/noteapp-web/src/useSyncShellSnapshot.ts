@@ -109,6 +109,23 @@ function actionResultNotice(action: SyncShellAction, snapshot: SyncShellSnapshot
           occurredAtMs: snapshot.generated_at_ms,
         };
   }
+  if (action.command === 'resolve-conflicts') {
+    return summary.conflictBadgeCount > 0
+      ? {
+          level: 'warning',
+          title: '仍有本地冲突需要处理',
+          detail: `还剩 ${summary.conflictBadgeCount} 个冲突副本，请继续检查或清理。`,
+          actionId: action.action_id,
+          occurredAtMs: snapshot.generated_at_ms,
+        }
+      : {
+          level: 'success',
+          title: '冲突副本已清理',
+          detail: '本地冲突副本已移除，同步状态已重新开放。',
+          actionId: action.action_id,
+          occurredAtMs: snapshot.generated_at_ms,
+        };
+  }
   if (action.action_id === 'pull') {
     if (summary.conflictBadgeCount > 0) {
       return {
