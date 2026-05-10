@@ -1,68 +1,168 @@
-import React from 'react';
-import { FileText, Plus, Search, HelpCircle, Trash2, Settings, Cloud, Brain, Network, ChevronDown, ChevronRight, Folder } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  AlertTriangle,
+  Brain,
+  ChevronRight,
+  FileText,
+  Folder,
+  Network,
+  Plus,
+  RefreshCw,
+} from 'lucide-react';
+
+import { useWorkspaceFilesController } from '../useWorkspaceFiles';
+import type { WorkspaceFileEntry } from '../workspaceFiles';
+
+function fileName(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+function folderName(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts.length > 1 ? parts[0] : 'Vault root';
+}
+
+function formatBytes(value: number | null): string {
+  if (value === null) {
+    return 'Missing';
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatFileTime(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(ms));
+}
+
+function statusClasses(file: WorkspaceFileEntry): string {
+  if (file.status === 'conflict_copy') {
+    return 'text-[#ffb782] bg-[#ffb782]/10 border-[#ffb782]/30';
+  }
+  if (file.status === 'deleted' || !file.exists_on_disk) {
+    return 'text-[#e94560] bg-[#e94560]/10 border-[#e94560]/30';
+  }
+  return 'text-emerald-300 bg-emerald-400/10 border-emerald-400/30';
+}
 
 export default function ExplorerView({ setView }: { setView: (v: string) => void }) {
+  const {
+    summary,
+    files,
+    source,
+    lastError,
+    isRefreshing,
+    refresh,
+  } = useWorkspaceFilesController();
+  const visibleFiles = useMemo(
+    () => files.filter((file) => file.status !== 'deleted'),
+    [files],
+  );
+  const filesByFolder = useMemo(() => {
+    const grouped = new Map<string, WorkspaceFileEntry[]>();
+    for (const file of visibleFiles) {
+      const folder = folderName(file.path);
+      grouped.set(folder, [...(grouped.get(folder) ?? []), file]);
+    }
+    return Array.from(grouped.entries()).sort(([left], [right]) => left.localeCompare(right));
+  }, [visibleFiles]);
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (visibleFiles.length === 0) {
+      setSelectedFileId(null);
+      return;
+    }
+    if (!selectedFileId || !visibleFiles.some((file) => file.file_id === selectedFileId)) {
+      setSelectedFileId(visibleFiles[0].file_id);
+    }
+  }, [selectedFileId, visibleFiles]);
+
+  const selectedFile = visibleFiles.find((file) => file.file_id === selectedFileId) ?? null;
+
   return (
     <div className="flex h-full bg-[#1a1a2e] overflow-hidden">
-      
-      {/* File Tree Secondary Sidebar */}
-      <aside className="hidden md:flex w-64 border-r border-[#0f3460] bg-[#16213e]/80 flex-shrink-0 flex-col max-h-full overflow-hidden">
+      <aside className="hidden md:flex w-72 border-r border-[#0f3460] bg-[#16213e]/80 flex-shrink-0 flex-col max-h-full overflow-hidden">
         <div className="p-4 border-b border-[#0f3460] flex items-center justify-between bg-[#16213e]">
-           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">浏览</span>
-           <button className="text-slate-400 hover:text-white transition-colors">
-             <Plus size={16} />
-           </button>
-        </div>
-        <div className="flex-1 overflow-y-auto py-2">
-          {/* Folders */}
-          <div className="flex flex-col">
-            <div className="flex items-center gap-2 px-4 py-2 text-slate-300 hover:bg-[#1f2b4a] cursor-pointer transition-colors">
-              <ChevronDown size={14} className="text-slate-500" />
-              <Folder size={16} className="text-[#a9c8fc]" />
-              <span className="text-[13px] font-semibold flex-1 font-sans">架构文档</span>
-            </div>
-            <div className="flex items-center gap-2 px-4 py-2 text-slate-300 hover:bg-[#1f2b4a] cursor-pointer transition-colors">
-              <ChevronRight size={14} className="text-slate-500" />
-              <Folder size={16} className="text-[#a9c8fc]" />
-              <span className="text-[13px] font-semibold flex-1 font-sans">会议记录</span>
-            </div>
-            <div className="flex flex-col">
-              <div className="flex items-center gap-2 px-4 py-2 text-slate-300 hover:bg-[#1f2b4a] cursor-pointer transition-colors">
-                <ChevronDown size={14} className="text-slate-500" />
-                <Folder size={16} className="text-[#a9c8fc]" />
-                <span className="text-[13px] font-semibold flex-1 font-sans">研究阶段</span>
-              </div>
-              
-              <div className="flex flex-col">
-                 <button className={`flex items-center gap-2 px-8 py-2 text-[13px] font-sans truncate bg-[#1f2b4a] text-[#e3e2e6] border-r-2 border-[#e94560]`}>
-                   <FileText size={14} className="text-slate-500" /> 产品路线图.md
-                 </button>
-                 <button className={`flex items-center gap-2 px-8 py-2 text-[13px] font-sans truncate text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a]`}>
-                   <FileText size={14} className="text-slate-500" /> Q3 规划.md
-                 </button>
-                 <button className={`flex items-center gap-2 px-8 py-2 text-[13px] font-sans truncate text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a]`}>
-                   <FileText size={14} className="text-slate-500" /> 设计系统规范.md
-                 </button>
-              </div>
+          <div className="min-w-0">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Workspace</span>
+            <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-slate-500">
+              <span>{source}</span>
+              <span>{summary.activeCount} active</span>
+              {summary.missingCount > 0 && <span className="text-[#e94560]">{summary.missingCount} missing</span>}
             </div>
           </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={refresh}
+              disabled={isRefreshing}
+              title="Refresh workspace"
+              className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw size={15} className={isRefreshing ? 'animate-spin' : ''} />
+            </button>
+            <button className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white transition-colors">
+              <Plus size={15} />
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto py-2">
+          {filesByFolder.length === 0 ? (
+            <div className="p-4 text-[13px] text-slate-400">No tracked files.</div>
+          ) : (
+            filesByFolder.map(([folder, folderFiles]) => (
+              <div key={folder} className="flex flex-col">
+                <div className="flex items-center gap-2 px-4 py-2 text-slate-300">
+                  <Folder size={16} className="text-[#a9c8fc]" />
+                  <span className="text-[13px] font-semibold flex-1 font-sans truncate">{folder}</span>
+                  <span className="font-mono text-[10px] text-slate-500">{folderFiles.length}</span>
+                </div>
+                <div className="flex flex-col">
+                  {folderFiles.map((file) => (
+                    <button
+                      key={file.file_id}
+                      onClick={() => setSelectedFileId(file.file_id)}
+                      title={file.path}
+                      className={`flex items-center gap-2 px-8 py-2 text-[13px] font-sans truncate text-left transition-colors ${
+                        selectedFileId === file.file_id
+                          ? 'bg-[#1f2b4a] text-[#e3e2e6] border-r-2 border-[#e94560]'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a]'
+                      }`}
+                    >
+                      <FileText size={14} className={file.exists_on_disk ? 'text-slate-500' : 'text-[#e94560]'} />
+                      <span className="truncate">{fileName(file.path)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </aside>
 
-      {/* Main Editor Canvas */}
       <div className="flex-1 flex flex-col h-full relative overflow-hidden bg-[#121316]">
-        {/* Editor Toolbar */}
         <header className="bg-[#16213e] border-b border-[#0f3460] h-14 flex items-center justify-between px-4 flex-shrink-0 z-10 shadow-sm">
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 text-slate-300">
-              <FileText size={18} className="text-[#e94560]" />
-              <span className="text-[13px] font-semibold">产品路线图.md</span>
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="flex items-center gap-2 text-slate-300 min-w-0">
+              <FileText size={18} className="text-[#e94560] flex-shrink-0" />
+              <span className="text-[13px] font-semibold truncate">
+                {selectedFile ? fileName(selectedFile.path) : 'Workspace'}
+              </span>
             </div>
-            <div className="h-4 w-px bg-[#0f3460] hidden sm:block"></div>
-            <div className="hidden sm:flex items-center gap-2 text-slate-500 font-mono text-[11px]">
-              <span>1,240 字</span>
-              <span>·</span>
-              <span>2秒前保存</span>
+            <div className="h-4 w-px bg-[#0f3460] hidden sm:block" />
+            <div className="hidden sm:flex items-center gap-2 text-slate-500 font-mono text-[11px] min-w-0">
+              <span>{summary.totalCount} tracked</span>
+              {selectedFile && <span className="truncate">{formatBytes(selectedFile.size_bytes)}</span>}
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -74,28 +174,96 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
           </div>
         </header>
 
-        {/* Editor Main Area w/ simulated view */}
-        <div className="flex-1 overflow-y-auto flex relative bg-[#121316]">
-          <div className="hidden sm:flex w-[50px] flex-shrink-0 bg-[#16213e]/20 border-r border-[#0f3460]/50 py-8 flex items-end pr-3 font-mono text-[14px] leading-[1.7] text-slate-600 select-none flex-col">
-            {Array.from({ length: 25 }).map((_, i) => <span key={i}>{i + 1}</span>)}
-          </div>
-          <div className="flex-1 p-6 sm:p-8 md:px-12 font-mono text-[14px] sm:text-[15px] leading-[1.8] text-slate-300 whitespace-pre-wrap outline-none max-w-4xl pt-8 pb-24">
-            <span className="text-[#e3e2e6] font-bold text-2xl font-sans tracking-tight block mb-6"># Q3-Q4 产品路线图</span>
-            <span className="text-[#a9c8fc] font-bold block mt-8 mb-2">## 核心目标</span>
-            1. 为 `.ai/wiki` 目录实现本地优先的向量搜索。{'\n'}
-            2. 优化大型Markdown笔记库（&gt;10k 文件）的同步引擎。{'\n'}
-            3. 使用多文档上下文窗口增强AI助手。{'\n\n'}
-            
-            <span className="text-[#a9c8fc] font-bold block mt-8 mb-2">## 当前冲刺</span>
-            - 构建拆分视图组件。{'\n'}
-            - 与后端团队进行 <span className="text-[#e94560] cursor-pointer hover:underline hover:bg-[#e94560]/10 px-1 rounded transition-colors" onClick={() => setView('wiki')}>[[架构_V2]]</span> 评审。{'\n'}
-            - 重构 <span className="text-white bg-[#0f3460]/50 px-1 rounded border border-[#0f3460]">右侧面板助手</span> UI。{'\n\n'}
-            
-            <span className="text-[#a9c8fc] font-bold block mt-8 mb-2">## 上次同步的笔记</span>
-            <span className="text-slate-400">
-              需要确保 <span className="text-[#ffb782]">`style_active_navigation`</span> 逻辑严格应用于JSON中定义的SideNavBar组件。目前的同步协议在离线超过48小时时会丢弃事件，这违反了本地优先的约束。
-            </span>
-          </div>
+        <div className="flex-1 overflow-y-auto bg-[#121316] p-6 md:p-8">
+          {lastError && (
+            <div className="mb-4 rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782] line-clamp-3">
+              {lastError}
+            </div>
+          )}
+
+          {selectedFile ? (
+            <div className="max-w-4xl flex flex-col gap-6">
+              <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-5 shadow-lg shadow-black/20">
+                <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 mb-3">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded border font-mono text-[11px] uppercase tracking-wider font-bold ${statusClasses(selectedFile)}`}>
+                        {selectedFile.exists_on_disk ? selectedFile.status : 'missing'}
+                      </span>
+                      <span className="font-mono text-[11px] text-slate-500">{selectedFile.type}</span>
+                    </div>
+                    <h2 className="text-2xl font-bold text-[#e3e2e6] truncate">{fileName(selectedFile.path)}</h2>
+                    <p className="font-mono text-[12px] text-slate-500 mt-2 break-words">{selectedFile.path}</p>
+                  </div>
+                  {!selectedFile.exists_on_disk && (
+                    <div className="flex items-center gap-2 text-[#e94560] text-[12px]">
+                      <AlertTriangle size={16} />
+                      <span>Missing on disk</span>
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="border border-[#0f3460] rounded-xl bg-[#16213e] p-5">
+                  <h3 className="text-[15px] font-bold text-[#e3e2e6] mb-4">File metadata</h3>
+                  <dl className="grid grid-cols-1 gap-3 text-[13px]">
+                    <div>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">File ID</dt>
+                      <dd className="font-mono text-[#e3e2e6] break-words mt-1">{selectedFile.file_id}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Updated</dt>
+                      <dd className="font-mono text-[#e3e2e6] mt-1">{formatFileTime(selectedFile.updated_at)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Size</dt>
+                      <dd className="font-mono text-[#e3e2e6] mt-1">{formatBytes(selectedFile.size_bytes)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Revision</dt>
+                      <dd className="font-mono text-[#e3e2e6] mt-1">{selectedFile.last_known_revision ?? 'local'}</dd>
+                    </div>
+                  </dl>
+                </div>
+
+                <div className="border border-[#0f3460] rounded-xl bg-[#16213e] p-5">
+                  <h3 className="text-[15px] font-bold text-[#e3e2e6] mb-4">Workspace</h3>
+                  <dl className="grid grid-cols-1 gap-3 text-[13px]">
+                    <div>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Vault</dt>
+                      <dd className="font-mono text-[#e3e2e6] break-words mt-1">{summary.vaultId}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Device</dt>
+                      <dd className="font-mono text-[#e3e2e6] break-words mt-1">{summary.deviceId}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Root</dt>
+                      <dd className="font-mono text-[#e3e2e6] break-words mt-1">{summary.vaultRoot}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Content hash</dt>
+                      <dd className="font-mono text-[#e3e2e6] break-words mt-1">{selectedFile.content_hash ?? 'none'}</dd>
+                    </div>
+                  </dl>
+                </div>
+              </section>
+
+              <button
+                onClick={() => setView('wiki')}
+                className="inline-flex w-fit items-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-3 py-2 text-[13px] text-[#a9c8fc] hover:text-white transition-colors"
+              >
+                <Network size={14} />
+                <span>Open wiki graph</span>
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          ) : (
+            <div className="max-w-2xl rounded-xl border border-[#0f3460] bg-[#16213e] p-6 text-[13px] text-slate-400">
+              No tracked file is selected.
+            </div>
+          )}
         </div>
       </div>
     </div>

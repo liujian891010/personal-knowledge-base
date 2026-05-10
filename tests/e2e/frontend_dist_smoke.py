@@ -81,6 +81,8 @@ def main() -> int:
         assert "Sync cards" in bundle, "sync cards view was not bundled"
         assert "Connection" in bundle, "settings snapshot connection view was not bundled"
         assert "Local model" in bundle, "settings AI view was not bundled"
+        assert "Workspace" in bundle, "workspace explorer view was not bundled"
+        assert "File metadata" in bundle, "workspace file metadata view was not bundled"
 
         print(
             {
