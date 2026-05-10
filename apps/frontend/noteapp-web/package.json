@@ -11,7 +11,9 @@
     "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
     "lint": "tsc --noEmit",
     "validate:sync-shell": "tsx scripts/validate-sync-shell-fixture.mts",
+    "validate:settings-snapshot": "tsx scripts/validate-settings-snapshot-fixture.mts",
     "sync:snapshot": "node scripts/write-live-sync-shell.mjs",
+    "settings:snapshot": "node scripts/write-local-settings-snapshot.mjs",
     "sync:action": "node scripts/execute-sync-action.mjs",
     "sync:bridge": "node scripts/sync-shell-bridge.mjs"
   },

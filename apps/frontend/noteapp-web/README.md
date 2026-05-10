@@ -42,11 +42,19 @@ npm run sync:snapshot
 The app falls back to `fixtures/live-sync-shell.example.json` when no live public fixture exists.
 Generated files under `public/fixtures/` are local runtime artifacts and are ignored by git.
 Set `NOTEAPP_SYNC_SNAPSHOT_OUTPUT` to write the snapshot somewhere else for smoke tests or tooling.
+The settings panes use the same pattern with `fixtures/local-settings-snapshot.example.json` and
+`NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT`.
 
 Preview the generated command without contacting the server:
 
 ```powershell
 npm run sync:snapshot -- --dry-run
+```
+
+Generate the local settings snapshot consumed by the Settings panes:
+
+```powershell
+npm run settings:snapshot
 ```
 
 Execute an action id from the snapshot and refresh the same live fixture:
@@ -70,10 +78,13 @@ Bridge endpoints:
 GET  http://127.0.0.1:3187/api/sync/snapshot
 POST http://127.0.0.1:3187/api/sync/actions/<action-id>
 GET  http://127.0.0.1:3187/api/sync/live
+GET  http://127.0.0.1:3187/api/settings/snapshot
+GET  http://127.0.0.1:3187/api/settings/live
 ```
 
 Validate the checked-in example fixture and TypeScript adapter:
 
 ```powershell
 npm run validate:sync-shell
+npm run validate:settings-snapshot
 ```

@@ -1,0 +1,22 @@
+{
+  "ai": {
+    "embedding_status": "not_configured",
+    "local_model_status": "not_configured"
+  },
+  "appearance": {
+    "theme": "dark"
+  },
+  "device_id": "desktop-shanghai",
+  "schema_version": "v1",
+  "settings_path": "C:/vaults/pkb/.noteapp/settings.json",
+  "source": "default",
+  "sync": {
+    "base_url": "http://127.0.0.1:8000",
+    "bearer_token_configured": true,
+    "blob_timeout_seconds": 60,
+    "request_timeout_seconds": 30,
+    "user_agent": "pkb-desktop-sync/0.1"
+  },
+  "vault_id": "vault-001",
+  "vault_root": "C:/vaults/pkb"
+}
