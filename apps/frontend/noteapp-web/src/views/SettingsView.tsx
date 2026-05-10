@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { Settings, Cloud, Palette, Bot, Key, Laptop, Smartphone as Phone, Monitor, ChevronRight, Activity } from 'lucide-react';
+import { Settings, Cloud, Palette, Bot, Key, Laptop, Smartphone as Phone, Monitor, ChevronRight, Activity, RefreshCw } from 'lucide-react';
 import { useSyncShellController } from '../useSyncShellSnapshot';
 
 export default function SettingsView() {
   const [activeTab, setActiveTab] = useState('sync');
-  const { summary: syncSummary, isExecuting, isRefreshing, executePrimaryAction } = useSyncShellController();
+  const { summary: syncSummary, source: syncSource, lastError, isExecuting, isRefreshing, refresh, executePrimaryAction } = useSyncShellController();
   const syncLevelClass = {
     success: 'text-emerald-300 bg-emerald-400/10 border-emerald-400/30',
     info: 'text-[#a9c8fc] bg-[#0f3460]/30 border-[#0f3460]',
@@ -69,9 +69,15 @@ export default function SettingsView() {
                       <span className="font-mono text-[11px] text-slate-500 truncate">
                         {syncSummary.vaultId} / {syncSummary.deviceId}
                       </span>
+                      <span className="font-mono text-[10px] text-slate-500 uppercase tracking-wider">
+                        {syncSource}
+                      </span>
                     </div>
                     <h3 className="text-[15px] font-bold text-[#e3e2e6] truncate">{syncSummary.headline}</h3>
                     <p className="text-[13px] text-slate-400 mt-1 line-clamp-2">{syncSummary.detail}</p>
+                    {lastError && (
+                      <p className="text-[12px] text-[#ffb782] mt-2 line-clamp-2">{lastError}</p>
+                    )}
                   </div>
                   <div className="flex flex-wrap lg:flex-nowrap items-center gap-2">
                     <span className="px-2 py-1 rounded bg-[#121316] border border-[#0f3460] font-mono text-[11px] text-slate-400">
@@ -80,6 +86,14 @@ export default function SettingsView() {
                     <span className="px-2 py-1 rounded bg-[#121316] border border-[#0f3460] font-mono text-[11px] text-slate-400">
                       {syncSummary.conflictBadgeCount} conflicts
                     </span>
+                    <button
+                      disabled={isRefreshing || isExecuting}
+                      onClick={refresh}
+                      title="Refresh sync status"
+                      className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <RefreshCw size={15} className={isRefreshing ? 'animate-spin' : ''} />
+                    </button>
                     <button
                       disabled={!syncSummary.primaryActionEnabled || isExecuting || isRefreshing}
                       onClick={executePrimaryAction}
