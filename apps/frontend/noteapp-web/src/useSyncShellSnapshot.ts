@@ -110,6 +110,15 @@ function actionResultNotice(action: SyncShellAction, snapshot: SyncShellSnapshot
         };
   }
   if (action.action_id === 'pull') {
+    if (changeCount > 0) {
+      return {
+        level: 'info',
+        title: '已拉取远端基线，可继续提交',
+        detail: `仍有 ${changeCount} 个本地变更，提交路径已重新打开。`,
+        actionId: action.action_id,
+        occurredAtMs: snapshot.generated_at_ms,
+      };
+    }
     return {
       level: summary.level === 'success' ? 'success' : 'info',
       title: '已检查远端变更',

@@ -90,6 +90,40 @@ class RecordingApiOpener:
         body = None if request.data is None else json.loads(request.data.decode("utf-8"))
         self.calls.append((request.get_method(), request.full_url, body, timeout))
 
+        if request.get_method() == "GET" and request.full_url.endswith("/vaults/vault-001/head"):
+            return self._json_response(
+                {
+                    "vault_id": "vault-001",
+                    "head_revision": 9,
+                    "manifest_summary": "sha256:head9",
+                }
+            )
+        if request.get_method() == "GET" and request.full_url.endswith("/vaults/vault-001/manifests/9"):
+            payload = b"# Live note\n"
+            return self._json_response(
+                {
+                    "schema_version": "v1",
+                    "vault_id": "vault-001",
+                    "revision": 9,
+                    "base_revision": 8,
+                    "created_by_device": "desktop-remote",
+                    "created_at": 1770000040000,
+                    "files": [
+                        {
+                            "file_id": "file-live",
+                            "path": "Notes/Live.md",
+                            "type": "note",
+                            "content_hash": "sha256:" + hashlib.sha256(payload).hexdigest(),
+                            "blob_id": "blob-live",
+                            "size": len(payload),
+                            "mtime": 1770000030080,
+                            "mime_type": "text/markdown",
+                        }
+                    ],
+                    "tombstones": [],
+                    "summary_hash": "sha256:head9",
+                }
+            )
         if request.get_method() == "POST" and request.full_url.endswith("/vaults/vault-001/blobs/check"):
             blob_ids = [] if body is None else list(body.get("blob_ids", []))
             return self._json_response({"existing_blob_ids": [], "missing_blob_ids": blob_ids})
@@ -118,14 +152,19 @@ class RecordingApiOpener:
                     },
                     status_code=409,
                 )
+            base_revision = 7 if body is None else int(body.get("base_revision", 7))
+            new_revision = base_revision + 1
             return self._json_response(
                 {
                     "vault_id": "vault-001",
-                    "new_revision": 8,
-                    "head_manifest_summary": "sha256:head8",
-                    "acked_revision_for_device": 8,
+                    "new_revision": new_revision,
+                    "head_manifest_summary": f"sha256:head{new_revision}",
+                    "acked_revision_for_device": new_revision,
                 }
             )
+        if request.get_method() == "POST" and request.full_url.endswith("/vaults/vault-001/ack"):
+            revisions = [] if body is None else list(body.get("revisions", []))
+            return self._json_response({"max_acked_revision": max(revisions)})
         raise AssertionError(f"unexpected API request: {request.get_method()} {request.full_url}")
 
     def _json_response(self, payload: dict[str, object], *, status_code: int = 200) -> FakeHttpResponse:
@@ -1307,6 +1346,45 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(feed.records[0].status, "blocked")
             self.assertEqual(feed.records[0].level, "warning")
             self.assertIn("base_revision_conflict", feed.records[0].message or "")
+
+    def test_submit_conflict_pull_action_reopens_clean_submit_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, api_opener, _, payload, _ = self._seed_workspace(root, conflict=True)
+            live_path = root / "Notes" / "Live.md"
+            live_path.write_bytes(payload + b" local change")
+
+            conflicted = service.execute_sync_action("submit-detected-commit", now_ms=1770000040999)
+            self.assertEqual(conflicted.status, "blocked")
+            self.assertTrue(service.summarize_vault().commit_gate.requires_full_pull)
+
+            pulled = service.execute_sync_action("pull", now_ms=1770000041999)
+
+            self.assertEqual(pulled.status, "executed")
+            summary = service.summarize_vault()
+            self.assertFalse(summary.commit_gate.requires_full_pull)
+            self.assertTrue(summary.commit_gate.can_submit_commit)
+            self.assertEqual(summary.changes.change_count, 1)
+            self.assertEqual(summary.changes.changes[0].kind, "modified")
+            self.assertEqual(summary.state.last_applied_revision, 9)
+            self.assertEqual(summary.state.last_manifest_summary_status, "valid")
+            self.assertEqual(
+                service.build_sync_panel_model(now_ms=1770000042000).primary_action.action_id,
+                "submit-detected-commit",
+            )
+
+            api_opener.conflict = False
+            submitted = service.execute_sync_action("submit-detected-commit", now_ms=1770000042999)
+
+            self.assertEqual(submitted.status, "executed")
+            self.assertEqual(service.detect_local_changes().change_count, 0)
+            self.assertEqual(service.build_sync_panel_model(now_ms=1770000043000).level, "success")
+            self.assertTrue(
+                any(
+                    call[0] == "GET" and call[1].endswith("/vaults/vault-001/manifests/9")
+                    for call in api_opener.calls
+                )
+            )
 
     def test_submit_workspace_commit_auto_generates_placeholder_encrypted_blobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
