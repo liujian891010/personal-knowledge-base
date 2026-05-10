@@ -57,6 +57,12 @@ Generate the local settings snapshot consumed by the Settings panes:
 npm run settings:snapshot
 ```
 
+Generate the local workspace file index consumed by the Explorer:
+
+```powershell
+npm run workspace:files
+```
+
 Write local settings and refresh the same live fixture:
 
 ```powershell
@@ -88,6 +94,8 @@ GET  http://127.0.0.1:3187/api/sync/live
 GET  http://127.0.0.1:3187/api/settings/snapshot
 POST http://127.0.0.1:3187/api/settings/snapshot
 GET  http://127.0.0.1:3187/api/settings/live
+GET  http://127.0.0.1:3187/api/workspace/files
+GET  http://127.0.0.1:3187/api/workspace/live
 ```
 
 Validate the checked-in example fixture and TypeScript adapter:
@@ -95,4 +103,5 @@ Validate the checked-in example fixture and TypeScript adapter:
 ```powershell
 npm run validate:sync-shell
 npm run validate:settings-snapshot
+npm run validate:workspace-files
 ```
