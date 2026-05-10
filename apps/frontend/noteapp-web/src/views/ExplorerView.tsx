@@ -6,7 +6,7 @@ import {
   Code2,
   Edit3,
   Eye,
-  FileText,
+  FileType2,
   Folder,
   Info,
   PanelRightClose,
@@ -51,6 +51,18 @@ type ExplorerRow =
   };
 
 type MarkdownEditorMode = 'edit' | 'preview' | 'split';
+
+function MarkdownFileIcon({ size = 16, tone = 'normal' }: { size?: number; tone?: 'normal' | 'danger' }) {
+  const iconClassName = tone === 'danger' ? 'text-[#e94560]' : 'text-[#a9c8fc]';
+  return (
+    <span className="relative inline-flex h-5 w-5 flex-shrink-0 items-center justify-center">
+      <FileType2 size={size} className={iconClassName} />
+      <span className="absolute -bottom-1 -right-1 rounded-sm border border-[#0f3460] bg-[#121316] px-0.5 font-mono text-[7px] font-bold leading-3 text-[#ffb782]">
+        MD
+      </span>
+    </span>
+  );
+}
 
 function isMarkdownBoundary(line: string): boolean {
   return (
@@ -506,7 +518,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                       : 'text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a]'
                   }`}
                 >
-                  <FileText size={14} className={row.file.exists_on_disk ? 'text-slate-500' : 'text-[#e94560]'} />
+                  <MarkdownFileIcon size={14} tone={row.file.exists_on_disk ? 'normal' : 'danger'} />
                   <span className="truncate">{fileName(row.file.path)}</span>
                 </button>
               )
@@ -519,7 +531,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
         <header className="bg-[#16213e] border-b border-[#0f3460] h-14 flex items-center justify-between px-4 flex-shrink-0 z-10 shadow-sm">
           <div className="flex items-center gap-4 min-w-0">
             <div className="flex items-center gap-2 text-slate-300 min-w-0">
-              <FileText size={18} className="text-[#e94560] flex-shrink-0" />
+              <MarkdownFileIcon size={18} />
               <span className="text-[13px] font-semibold truncate">
                 {selectedFile ? fileName(selectedFile.path) : '工作区'}
               </span>
