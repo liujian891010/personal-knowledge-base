@@ -25,12 +25,14 @@ interface SnapshotLoadResult {
 
 export interface SyncShellController {
   summary: SyncShellSummary;
+  secondaryActions: SyncShellAction[];
   source: SyncShellSource;
   lastError: string | null;
   isRefreshing: boolean;
   isExecuting: boolean;
   refresh: () => Promise<void>;
   executePrimaryAction: () => Promise<void>;
+  executeSyncAction: (action: SyncShellAction) => Promise<void>;
 }
 
 function errorMessage(error: unknown): string {
@@ -76,7 +78,7 @@ async function loadSnapshot(): Promise<SnapshotLoadResult> {
   };
 }
 
-async function executeAction(actionId: string): Promise<SyncShellSnapshot> {
+async function executeBridgeAction(actionId: string): Promise<SyncShellSnapshot> {
   const response = await fetch(`${syncBridgeUrl}/api/sync/actions/${encodeURIComponent(actionId)}`, {
     method: 'POST',
   });
@@ -136,8 +138,7 @@ export function useSyncShellController(): SyncShellController {
     }
   };
 
-  const executePrimaryAction = async () => {
-    const action = snapshot.sync_center.panel.primary_action;
+  const executeSyncAction = async (action: SyncShellAction) => {
     if (!action.enabled || isExecuting) {
       return;
     }
@@ -146,7 +147,7 @@ export function useSyncShellController(): SyncShellController {
     }
     setIsExecuting(true);
     try {
-      setSnapshot(await executeAction(action.action_id));
+      setSnapshot(await executeBridgeAction(action.action_id));
       setSource('bridge');
       setLastError(null);
     } catch (error) {
@@ -156,14 +157,20 @@ export function useSyncShellController(): SyncShellController {
     }
   };
 
+  const executePrimaryAction = async () => {
+    await executeSyncAction(snapshot.sync_center.panel.primary_action);
+  };
+
   const summary = useMemo(() => summarizeSyncShellSnapshot(snapshot), [snapshot]);
   return {
     summary,
+    secondaryActions: snapshot.sync_center.panel.secondary_actions,
     source,
     lastError,
     isRefreshing,
     isExecuting,
     refresh,
     executePrimaryAction,
+    executeSyncAction,
   };
 }

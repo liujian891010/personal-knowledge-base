@@ -4,7 +4,17 @@ import { useSyncShellController } from '../useSyncShellSnapshot';
 
 export default function SettingsView() {
   const [activeTab, setActiveTab] = useState('sync');
-  const { summary: syncSummary, source: syncSource, lastError, isExecuting, isRefreshing, refresh, executePrimaryAction } = useSyncShellController();
+  const {
+    summary: syncSummary,
+    secondaryActions,
+    source: syncSource,
+    lastError,
+    isExecuting,
+    isRefreshing,
+    refresh,
+    executePrimaryAction,
+    executeSyncAction,
+  } = useSyncShellController();
   const syncLevelClass = {
     success: 'text-emerald-300 bg-emerald-400/10 border-emerald-400/30',
     info: 'text-[#a9c8fc] bg-[#0f3460]/30 border-[#0f3460]',
@@ -102,6 +112,17 @@ export default function SettingsView() {
                     >
                       {isExecuting ? 'Working...' : syncSummary.primaryActionLabel}
                     </button>
+                    {secondaryActions.map((action) => (
+                      <button
+                        key={action.action_id}
+                        disabled={!action.enabled || isExecuting || isRefreshing}
+                        onClick={() => executeSyncAction(action)}
+                        title={action.reason ?? (action.requires_confirmation ? 'Requires confirmation' : undefined)}
+                        className="max-w-36 truncate px-3 py-1.5 rounded bg-[#121316] border border-[#0f3460] text-[13px] font-medium text-slate-300 disabled:opacity-50 disabled:cursor-not-allowed hover:text-white transition-colors"
+                      >
+                        {action.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
 

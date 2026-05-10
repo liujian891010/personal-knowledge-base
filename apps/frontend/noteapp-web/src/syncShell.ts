@@ -120,6 +120,22 @@ function normalizeLevel(value: string): SyncShellLevel {
   throw new Error(`unsupported sync shell level: ${value}`);
 }
 
+function parseAction(payload: unknown, context: string): SyncShellAction {
+  if (!isObject(payload)) {
+    throw new Error(`sync shell snapshot is missing action object: ${context}`);
+  }
+  return {
+    action_id: requireString(payload, 'action_id'),
+    label: requireString(payload, 'label'),
+    enabled: Boolean(payload.enabled),
+    emphasis: requireString(payload, 'emphasis'),
+    command: requireString(payload, 'command'),
+    argv: requireArray(payload, 'argv') as string[],
+    reason: typeof payload.reason === 'string' ? payload.reason : null,
+    requires_confirmation: Boolean(payload.requires_confirmation),
+  };
+}
+
 export function parseSyncShellSnapshot(payload: unknown): SyncShellSnapshot {
   if (!isObject(payload)) {
     throw new Error('sync shell snapshot must be an object');
@@ -130,6 +146,9 @@ export function parseSyncShellSnapshot(payload: unknown): SyncShellSnapshot {
   const primaryAction = requireObject(panel, 'primary_action');
   const recentActivity = requireObject(syncCenter, 'recent_activity');
   const activityFeed = requireObject(payload, 'activity_feed');
+  const secondaryActions = requireArray(panel, 'secondary_actions').map((action, index) =>
+    parseAction(action, `secondary_actions[${index}]`),
+  );
 
   return {
     generated_at_ms: requireNumber(payload, 'generated_at_ms'),
@@ -144,17 +163,8 @@ export function parseSyncShellSnapshot(payload: unknown): SyncShellSnapshot {
         detail: requireString(panel, 'detail'),
         conflict_badge_count: requireNumber(panel, 'conflict_badge_count'),
         change_badge_count: requireNumber(panel, 'change_badge_count'),
-        primary_action: {
-          action_id: requireString(primaryAction, 'action_id'),
-          label: requireString(primaryAction, 'label'),
-          enabled: Boolean(primaryAction.enabled),
-          emphasis: requireString(primaryAction, 'emphasis'),
-          command: requireString(primaryAction, 'command'),
-          argv: requireArray(primaryAction, 'argv') as string[],
-          reason: typeof primaryAction.reason === 'string' ? primaryAction.reason : null,
-          requires_confirmation: Boolean(primaryAction.requires_confirmation),
-        },
-        secondary_actions: requireArray(panel, 'secondary_actions') as SyncShellAction[],
+        primary_action: parseAction(primaryAction, 'primary_action'),
+        secondary_actions: secondaryActions,
       },
       recent_activity: {
         records: requireArray(recentActivity, 'records') as SyncShellActivityRecord[],
