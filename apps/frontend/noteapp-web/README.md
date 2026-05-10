@@ -17,6 +17,8 @@ The dev server listens on:
 http://127.0.0.1:3000/
 ```
 
+Set `VITE_NOTEAPP_SYNC_BRIDGE_URL` when the browser should use a bridge address other than `http://127.0.0.1:3187`.
+
 ## Build
 
 ```powershell
