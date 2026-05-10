@@ -9,7 +9,7 @@ import {
   Settings,
 } from 'lucide-react';
 
-import type { SyncShellAction, SyncShellLevel } from '../syncShell';
+import type { SyncShellAction, SyncShellActionEmphasis, SyncShellLevel } from '../syncShell';
 import { useSyncShellController } from '../useSyncShellSnapshot';
 
 type SettingsTab = 'general' | 'sync' | 'appearance' | 'ai';
@@ -31,6 +31,12 @@ const tabs: Array<{ id: SettingsTab; label: string; icon: React.ComponentType<{ 
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'ai', label: 'AI Model', icon: Bot },
 ];
+
+const actionButtonClasses: Record<SyncShellActionEmphasis, string> = {
+  normal: 'bg-[#121316] border-[#0f3460] text-slate-300 hover:text-white',
+  primary: 'bg-[#0f3460]/30 border-[#0f3460] text-[#a9c8fc] hover:text-white',
+  warning: 'bg-[#ffb782]/10 border-[#ffb782]/30 text-[#ffb782] hover:text-white',
+};
 
 function formatActivityTime(ms: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -60,18 +66,14 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
 
   const renderActionButton = (
     action: SyncShellAction,
-    variant: 'primary' | 'secondary' = 'secondary',
+    emphasis: SyncShellActionEmphasis = action.emphasis,
   ) => (
     <button
       key={action.action_id}
       disabled={!action.enabled || isExecuting || isRefreshing}
       onClick={() => executeSyncAction(action)}
       title={action.reason ?? (action.requires_confirmation ? 'Requires confirmation' : undefined)}
-      className={`max-w-full truncate px-3 py-1.5 rounded border text-[13px] font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
-        variant === 'primary'
-          ? 'bg-[#0f3460]/30 border-[#0f3460] text-[#a9c8fc] hover:text-white'
-          : 'bg-[#121316] border-[#0f3460] text-slate-300 hover:text-white'
-      }`}
+      className={`max-w-full truncate px-3 py-1.5 rounded border text-[13px] font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${actionButtonClasses[emphasis]}`}
     >
       {executingActionId === action.action_id ? 'Working...' : action.label}
     </button>
@@ -200,12 +202,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                             </div>
                             {card.actions.length > 0 && (
                               <div className="flex flex-wrap md:justify-end gap-2 md:max-w-xs">
-                                {card.actions.map((action) =>
-                                  renderActionButton(
-                                    action,
-                                    action.emphasis === 'primary' ? 'primary' : 'secondary',
-                                  ),
-                                )}
+                                {card.actions.map((action) => renderActionButton(action))}
                               </div>
                             )}
                           </div>

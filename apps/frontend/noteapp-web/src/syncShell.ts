@@ -1,10 +1,11 @@
 export type SyncShellLevel = 'success' | 'info' | 'warning' | 'danger';
+export type SyncShellActionEmphasis = 'normal' | 'primary' | 'warning';
 
 export interface SyncShellAction {
   action_id: string;
   label: string;
   enabled: boolean;
-  emphasis: string;
+  emphasis: SyncShellActionEmphasis;
   command: string;
   argv: string[];
   reason?: string | null;
@@ -130,6 +131,13 @@ function normalizeLevel(value: string): SyncShellLevel {
   throw new Error(`unsupported sync shell level: ${value}`);
 }
 
+function normalizeActionEmphasis(value: string): SyncShellActionEmphasis {
+  if (value === 'normal' || value === 'primary' || value === 'warning') {
+    return value;
+  }
+  throw new Error(`unsupported sync action emphasis: ${value}`);
+}
+
 function parseAction(payload: unknown, context: string): SyncShellAction {
   if (!isObject(payload)) {
     throw new Error(`sync shell snapshot is missing action object: ${context}`);
@@ -138,7 +146,7 @@ function parseAction(payload: unknown, context: string): SyncShellAction {
     action_id: requireString(payload, 'action_id'),
     label: requireString(payload, 'label'),
     enabled: Boolean(payload.enabled),
-    emphasis: requireString(payload, 'emphasis'),
+    emphasis: normalizeActionEmphasis(requireString(payload, 'emphasis')),
     command: requireString(payload, 'command'),
     argv: requireStringArray(payload, 'argv'),
     reason: typeof payload.reason === 'string' ? payload.reason : null,
