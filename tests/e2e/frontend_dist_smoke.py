@@ -88,6 +88,8 @@ def main() -> int:
         assert "本地变更已提交" in bundle, "sync submit result notice was not bundled"
 
         assert "冲突副本已清理" in bundle, "sync conflict cleanup notice was not bundled"
+        assert "清理全部冲突副本" in bundle, "live conflicts cleanup view was not bundled"
+        assert "当前没有未处理冲突" in bundle, "live conflicts empty state was not bundled"
         assert "已应用远端内容，请处理本地冲突副本" in bundle, "sync pull conflict notice was not bundled"
         assert "已拉取远端基线，可继续提交" in bundle, "sync pull recovery notice was not bundled"
         assert "远端版本已更新，需要先拉取" in bundle, "sync submit conflict notice was not bundled"
