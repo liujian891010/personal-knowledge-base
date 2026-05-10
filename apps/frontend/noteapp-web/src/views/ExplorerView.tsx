@@ -25,9 +25,13 @@ function fileName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-function folderName(path: string): string {
+function workspaceRootName(path: string): string {
+  return fileName(path) || '工作区';
+}
+
+function folderName(path: string, rootName: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts.length > 1 ? parts.slice(0, -1).join('/') : '知识库根目录';
+  return parts.length > 1 ? parts.slice(0, -1).join('/') : rootName;
 }
 
 type ExplorerRow =
@@ -257,7 +261,7 @@ function MarkdownPreview({ markdown }: { markdown: string }) {
   );
 }
 
-function buildExplorerRows(files: WorkspaceFileEntry[]): ExplorerRow[] {
+function buildExplorerRows(files: WorkspaceFileEntry[], rootName: string): ExplorerRow[] {
   const folderCounts = new Map<string, number>();
   for (const file of files) {
     const parts = file.path.split(/[\\/]/).filter(Boolean);
@@ -286,12 +290,12 @@ function buildExplorerRows(files: WorkspaceFileEntry[]): ExplorerRow[] {
   for (const folderPath of sortedFolders) {
     const depth = folderPath === '' ? 0 : folderPath.split('/').length - 1;
     const folderFiles = files
-      .filter((file) => folderName(file.path) === (folderPath || '知识库根目录'))
+      .filter((file) => folderName(file.path, rootName) === (folderPath || rootName))
       .sort((left, right) => left.path.localeCompare(right.path));
     rows.push({
       kind: 'folder',
       id: `folder:${folderPath || '__root__'}`,
-      name: folderPath ? fileName(folderPath) : '知识库根目录',
+      name: folderPath ? fileName(folderPath) : rootName,
       path: folderPath,
       depth,
       count: folderCounts.get(folderPath) ?? 0,
@@ -399,7 +403,8 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
     () => files.filter((file) => file.status !== 'deleted'),
     [files],
   );
-  const explorerRows = useMemo(() => buildExplorerRows(visibleFiles), [visibleFiles]);
+  const rootName = useMemo(() => workspaceRootName(summary.vaultRoot), [summary.vaultRoot]);
+  const explorerRows = useMemo(() => buildExplorerRows(visibleFiles, rootName), [rootName, visibleFiles]);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -483,7 +488,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                   key={row.id}
                   className="flex items-center gap-2 py-2 pr-4 text-slate-300"
                   style={{ paddingLeft: `${16 + row.depth * 14}px` }}
-                  title={row.path || '知识库根目录'}
+                  title={row.path || summary.vaultRoot || rootName}
                 >
                   <Folder size={16} className="text-[#a9c8fc]" />
                   <span className="text-[13px] font-semibold flex-1 font-sans truncate">{row.name}</span>
