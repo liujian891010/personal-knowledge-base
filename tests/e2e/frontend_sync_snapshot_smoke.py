@@ -65,8 +65,13 @@ def wait_for_server() -> None:
     raise RuntimeError("server did not become ready")
 
 
-def request_bridge_json(path: str, *, method: str = "GET") -> tuple[int, dict[str, Any]]:
-    request = urllib.request.Request(f"{BRIDGE_URL}{path}", method=method)
+def request_bridge_json(
+    path: str,
+    *,
+    method: str = "GET",
+    headers: Optional[dict[str, str]] = None,
+) -> tuple[int, dict[str, Any]]:
+    request = urllib.request.Request(f"{BRIDGE_URL}{path}", headers=headers or {}, method=method)
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             raw = response.read()
@@ -213,6 +218,11 @@ def main() -> int:
             )
             try:
                 wait_for_bridge()
+                status, rejected_origin = request_bridge_json(
+                    "/health",
+                    headers={"Origin": "http://evil.example"},
+                )
+                assert status == 403, rejected_origin
                 status, bridge_payload = request_bridge_json("/api/sync/snapshot")
                 assert status == 200, bridge_payload
                 assert bridge_payload["generated_at_ms"] == 1770002000100, bridge_payload

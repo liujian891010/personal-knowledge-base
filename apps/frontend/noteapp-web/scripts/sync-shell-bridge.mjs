@@ -9,7 +9,7 @@ const appRoot = resolve(scriptPath, '..', '..');
 const defaultSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'live-sync-shell.json');
 const host = process.env.NOTEAPP_SYNC_BRIDGE_HOST || '127.0.0.1';
 const port = Number(process.env.NOTEAPP_SYNC_BRIDGE_PORT || 3187);
-const allowedOrigin = process.env.NOTEAPP_SYNC_BRIDGE_ORIGIN || '*';
+const allowedOrigin = process.env.NOTEAPP_SYNC_BRIDGE_ORIGIN || 'http://127.0.0.1:3000';
 const snapshotPath = process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT
   ? resolve(process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT)
   : defaultSnapshotPath;
@@ -24,7 +24,7 @@ Local-only HTTP bridge for the web UI sync shell.
 Environment:
   NOTEAPP_SYNC_BRIDGE_HOST       Host, default 127.0.0.1
   NOTEAPP_SYNC_BRIDGE_PORT       Port, default 3187
-  NOTEAPP_SYNC_BRIDGE_ORIGIN     CORS origin, default *
+  NOTEAPP_SYNC_BRIDGE_ORIGIN     CORS origin, default http://127.0.0.1:3000
   NOTEAPP_SYNC_SNAPSHOT_OUTPUT   Output JSON path, default public/fixtures/live-sync-shell.json
 
 It forwards to:
@@ -35,9 +35,20 @@ It forwards to:
 `);
 }
 
-function jsonResponse(response, statusCode, payload) {
+function isAllowedOrigin(origin) {
+  return !origin || allowedOrigin === '*' || origin === allowedOrigin;
+}
+
+function corsOrigin(origin) {
+  if (allowedOrigin === '*') {
+    return '*';
+  }
+  return origin || allowedOrigin;
+}
+
+function jsonResponse(request, response, statusCode, payload) {
   response.writeHead(statusCode, {
-    'access-control-allow-origin': allowedOrigin,
+    'access-control-allow-origin': corsOrigin(request.headers.origin),
     'access-control-allow-methods': 'GET,POST,OPTIONS',
     'access-control-allow-headers': 'content-type',
     'cache-control': 'no-store',
@@ -100,8 +111,26 @@ if (args.has('--help') || args.has('-h')) {
 }
 
 const server = createServer((request, response) => {
+  if (!isAllowedOrigin(request.headers.origin)) {
+    response.writeHead(403, {
+      'cache-control': 'no-store',
+      'content-type': 'application/json; charset=utf-8',
+    });
+    response.end(
+      JSON.stringify(
+        {
+          code: 'origin_not_allowed',
+          message: 'Origin is not allowed to use the sync bridge.',
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
   if (request.method === 'OPTIONS') {
-    jsonResponse(response, 204, {});
+    jsonResponse(request, response, 204, {});
     return;
   }
 
@@ -109,21 +138,22 @@ const server = createServer((request, response) => {
 
   try {
     if (request.method === 'GET' && url.pathname === '/health') {
-      jsonResponse(response, 200, {
+      jsonResponse(request, response, 200, {
         ok: true,
         snapshotPath,
+        allowedOrigin,
       });
       return;
     }
 
     if (request.method === 'GET' && url.pathname === '/api/sync/live') {
-      jsonResponse(response, 200, readSnapshot());
+      jsonResponse(request, response, 200, readSnapshot());
       return;
     }
 
     if (request.method === 'GET' && url.pathname === '/api/sync/snapshot') {
       runScript('write-live-sync-shell.mjs');
-      jsonResponse(response, 200, readSnapshot());
+      jsonResponse(request, response, 200, readSnapshot());
       return;
     }
 
@@ -132,16 +162,16 @@ const server = createServer((request, response) => {
       runScript('execute-sync-action.mjs', {
         NOTEAPP_SYNC_ACTION_ID: actionId,
       });
-      jsonResponse(response, 200, readSnapshot());
+      jsonResponse(request, response, 200, readSnapshot());
       return;
     }
 
-    jsonResponse(response, 404, {
+    jsonResponse(request, response, 404, {
       code: 'not_found',
       message: 'Route was not found.',
     });
   } catch (error) {
-    jsonResponse(response, 500, {
+    jsonResponse(request, response, 500, {
       code: 'sync_bridge_error',
       message: error instanceof Error ? error.message : String(error),
     });
