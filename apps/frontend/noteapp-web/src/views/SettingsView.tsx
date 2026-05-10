@@ -33,6 +33,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     source: syncSource,
     lastError,
     isExecuting,
+    executingActionId,
     isRefreshing,
     refresh,
     executePrimaryAction,
@@ -51,7 +52,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
           : 'bg-[#121316] border-[#0f3460] text-slate-300 hover:text-white'
       }`}
     >
-      {isExecuting && variant === 'primary' ? 'Working...' : action.label}
+      {executingActionId === action.action_id ? 'Working...' : action.label}
     </button>
   );
 
@@ -147,7 +148,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                       title={syncSummary.primaryActionRequiresConfirmation ? 'Requires confirmation' : undefined}
                       className="px-3 py-1.5 rounded bg-[#0f3460]/30 border border-[#0f3460] text-[13px] font-medium text-[#a9c8fc] disabled:opacity-50 disabled:cursor-not-allowed hover:text-white transition-colors"
                     >
-                      {isExecuting ? 'Working...' : syncSummary.primaryActionLabel}
+                      {executingActionId === syncSummary.primaryActionId ? 'Working...' : syncSummary.primaryActionLabel}
                     </button>
                     {secondaryActions.map((action) => (
                       <button
