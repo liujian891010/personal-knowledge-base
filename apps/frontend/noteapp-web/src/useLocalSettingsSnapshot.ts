@@ -30,6 +30,7 @@ export interface LocalSettingsController {
   lastError: string | null;
   isRefreshing: boolean;
   isSaving: boolean;
+  savedAtMs: number | null;
   refresh: () => Promise<void>;
   saveSettings: (payload: LocalSettingsWritePayload) => Promise<void>;
 }
@@ -114,6 +115,7 @@ export function useLocalSettingsController(): LocalSettingsController {
   const [lastError, setLastError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [savedAtMs, setSavedAtMs] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -157,6 +159,7 @@ export function useLocalSettingsController(): LocalSettingsController {
       setSnapshot(await saveBridgeSettings(payload));
       setSource('bridge');
       setLastError(null);
+      setSavedAtMs(Date.now());
     } catch (error) {
       setLastError(errorMessage(error));
     } finally {
@@ -172,6 +175,7 @@ export function useLocalSettingsController(): LocalSettingsController {
     lastError,
     isRefreshing,
     isSaving,
+    savedAtMs,
     refresh,
     saveSettings,
   };
