@@ -338,6 +338,32 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === 'PUT' && workspaceContentFileId) {
+      const rawBody = await readRequestBody(request);
+      const payload = JSON.parse(rawBody);
+      if (!payload || typeof payload.text !== 'string') {
+        throw new Error('workspace file content request must include text');
+      }
+      const tempRoot = mkdtempSync(resolve(tmpdir(), 'noteapp-workspace-write-'));
+      try {
+        const inputPath = resolve(tempRoot, 'content.txt');
+        const outputPath = resolve(tempRoot, 'workspace-file-content.json');
+        writeFileSync(inputPath, payload.text, 'utf8');
+        runScript('write-workspace-file-content-update.mjs', {
+          NOTEAPP_WORKSPACE_FILE_ID: workspaceContentFileId,
+          NOTEAPP_WORKSPACE_FILE_TEXT_INPUT: inputPath,
+          NOTEAPP_WORKSPACE_FILE_CONTENT_OUTPUT: outputPath,
+        });
+        runScript('write-workspace-files.mjs', {
+          NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+        });
+        jsonResponse(request, response, 200, JSON.parse(readFileSync(outputPath, 'utf8')));
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
+      }
+      return;
+    }
+
     const actionId = actionIdFromPath(url.pathname);
     if (request.method === 'POST' && actionId) {
       runScript('execute-sync-action.mjs', {

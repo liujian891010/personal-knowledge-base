@@ -70,6 +70,14 @@ $env:NOTEAPP_WORKSPACE_FILE_ID='file-roadmap'
 npm run workspace:content
 ```
 
+Write one workspace file and refresh its content fixture:
+
+```powershell
+$env:NOTEAPP_WORKSPACE_FILE_ID='file-roadmap'
+$env:NOTEAPP_WORKSPACE_FILE_TEXT_INPUT='C:\vaults\updated-note.md'
+npm run workspace:write
+```
+
 Write local settings and refresh the same live fixture:
 
 ```powershell
@@ -103,6 +111,7 @@ POST http://127.0.0.1:3187/api/settings/snapshot
 GET  http://127.0.0.1:3187/api/settings/live
 GET  http://127.0.0.1:3187/api/workspace/files
 GET  http://127.0.0.1:3187/api/workspace/files/<file-id>/content
+PUT  http://127.0.0.1:3187/api/workspace/files/<file-id>/content
 GET  http://127.0.0.1:3187/api/workspace/live
 ```
 

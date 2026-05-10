@@ -409,9 +409,20 @@ def main() -> int:
                 assert file_content_payload["path"] == "Notes/Bridge Smoke.md", file_content_payload
                 assert file_content_payload["encoding"] == "utf-8", file_content_payload
                 assert "# Bridge Smoke" in file_content_payload["text"], file_content_payload
+                status, written_content_payload = request_bridge_json(
+                    "/api/workspace/files/file-bridge-smoke/content",
+                    method="PUT",
+                    payload={
+                        "text": "# Bridge Smoke\n\nedited through bridge\n",
+                    },
+                )
+                assert status == 200, written_content_payload
+                assert written_content_payload["file_id"] == "file-bridge-smoke", written_content_payload
+                assert "edited through bridge" in written_content_payload["text"], written_content_payload
+                assert note_path.read_text(encoding="utf-8") == "# Bridge Smoke\n\nedited through bridge\n"
                 status, live_workspace_payload = request_bridge_json("/api/workspace/live")
                 assert status == 200, live_workspace_payload
-                assert live_workspace_payload == workspace_bridge_payload, live_workspace_payload
+                assert live_workspace_payload["files"][0]["path"] == "Notes/Bridge Smoke.md", live_workspace_payload
                 status, missing_action = request_bridge_json(
                     "/api/sync/actions/not-a-real-action",
                     method="POST",
