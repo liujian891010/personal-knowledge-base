@@ -84,6 +84,8 @@ def main() -> int:
         assert "工作区" in bundle, "workspace explorer view was not bundled"
         assert "文件元数据" in bundle, "workspace file metadata view was not bundled"
         assert "内容编辑器" in bundle, "workspace file content editor was not bundled"
+        assert "已检查本地变更" in bundle, "sync action notice view was not bundled"
+        assert "本地变更已提交" in bundle, "sync submit result notice was not bundled"
 
         print(
             {

@@ -210,8 +210,7 @@ def main() -> int:
                     VAULT_ID,
                     "--device-id",
                     device_id,
-                    "--bearer-token",
-                    token,
+                    f"--bearer-token={token}",
                     "init",
                     "--now-ms",
                     "1770002000000",
@@ -445,6 +444,34 @@ def main() -> int:
                 assert {
                     action["action_id"] for action in local_change_cards[0]["actions"]
                 } == {"detect-local-changes", "submit-detected-commit"}, local_change_cards
+                status, detected_payload = request_bridge_json(
+                    "/api/sync/actions/detect-local-changes",
+                    method="POST",
+                )
+                assert status == 200, detected_payload
+                assert detected_payload["sync_center"]["panel"]["change_badge_count"] == 1, detected_payload
+                assert any(
+                    record["action_id"] == "detect-local-changes"
+                    and record["status"] == "executed"
+                    for record in detected_payload["activity_feed"]["records"]
+                ), detected_payload
+                status, submitted_payload = request_bridge_json(
+                    "/api/sync/actions/submit-detected-commit",
+                    method="POST",
+                )
+                assert status == 200, submitted_payload
+                assert submitted_payload["sync_center"]["panel"]["level"] in {
+                    "success",
+                    "info",
+                    "warning",
+                    "danger",
+                }, submitted_payload
+                assert "snapshot" not in submitted_payload, submitted_payload
+                assert any(
+                    record["action_id"] == "submit-detected-commit"
+                    and record["status"] == "executed"
+                    for record in submitted_payload["activity_feed"]["records"]
+                ), submitted_payload
                 status, missing_action = request_bridge_json(
                     "/api/sync/actions/not-a-real-action",
                     method="POST",

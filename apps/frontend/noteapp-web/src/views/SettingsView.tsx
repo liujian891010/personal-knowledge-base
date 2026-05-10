@@ -43,6 +43,13 @@ const actionButtonClasses: Record<SyncShellActionEmphasis, string> = {
   warning: 'bg-[#ffb782]/10 border-[#ffb782]/30 text-[#ffb782] hover:text-white',
 };
 
+const noticeClasses: Record<SyncShellLevel, string> = {
+  success: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200',
+  info: 'border-[#0f3460] bg-[#0f3460]/30 text-[#a9c8fc]',
+  warning: 'border-[#ffb782]/30 bg-[#ffb782]/10 text-[#ffb782]',
+  danger: 'border-[#e94560]/30 bg-[#e94560]/10 text-[#ffb2b7]',
+};
+
 const themeOptions = ['dark', 'light', 'system'];
 const localModelStatusOptions = ['not_configured', 'available', 'unavailable', 'disabled', 'error'];
 const embeddingStatusOptions = ['not_configured', 'ready', 'indexing', 'disabled', 'error'];
@@ -146,6 +153,21 @@ function localizeText(value: string): string {
     .replace(/(\d+) recent sync actions recorded/g, '$1 条最近同步活动');
 }
 
+function localizeMessage(value: string): string {
+  return value
+    .replace(/^bridge unavailable:/, '本机桥接不可用：')
+    .replace(/^sync action returned/, '同步操作返回')
+    .replace(/^bridge returned/, '本机桥接返回')
+    .replace(/sync action not found/g, '未找到同步操作')
+    .replace(/action is currently disabled/g, '当前操作不可用')
+    .replace(/requires_full_pull/g, '需要先完整拉取')
+    .replace(/unresolved_conflicts/g, '存在未解决冲突')
+    .replace(/commit_in_progress/g, '提交仍在进行中')
+    .replace(/no_local_changes/g, '没有本地变更')
+    .replace(/Connection refused/g, '连接被拒绝')
+    .replace(/Failed to fetch/g, '请求失败');
+}
+
 function SettingsSelect({
   label,
   value,
@@ -212,6 +234,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     secondaryActions,
     source: syncSource,
     lastError,
+    lastActionNotice,
     isExecuting,
     executingActionId,
     isRefreshing,
@@ -340,7 +363,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                       </span>
                     </div>
                     {lastError && (
-                      <p className="text-[12px] text-[#ffb782] mt-2 line-clamp-2">{lastError}</p>
+                      <p className="text-[12px] text-[#ffb782] mt-2 line-clamp-2">{localizeMessage(lastError)}</p>
                     )}
                   </div>
                   <div className="flex flex-wrap lg:flex-nowrap items-center gap-2">
@@ -371,6 +394,30 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                     {secondaryActions.map((action) => renderActionButton(action))}
                   </div>
                 </div>
+
+                {lastActionNotice && (
+                  <section className={`rounded-xl border p-4 shadow-lg shadow-black/20 ${noticeClasses[lastActionNotice.level]}`}>
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          <span className="font-mono text-[11px] uppercase tracking-wider">
+                            {localizeValue(lastActionNotice.level)}
+                          </span>
+                          <span className="font-mono text-[11px] opacity-80">
+                            {formatActivityTime(lastActionNotice.occurredAtMs)}
+                          </span>
+                        </div>
+                        <h3 className="text-[15px] font-bold truncate">{lastActionNotice.title}</h3>
+                        <p className="text-[13px] mt-1 opacity-90 line-clamp-2">
+                          {localizeText(localizeMessage(lastActionNotice.detail))}
+                        </p>
+                      </div>
+                      <span className="font-mono text-[11px] opacity-70">
+                        {actionLabels[lastActionNotice.actionId] ?? lastActionNotice.actionId}
+                      </span>
+                    </div>
+                  </section>
+                )}
 
                 {hasPendingLocalChanges && (
                   <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-4 md:p-5 shadow-lg shadow-black/20">
@@ -498,7 +545,9 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                               <span className="truncate">{localizeValue(record.source)}</span>
                             </div>
                             {record.message && (
-                              <p className="text-[12px] text-[#ffb782] mt-1 line-clamp-2">{record.message}</p>
+                              <p className="text-[12px] text-[#ffb782] mt-1 line-clamp-2">
+                                {localizeMessage(record.message)}
+                              </p>
                             )}
                           </div>
                         ))
