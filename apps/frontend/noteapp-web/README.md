@@ -39,6 +39,7 @@ npm run sync:snapshot
 
 The app falls back to `fixtures/live-sync-shell.example.json` when no live public fixture exists.
 Generated files under `public/fixtures/` are local runtime artifacts and are ignored by git.
+Set `NOTEAPP_SYNC_SNAPSHOT_OUTPUT` to write the snapshot somewhere else for smoke tests or tooling.
 
 Preview the generated command without contacting the server:
 
