@@ -1,0 +1,10 @@
+{
+  "ai": {
+    "embedding_status": "ready",
+    "local_model_status": "available"
+  },
+  "appearance": {
+    "theme": "system"
+  },
+  "schema_version": "v1"
+}

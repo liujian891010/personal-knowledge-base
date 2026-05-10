@@ -144,7 +144,8 @@ def _resolve_activity_feed_level(feed: "DesktopSyncActivityFeed") -> str:
     return "info"
 
 
-_LOCAL_SETTINGS_TOP_LEVEL_KEYS = {"appearance", "ai"}
+_LOCAL_SETTINGS_SCHEMA_VERSION = "v1"
+_LOCAL_SETTINGS_TOP_LEVEL_KEYS = {"schema_version", "appearance", "ai"}
 _LOCAL_SETTINGS_APPEARANCE_KEYS = {"theme"}
 _LOCAL_SETTINGS_AI_KEYS = {"local_model_status", "embedding_status"}
 _LOCAL_SETTINGS_THEMES = {"dark", "light", "system"}
@@ -194,12 +195,16 @@ def _normalize_local_settings_choice(
 
 def _normalize_local_settings_payload(payload: Mapping[str, Any]) -> dict[str, object]:
     _require_allowed_keys(payload, _LOCAL_SETTINGS_TOP_LEVEL_KEYS, "local settings")
+    schema_version = payload.get("schema_version", _LOCAL_SETTINGS_SCHEMA_VERSION)
+    if schema_version != _LOCAL_SETTINGS_SCHEMA_VERSION:
+        raise ValueError(f"local settings schema_version is not supported: {schema_version}")
     appearance_payload = _require_local_settings_object(payload, "appearance")
     ai_payload = _require_local_settings_object(payload, "ai")
     _require_allowed_keys(appearance_payload, _LOCAL_SETTINGS_APPEARANCE_KEYS, "local settings appearance")
     _require_allowed_keys(ai_payload, _LOCAL_SETTINGS_AI_KEYS, "local settings ai")
 
     return {
+        "schema_version": _LOCAL_SETTINGS_SCHEMA_VERSION,
         "appearance": {
             "theme": _normalize_local_settings_choice(
                 appearance_payload,

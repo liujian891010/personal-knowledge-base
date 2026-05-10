@@ -29,6 +29,11 @@ from clients.desktop.crypto import (
     build_placeholder_encrypted_blob_payload,
     decrypt_placeholder_encrypted_blob_payload,
 )
+from clients.desktop.service import (
+    _LOCAL_SETTINGS_EMBEDDING_STATUSES,
+    _LOCAL_SETTINGS_MODEL_STATUSES,
+    _LOCAL_SETTINGS_THEMES,
+)
 from clients.desktop.worker import write_desktop_sync_worker_state
 from vault_core import (
     AppliedManifestResult,
@@ -949,6 +954,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(
                 json.loads((root / ".noteapp" / "settings.json").read_text(encoding="utf-8")),
                 {
+                    "schema_version": "v1",
                     "appearance": {"theme": "system"},
                     "ai": {
                         "local_model_status": "disabled",
@@ -978,6 +984,39 @@ class DesktopSyncServiceTests(unittest.TestCase):
                         "appearance": {"theme": "sepia"},
                     }
                 )
+
+    def test_write_local_settings_rejects_unsupported_schema_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+
+            with self.assertRaisesRegex(ValueError, "schema_version is not supported: v2"):
+                service.write_local_settings(
+                    {
+                        "schema_version": "v2",
+                        "appearance": {"theme": "dark"},
+                        "ai": {
+                            "local_model_status": "not_configured",
+                            "embedding_status": "not_configured",
+                        },
+                    }
+                )
+
+    def test_local_settings_schema_enums_match_desktop_writer(self) -> None:
+        schema_path = Path(__file__).resolve().parents[3] / "packages" / "protocol" / "schemas" / "local-settings.schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            set(schema["properties"]["appearance"]["properties"]["theme"]["enum"]),
+            _LOCAL_SETTINGS_THEMES,
+        )
+        self.assertEqual(
+            set(schema["properties"]["ai"]["properties"]["local_model_status"]["enum"]),
+            _LOCAL_SETTINGS_MODEL_STATUSES,
+        )
+        self.assertEqual(
+            set(schema["properties"]["ai"]["properties"]["embedding_status"]["enum"]),
+            _LOCAL_SETTINGS_EMBEDDING_STATUSES,
+        )
 
     def test_prepare_commit_materializes_snapshot_and_blob_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
