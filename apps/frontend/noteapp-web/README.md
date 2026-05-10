@@ -35,8 +35,10 @@ python -m clients.desktop.cli `
   --vault-id vault-001 `
   --device-id desktop-shanghai `
   sync-shell-snapshot `
-  --output-json fixtures\live-sync-shell.json
+  --output-json public\fixtures\live-sync-shell.json
 ```
+
+The app falls back to `fixtures/live-sync-shell.example.json` when no live public fixture exists.
 
 Validate the checked-in example fixture and TypeScript adapter:
 

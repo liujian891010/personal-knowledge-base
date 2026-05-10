@@ -1,8 +1,16 @@
 import React, { useState } from 'react';
-import { Settings, Cloud, Palette, Bot, Key, Laptop, Smartphone as Phone, Monitor, ChevronRight } from 'lucide-react';
+import { Settings, Cloud, Palette, Bot, Key, Laptop, Smartphone as Phone, Monitor, ChevronRight, Activity } from 'lucide-react';
+import { useSyncShellSummary } from '../useSyncShellSnapshot';
 
 export default function SettingsView() {
   const [activeTab, setActiveTab] = useState('sync');
+  const syncSummary = useSyncShellSummary();
+  const syncLevelClass = {
+    success: 'text-emerald-300 bg-emerald-400/10 border-emerald-400/30',
+    info: 'text-[#a9c8fc] bg-[#0f3460]/30 border-[#0f3460]',
+    warning: 'text-[#ffb782] bg-[#ffb782]/10 border-[#ffb782]/30',
+    danger: 'text-[#e94560] bg-[#e94560]/10 border-[#e94560]/30',
+  }[syncSummary.level];
 
   return (
     <div className="flex flex-col h-full bg-[#1a1a2e] overflow-hidden">
@@ -48,6 +56,38 @@ export default function SettingsView() {
                   <h2 className="text-2xl font-bold text-[#e3e2e6]">同步配置</h2>
                   <p className="text-base text-slate-400 mt-2">管理您的本地优先同步和连接设备。</p>
                 </header>
+
+                <div className="bg-[#16213e] rounded-xl p-4 md:p-5 border border-[#0f3460] shadow-lg shadow-black/20 flex flex-col lg:flex-row lg:items-center gap-4">
+                  <div className="w-11 h-11 rounded-lg bg-[#121316] border border-[#0f3460] flex items-center justify-center flex-shrink-0">
+                    <Activity className="text-[#a9c8fc]" size={22} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded border font-mono text-[11px] uppercase tracking-wider font-bold ${syncLevelClass}`}>
+                        {syncSummary.level}
+                      </span>
+                      <span className="font-mono text-[11px] text-slate-500 truncate">
+                        {syncSummary.vaultId} / {syncSummary.deviceId}
+                      </span>
+                    </div>
+                    <h3 className="text-[15px] font-bold text-[#e3e2e6] truncate">{syncSummary.headline}</h3>
+                    <p className="text-[13px] text-slate-400 mt-1 line-clamp-2">{syncSummary.detail}</p>
+                  </div>
+                  <div className="flex flex-wrap lg:flex-nowrap items-center gap-2">
+                    <span className="px-2 py-1 rounded bg-[#121316] border border-[#0f3460] font-mono text-[11px] text-slate-400">
+                      {syncSummary.changeBadgeCount} changes
+                    </span>
+                    <span className="px-2 py-1 rounded bg-[#121316] border border-[#0f3460] font-mono text-[11px] text-slate-400">
+                      {syncSummary.conflictBadgeCount} conflicts
+                    </span>
+                    <button
+                      disabled={!syncSummary.primaryActionEnabled}
+                      className="px-3 py-1.5 rounded bg-[#0f3460]/30 border border-[#0f3460] text-[13px] font-medium text-[#a9c8fc] disabled:opacity-50 disabled:cursor-not-allowed hover:text-white transition-colors"
+                    >
+                      {syncSummary.primaryActionLabel}
+                    </button>
+                  </div>
+                </div>
 
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                   {/* Core Sync Toggle */}
@@ -280,4 +320,3 @@ export default function SettingsView() {
     </div>
   );
 }
-
