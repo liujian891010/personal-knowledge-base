@@ -1,15 +1,34 @@
 import React, { useState } from 'react';
 import { Settings, Cloud, Palette, Bot, Key, Laptop, Smartphone as Phone, Monitor, ChevronRight, Activity, RefreshCw } from 'lucide-react';
+import type { SyncShellAction, SyncShellLevel } from '../syncShell';
 import { useSyncShellController } from '../useSyncShellSnapshot';
 
 type SettingsViewProps = {
   initialTab?: string;
 };
 
+const syncLevelClasses: Record<SyncShellLevel, string> = {
+  success: 'text-emerald-300 bg-emerald-400/10 border-emerald-400/30',
+  info: 'text-[#a9c8fc] bg-[#0f3460]/30 border-[#0f3460]',
+  warning: 'text-[#ffb782] bg-[#ffb782]/10 border-[#ffb782]/30',
+  danger: 'text-[#e94560] bg-[#e94560]/10 border-[#e94560]/30',
+};
+
+function formatActivityTime(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(ms));
+}
+
 export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps) {
   const [activeTab, setActiveTab] = useState(initialTab);
   const {
     summary: syncSummary,
+    cards: syncCards,
+    activityFeed,
     secondaryActions,
     source: syncSource,
     lastError,
@@ -19,12 +38,22 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     executePrimaryAction,
     executeSyncAction,
   } = useSyncShellController();
-  const syncLevelClass = {
-    success: 'text-emerald-300 bg-emerald-400/10 border-emerald-400/30',
-    info: 'text-[#a9c8fc] bg-[#0f3460]/30 border-[#0f3460]',
-    warning: 'text-[#ffb782] bg-[#ffb782]/10 border-[#ffb782]/30',
-    danger: 'text-[#e94560] bg-[#e94560]/10 border-[#e94560]/30',
-  }[syncSummary.level];
+  const syncLevelClass = syncLevelClasses[syncSummary.level];
+  const renderActionButton = (action: SyncShellAction, variant: 'primary' | 'secondary' = 'secondary') => (
+    <button
+      key={action.action_id}
+      disabled={!action.enabled || isExecuting || isRefreshing}
+      onClick={() => executeSyncAction(action)}
+      title={action.reason ?? (action.requires_confirmation ? 'Requires confirmation' : undefined)}
+      className={`max-w-full truncate px-3 py-1.5 rounded border text-[13px] font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
+        variant === 'primary'
+          ? 'bg-[#0f3460]/30 border-[#0f3460] text-[#a9c8fc] hover:text-white'
+          : 'bg-[#121316] border-[#0f3460] text-slate-300 hover:text-white'
+      }`}
+    >
+      {isExecuting && variant === 'primary' ? 'Working...' : action.label}
+    </button>
+  );
 
   return (
     <div className="flex flex-col h-full bg-[#1a1a2e] overflow-hidden">
@@ -127,6 +156,79 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                         {action.label}
                       </button>
                     ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                  <div className="xl:col-span-2 flex flex-col gap-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-[15px] font-bold text-[#e3e2e6]">Sync cards</h3>
+                      <span className="font-mono text-[11px] text-slate-500">{syncSummary.cardCount} cards</span>
+                    </div>
+                    {syncCards.length === 0 ? (
+                      <div className="rounded-lg border border-[#0f3460] bg-[#16213e] p-4 text-[13px] text-slate-400">
+                        No active sync cards.
+                      </div>
+                    ) : (
+                      syncCards.map((card) => (
+                        <div key={card.card_id} className="rounded-lg border border-[#0f3460] bg-[#16213e] p-4 shadow-lg shadow-black/20">
+                          <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2 mb-2">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded border font-mono text-[11px] uppercase tracking-wider font-bold ${syncLevelClasses[card.level]}`}>
+                                  {card.level}
+                                </span>
+                                <span className="font-mono text-[11px] text-slate-500">{card.kind}</span>
+                                {card.badge_count > 0 && (
+                                  <span className="font-mono text-[11px] text-[#ffb782]">{card.badge_count}</span>
+                                )}
+                              </div>
+                              <h4 className="text-[14px] font-bold text-[#e3e2e6] truncate">{card.title}</h4>
+                              <p className="text-[13px] leading-relaxed text-slate-400 mt-1">{card.body}</p>
+                            </div>
+                            {card.actions.length > 0 && (
+                              <div className="flex flex-wrap md:justify-end gap-2 md:max-w-xs">
+                                {card.actions.map((action) =>
+                                  renderActionButton(action, action.emphasis === 'primary' ? 'primary' : 'secondary'),
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="rounded-lg border border-[#0f3460] bg-[#16213e] p-4 shadow-lg shadow-black/20">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-[15px] font-bold text-[#e3e2e6]">Activity</h3>
+                      <span className="font-mono text-[11px] text-slate-500">{activityFeed.total_count} total</span>
+                    </div>
+                    <div className="flex flex-col divide-y divide-[#0f3460]">
+                      {activityFeed.records.length === 0 ? (
+                        <p className="text-[13px] text-slate-400">No sync activity yet.</p>
+                      ) : (
+                        activityFeed.records.map((record) => (
+                          <div key={record.activity_id} className="py-3 first:pt-0 last:pb-0">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded border font-mono text-[10px] uppercase tracking-wider font-bold ${syncLevelClasses[record.level]}`}>
+                                {record.status}
+                              </span>
+                              <span className="font-mono text-[10px] text-slate-500">{formatActivityTime(record.occurred_at_ms)}</span>
+                            </div>
+                            <p className="text-[13px] text-[#e3e2e6] mt-2 truncate">{record.action_id}</p>
+                            <div className="flex items-center gap-1 text-[11px] text-slate-500 font-mono mt-1 min-w-0">
+                              <span className="truncate">{record.command}</span>
+                              <ChevronRight size={12} className="flex-shrink-0" />
+                              <span className="truncate">{record.source}</span>
+                            </div>
+                            {record.message && (
+                              <p className="text-[12px] text-[#ffb782] mt-1 line-clamp-2">{record.message}</p>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </div>
                 </div>
 

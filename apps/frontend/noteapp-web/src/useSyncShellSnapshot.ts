@@ -5,6 +5,8 @@ import {
   parseSyncShellSnapshot,
   summarizeSyncShellSnapshot,
   type SyncShellAction,
+  type SyncShellActivityFeed,
+  type SyncShellCard,
   type SyncShellSnapshot,
   type SyncShellSummary,
 } from './syncShell';
@@ -25,6 +27,8 @@ interface SnapshotLoadResult {
 
 export interface SyncShellController {
   summary: SyncShellSummary;
+  cards: SyncShellCard[];
+  activityFeed: SyncShellActivityFeed;
   secondaryActions: SyncShellAction[];
   source: SyncShellSource;
   lastError: string | null;
@@ -164,6 +168,8 @@ export function useSyncShellController(): SyncShellController {
   const summary = useMemo(() => summarizeSyncShellSnapshot(snapshot), [snapshot]);
   return {
     summary,
+    cards: snapshot.sync_center.cards,
+    activityFeed: snapshot.activity_feed,
     secondaryActions: snapshot.sync_center.panel.secondary_actions,
     source,
     lastError,
