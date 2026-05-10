@@ -175,6 +175,9 @@ const server = createServer((request, response) => {
     if (request.method === 'GET' && url.pathname === '/health') {
       jsonResponse(request, response, 200, {
         ok: true,
+        host,
+        port,
+        allowRemoteHost,
         snapshotPath,
         allowedOrigin,
       });
