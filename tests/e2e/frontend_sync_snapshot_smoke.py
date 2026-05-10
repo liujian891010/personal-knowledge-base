@@ -460,12 +460,14 @@ def main() -> int:
                     method="POST",
                 )
                 assert status == 200, submitted_payload
-                assert submitted_payload["sync_center"]["panel"]["level"] in {
-                    "success",
-                    "info",
-                    "warning",
-                    "danger",
-                }, submitted_payload
+                assert submitted_payload["sync_center"]["panel"]["level"] == "success", submitted_payload
+                assert submitted_payload["sync_center"]["panel"]["headline"] == "Vault is in sync", submitted_payload
+                assert submitted_payload["sync_center"]["panel"]["change_badge_count"] == 0, submitted_payload
+                assert not [
+                    card
+                    for card in submitted_payload["sync_center"]["cards"]
+                    if card["card_id"] == "local-changes"
+                ], submitted_payload
                 assert "snapshot" not in submitted_payload, submitted_payload
                 assert any(
                     record["action_id"] == "submit-detected-commit"

@@ -43,6 +43,7 @@ from vault_core import (
     materialize_content_snapshot_plan,
     prepare_commit_submission,
     register_conflict_copy,
+    rebuild_filemap_from_manifest,
     remove_conflict_copy,
     recover_sync_apply_finalizing_state,
     upsert_vault_state,
@@ -2915,16 +2916,11 @@ class DesktopSyncService:
         if response is None:
             raise ValueError("committed submit_commit result must include response")
 
-        current_tombstones = load_tombstone_ledger(self.workspace.paths.ledger_path)
-        with closing(self.workspace._open_connection()) as connection:
-            finalized = finalize_commit_submission_cleanup(
-                connection,
-                vault_root=self.workspace.vault_root,
-                ledger_path=self.workspace.paths.ledger_path,
-                manifest=prepared.submission.manifest,
-                local_tombstones=current_tombstones,
-                committed_revision=response.new_revision,
-            )
+        finalized = self._finalize_successful_commit_submission(
+            prepared,
+            committed_revision=response.new_revision,
+            rewritten_at=resolved_cleanup_at,
+        )
         return DesktopCommitSessionResult(
             prepared=prepared,
             network=network,
@@ -3162,6 +3158,32 @@ class DesktopSyncService:
             removed_paths.append(staging_path)
         return removed_paths
 
+    def _finalize_successful_commit_submission(
+        self,
+        prepared: DesktopPreparedCommit,
+        *,
+        committed_revision: int,
+        rewritten_at: int,
+    ) -> CommitFinalizeCleanupResult:
+        current_tombstones = load_tombstone_ledger(self.workspace.paths.ledger_path)
+        with closing(self.workspace._open_connection()) as connection:
+            finalized = finalize_commit_submission_cleanup(
+                connection,
+                vault_root=self.workspace.vault_root,
+                ledger_path=self.workspace.paths.ledger_path,
+                manifest=prepared.submission.manifest,
+                local_tombstones=current_tombstones,
+                committed_revision=committed_revision,
+            )
+        updated_document = rebuild_filemap_from_manifest(
+            prepared.snapshot.document,
+            finalized.finalized.manifest,
+            local_tombstones=finalized.finalized.tombstones,
+            rewritten_at=rewritten_at,
+        )
+        write_filemap_atomic(self.workspace.paths.filemap_path, updated_document)
+        return finalized
+
     def _submit_prepared_commit(
         self,
         prepared: DesktopPreparedCommit,
@@ -3188,16 +3210,11 @@ class DesktopSyncService:
         if response is None:
             raise ValueError("committed submit_commit result must include response")
 
-        current_tombstones = load_tombstone_ledger(self.workspace.paths.ledger_path)
-        with closing(self.workspace._open_connection()) as connection:
-            finalized = finalize_commit_submission_cleanup(
-                connection,
-                vault_root=self.workspace.vault_root,
-                ledger_path=self.workspace.paths.ledger_path,
-                manifest=prepared.submission.manifest,
-                local_tombstones=current_tombstones,
-                committed_revision=response.new_revision,
-            )
+        finalized = self._finalize_successful_commit_submission(
+            prepared,
+            committed_revision=response.new_revision,
+            rewritten_at=resolved_cleanup_at,
+        )
         return DesktopCommitSessionResult(
             prepared=prepared,
             network=network,
