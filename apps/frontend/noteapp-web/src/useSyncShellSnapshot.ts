@@ -8,7 +8,10 @@ import {
   type SyncShellSummary,
 } from './syncShell';
 
-const syncBridgeUrl = 'http://127.0.0.1:3187';
+const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
+const syncBridgeUrl = (
+  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
+).replace(/\/+$/, '');
 const fallbackSnapshot = parseSyncShellSnapshot(bundledExampleSnapshot);
 
 type SyncShellSource = 'bridge' | 'live-fixture' | 'example';
