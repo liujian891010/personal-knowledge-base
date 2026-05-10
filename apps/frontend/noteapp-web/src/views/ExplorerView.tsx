@@ -8,6 +8,7 @@ import {
   Network,
   Plus,
   RefreshCw,
+  Save,
 } from 'lucide-react';
 
 import { useWorkspaceFilesController } from '../useWorkspaceFiles';
@@ -69,7 +70,10 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
     content: selectedContent,
     lastError: contentError,
     isLoading: isContentLoading,
+    isSaving: isContentSaving,
+    savedAtMs,
     loadContent,
+    saveContent,
     clearContent,
   } = useWorkspaceFileContentController();
   const visibleFiles = useMemo(
@@ -106,6 +110,28 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
     }
     void loadContent(selectedFile.file_id);
   }, [clearContent, loadContent, selectedFile]);
+
+  const [draftText, setDraftText] = useState('');
+  const isContentDirty = Boolean(selectedContent && draftText !== selectedContent.text);
+  const canEditContent = Boolean(
+    selectedFile && selectedFile.exists_on_disk && selectedFile.status === 'active' && selectedContent,
+  );
+
+  useEffect(() => {
+    setDraftText(selectedContent?.text ?? '');
+  }, [selectedContent]);
+
+  async function handleSaveContent() {
+    if (!selectedFile || !selectedContent || !isContentDirty || isContentSaving) {
+      return;
+    }
+    try {
+      await saveContent(selectedFile.file_id, draftText);
+      await refresh();
+    } catch {
+      // The hook stores the user-visible error message.
+    }
+  }
 
   return (
     <div className="flex h-full bg-[#1a1a2e] overflow-hidden">
@@ -274,16 +300,35 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
 
               <section className="border border-[#0f3460] rounded-xl bg-[#16213e] shadow-lg shadow-black/20 overflow-hidden">
                 <div className="flex items-center justify-between gap-3 border-b border-[#0f3460] px-5 py-3">
-                  <h3 className="text-[15px] font-bold text-[#e3e2e6]">Content preview</h3>
-                  <span className="font-mono text-[11px] text-slate-500">
-                    {isContentLoading ? 'loading' : selectedContent ? selectedContent.encoding : 'unavailable'}
-                  </span>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <h3 className="text-[15px] font-bold text-[#e3e2e6]">Content editor</h3>
+                    <span className="font-mono text-[11px] text-slate-500">
+                      {isContentLoading ? 'loading' : selectedContent ? selectedContent.encoding : 'unavailable'}
+                    </span>
+                    {savedAtMs && !isContentDirty && (
+                      <span className="hidden sm:inline font-mono text-[11px] text-emerald-300">
+                        saved {formatFileTime(savedAtMs)}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    onClick={handleSaveContent}
+                    disabled={!canEditContent || !isContentDirty || isContentLoading || isContentSaving}
+                    title="Save file content"
+                    className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                  >
+                    <Save size={14} />
+                    <span>{isContentSaving ? 'Saving' : 'Save'}</span>
+                  </button>
                 </div>
-                <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words p-5 font-mono text-[13px] leading-relaxed text-slate-300">
-                  {isContentLoading
-                    ? 'Loading file content...'
-                    : selectedContent?.text ?? 'Content is not available for this file.'}
-                </pre>
+                <textarea
+                  value={isContentLoading ? 'Loading file content...' : draftText}
+                  onChange={(event) => setDraftText(event.target.value)}
+                  disabled={!canEditContent || isContentLoading || isContentSaving}
+                  spellCheck={false}
+                  className="block h-[420px] w-full resize-y overflow-auto bg-[#121316] p-5 font-mono text-[13px] leading-relaxed text-slate-300 outline-none placeholder:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-500"
+                  placeholder="Content is not available for this file."
+                />
               </section>
 
               <button
