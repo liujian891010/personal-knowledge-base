@@ -150,17 +150,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                     >
                       {executingActionId === syncSummary.primaryActionId ? 'Working...' : syncSummary.primaryActionLabel}
                     </button>
-                    {secondaryActions.map((action) => (
-                      <button
-                        key={action.action_id}
-                        disabled={!action.enabled || isExecuting || isRefreshing}
-                        onClick={() => executeSyncAction(action)}
-                        title={action.reason ?? (action.requires_confirmation ? 'Requires confirmation' : undefined)}
-                        className="max-w-36 truncate px-3 py-1.5 rounded bg-[#121316] border border-[#0f3460] text-[13px] font-medium text-slate-300 disabled:opacity-50 disabled:cursor-not-allowed hover:text-white transition-colors"
-                      >
-                        {action.label}
-                      </button>
-                    ))}
+                    {secondaryActions.map((action) => renderActionButton(action))}
                   </div>
                 </div>
 
