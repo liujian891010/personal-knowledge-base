@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Activity,
   Bot,
@@ -6,6 +6,7 @@ import {
   Cloud,
   Palette,
   RefreshCw,
+  Save,
   Settings,
 } from 'lucide-react';
 
@@ -39,6 +40,10 @@ const actionButtonClasses: Record<SyncShellActionEmphasis, string> = {
   warning: 'bg-[#ffb782]/10 border-[#ffb782]/30 text-[#ffb782] hover:text-white',
 };
 
+const themeOptions = ['dark', 'light', 'system'];
+const localModelStatusOptions = ['not_configured', 'available', 'unavailable', 'disabled', 'error'];
+const embeddingStatusOptions = ['not_configured', 'ready', 'indexing', 'disabled', 'error'];
+
 function formatActivityTime(ms: number): string {
   return new Intl.DateTimeFormat(undefined, {
     month: '2-digit',
@@ -46,6 +51,38 @@ function formatActivityTime(ms: number): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(ms));
+}
+
+function SettingsSelect({
+  label,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-2 min-w-0">
+      <span className="text-[11px] uppercase tracking-wider text-slate-500">{label}</span>
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[13px] text-[#e3e2e6] disabled:opacity-50 focus:outline-none focus:border-[#e94560]"
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
 }
 
 function SettingsDetailRow({
@@ -92,8 +129,31 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     source: settingsSource,
     lastError: settingsError,
     isRefreshing: isSettingsRefreshing,
+    isSaving: isSettingsSaving,
     refresh: refreshSettings,
+    saveSettings,
   } = useLocalSettingsController();
+  const [themeDraft, setThemeDraft] = useState(settingsSummary.theme);
+  const [localModelStatusDraft, setLocalModelStatusDraft] = useState(settingsSummary.localModelStatus);
+  const [embeddingStatusDraft, setEmbeddingStatusDraft] = useState(settingsSummary.embeddingStatus);
+
+  useEffect(() => {
+    setThemeDraft(settingsSummary.theme);
+    setLocalModelStatusDraft(settingsSummary.localModelStatus);
+    setEmbeddingStatusDraft(settingsSummary.embeddingStatus);
+  }, [settingsSummary.theme, settingsSummary.localModelStatus, settingsSummary.embeddingStatus]);
+
+  const saveLocalSettings = async () => {
+    await saveSettings({
+      appearance: {
+        theme: themeDraft,
+      },
+      ai: {
+        local_model_status: localModelStatusDraft,
+        embedding_status: embeddingStatusDraft,
+      },
+    });
+  };
 
   const renderActionButton = (
     action: SyncShellAction,
@@ -290,6 +350,9 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                     <SettingsDetailRow label="User agent" value={settingsSummary.userAgent} mono />
                     <SettingsDetailRow label="Settings source" value={settingsSummary.source} mono />
                   </div>
+                  {settingsError && (
+                    <p className="text-[12px] text-[#ffb782] mt-4 line-clamp-3">{settingsError}</p>
+                  )}
                 </section>
               </>
             )}
@@ -301,21 +364,55 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                     <h2 className="text-2xl font-bold text-[#e3e2e6]">Appearance</h2>
                     <p className="font-mono text-[11px] text-slate-500 mt-1">{settingsSummary.settingsPath}</p>
                   </div>
-                  <button
-                    disabled={isSettingsRefreshing}
-                    onClick={refreshSettings}
-                    title="Refresh settings"
-                    className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <RefreshCw size={15} className={isSettingsRefreshing ? 'animate-spin' : ''} />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      disabled={isSettingsRefreshing || isSettingsSaving}
+                      onClick={refreshSettings}
+                      title="Refresh settings"
+                      className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <RefreshCw size={15} className={isSettingsRefreshing ? 'animate-spin' : ''} />
+                    </button>
+                    <button
+                      disabled={isSettingsSaving || isSettingsRefreshing}
+                      onClick={saveLocalSettings}
+                      title="Save settings"
+                      className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#0f3460]/30 border border-[#0f3460] text-[#a9c8fc] hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <Save size={15} />
+                    </button>
+                  </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
-                  <SettingsDetailRow label="Theme" value={settingsSummary.theme} />
-                  <SettingsDetailRow label="Settings source" value={settingsSummary.source} mono />
-                  <SettingsDetailRow label="Snapshot source" value={settingsSource} mono />
-                  <SettingsDetailRow label="Schema" value={settingsSummary.schemaVersion} mono />
+                <div className="flex flex-col gap-5">
+                  <div className="flex flex-col gap-2">
+                    <span className="text-[11px] uppercase tracking-wider text-slate-500">Theme</span>
+                    <div className="inline-grid grid-cols-3 rounded border border-[#0f3460] bg-[#121316] p-1 w-full max-w-md">
+                      {themeOptions.map((option) => (
+                        <button
+                          key={option}
+                          disabled={isSettingsSaving || isSettingsRefreshing}
+                          onClick={() => setThemeDraft(option)}
+                          className={`px-3 py-2 rounded text-[13px] font-medium transition-colors disabled:opacity-50 ${
+                            themeDraft === option
+                              ? 'bg-[#0f3460]/50 text-white'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {option}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+                    <SettingsDetailRow label="Saved theme" value={settingsSummary.theme} />
+                    <SettingsDetailRow label="Settings source" value={settingsSummary.source} mono />
+                    <SettingsDetailRow label="Snapshot source" value={settingsSource} mono />
+                    <SettingsDetailRow label="Schema" value={settingsSummary.schemaVersion} mono />
+                  </div>
                 </div>
+                {settingsError && (
+                  <p className="text-[12px] text-[#ffb782] mt-4 line-clamp-3">{settingsError}</p>
+                )}
               </section>
             )}
 
@@ -328,21 +425,50 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                       {settingsSummary.vaultId} / {settingsSummary.deviceId}
                     </p>
                   </div>
-                  <button
-                    disabled={isSettingsRefreshing}
-                    onClick={refreshSettings}
-                    title="Refresh settings"
-                    className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <RefreshCw size={15} className={isSettingsRefreshing ? 'animate-spin' : ''} />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      disabled={isSettingsRefreshing || isSettingsSaving}
+                      onClick={refreshSettings}
+                      title="Refresh settings"
+                      className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <RefreshCw size={15} className={isSettingsRefreshing ? 'animate-spin' : ''} />
+                    </button>
+                    <button
+                      disabled={isSettingsSaving || isSettingsRefreshing}
+                      onClick={saveLocalSettings}
+                      title="Save settings"
+                      className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#0f3460]/30 border border-[#0f3460] text-[#a9c8fc] hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <Save size={15} />
+                    </button>
+                  </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
-                  <SettingsDetailRow label="Local model" value={settingsSummary.localModelStatus} />
-                  <SettingsDetailRow label="Embeddings" value={settingsSummary.embeddingStatus} />
-                  <SettingsDetailRow label="Snapshot source" value={settingsSource} mono />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  <SettingsSelect
+                    label="Local model"
+                    value={localModelStatusDraft}
+                    options={localModelStatusOptions}
+                    disabled={isSettingsSaving || isSettingsRefreshing}
+                    onChange={setLocalModelStatusDraft}
+                  />
+                  <SettingsSelect
+                    label="Embeddings"
+                    value={embeddingStatusDraft}
+                    options={embeddingStatusOptions}
+                    disabled={isSettingsSaving || isSettingsRefreshing}
+                    onChange={setEmbeddingStatusDraft}
+                  />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 mt-5">
+                  <SettingsDetailRow label="Saved local model" value={settingsSummary.localModelStatus} />
+                  <SettingsDetailRow label="Saved embeddings" value={settingsSummary.embeddingStatus} />
                   <SettingsDetailRow label="Settings source" value={settingsSummary.source} mono />
+                  <SettingsDetailRow label="Snapshot source" value={settingsSource} mono />
                 </div>
+                {settingsError && (
+                  <p className="text-[12px] text-[#ffb782] mt-4 line-clamp-3">{settingsError}</p>
+                )}
               </section>
             )}
 
@@ -356,7 +482,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                     </p>
                   </div>
                   <button
-                    disabled={isSettingsRefreshing}
+                    disabled={isSettingsRefreshing || isSettingsSaving}
                     onClick={refreshSettings}
                     title="Refresh settings"
                     className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
