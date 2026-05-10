@@ -113,6 +113,15 @@ function requireArray(payload: Record<string, unknown>, key: string): unknown[] 
   return value;
 }
 
+function requireStringArray(payload: Record<string, unknown>, key: string): string[] {
+  return requireArray(payload, key).map((value, index) => {
+    if (typeof value !== 'string') {
+      throw new Error(`sync shell snapshot is missing string field: ${key}[${index}]`);
+    }
+    return value;
+  });
+}
+
 function normalizeLevel(value: string): SyncShellLevel {
   if (value === 'success' || value === 'info' || value === 'warning' || value === 'danger') {
     return value;
@@ -130,7 +139,7 @@ function parseAction(payload: unknown, context: string): SyncShellAction {
     enabled: Boolean(payload.enabled),
     emphasis: requireString(payload, 'emphasis'),
     command: requireString(payload, 'command'),
-    argv: requireArray(payload, 'argv') as string[],
+    argv: requireStringArray(payload, 'argv'),
     reason: typeof payload.reason === 'string' ? payload.reason : null,
     requires_confirmation: Boolean(payload.requires_confirmation),
   };
