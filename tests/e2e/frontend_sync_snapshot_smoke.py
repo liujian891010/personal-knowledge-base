@@ -132,6 +132,8 @@ def run_checked(command: list[str], *, cwd: Path, env: dict[str, str]) -> None:
         cwd=cwd,
         env=env,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         check=False,
@@ -187,12 +189,12 @@ def main() -> int:
         try:
             wait_for_server()
             device_id, token = register_device()
-            vault_root = Path(work_dir) / "vault"
+            vault_root = Path(work_dir) / "中文初始库"
             output_path = Path(work_dir) / "live-sync-shell.json"
             settings_output_path = Path(work_dir) / "local-settings-snapshot.json"
             workspace_files_output_path = Path(work_dir) / "workspace-files.json"
             workspace_root_output_path = Path(work_dir) / "workspace-root.json"
-            picked_vault_root = Path(work_dir) / "picked-vault"
+            picked_vault_root = Path(work_dir) / "中文工作区"
             picked_vault_root.mkdir()
             (picked_vault_root / "中文路径.md").write_bytes("# 中文标题\n\n从文件夹选择\n".encode("gb18030"))
             pythonpath = os.pathsep.join([str(VAULT_CORE_SRC), str(ROOT)])

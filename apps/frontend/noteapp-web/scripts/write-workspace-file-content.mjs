@@ -72,7 +72,7 @@ function buildCommand() {
   ];
 
   if (process.env.NOTEAPP_BEARER_TOKEN) {
-    commandArgs.push('--bearer-token', process.env.NOTEAPP_BEARER_TOKEN);
+    commandArgs.push(`--bearer-token=${process.env.NOTEAPP_BEARER_TOKEN}`);
   }
 
   commandArgs.push(
