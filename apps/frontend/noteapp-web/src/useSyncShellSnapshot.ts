@@ -43,6 +43,23 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isErrorPayload(payload: unknown): payload is { code?: string; message?: string } {
+  return typeof payload === 'object' && payload !== null;
+}
+
+async function responseErrorMessage(response: Response, source: string): Promise<string> {
+  try {
+    const payload: unknown = await response.json();
+    if (isErrorPayload(payload) && typeof payload.message === 'string') {
+      const code = typeof payload.code === 'string' ? ` (${payload.code})` : '';
+      return `${source} returned ${response.status}${code}: ${payload.message}`;
+    }
+  } catch {
+    // Ignore non-JSON responses and fall back to the HTTP status.
+  }
+  return `${source} returned ${response.status}`;
+}
+
 async function loadSnapshot(): Promise<SnapshotLoadResult> {
   let bridgeError: string | null = null;
   let fixtureError: string | null = null;
@@ -56,7 +73,7 @@ async function loadSnapshot(): Promise<SnapshotLoadResult> {
         error: null,
       };
     }
-    bridgeError = `bridge returned ${bridgeResponse.status}`;
+    bridgeError = await responseErrorMessage(bridgeResponse, 'bridge');
   } catch (error) {
     bridgeError = `bridge unavailable: ${errorMessage(error)}`;
   }
@@ -70,7 +87,7 @@ async function loadSnapshot(): Promise<SnapshotLoadResult> {
         error: bridgeError,
       };
     }
-    fixtureError = `live fixture returned ${fixtureResponse.status}`;
+    fixtureError = await responseErrorMessage(fixtureResponse, 'live fixture');
   } catch (error) {
     fixtureError = `live fixture unavailable: ${errorMessage(error)}`;
   }
@@ -87,7 +104,7 @@ async function executeBridgeAction(actionId: string): Promise<SyncShellSnapshot>
     method: 'POST',
   });
   if (!response.ok) {
-    throw new Error(`sync action failed: ${response.status}`);
+    throw new Error(await responseErrorMessage(response, 'sync action'));
   }
   return parseSyncShellSnapshot(await response.json());
 }

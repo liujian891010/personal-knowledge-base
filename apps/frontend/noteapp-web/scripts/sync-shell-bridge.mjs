@@ -65,7 +65,7 @@ function runScript(scriptName, extraEnv = {}) {
       ...extraEnv,
       NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
     },
-    text: true,
+    encoding: 'utf8',
     stdout: 'pipe',
     stderr: 'pipe',
   });
