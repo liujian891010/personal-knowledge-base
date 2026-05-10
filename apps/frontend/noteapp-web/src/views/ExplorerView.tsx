@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 
 import { useWorkspaceFilesController } from '../useWorkspaceFiles';
+import { useWorkspaceFileContentController } from '../useWorkspaceFileContent';
 import type { WorkspaceFileEntry } from '../workspaceFiles';
 
 function fileName(path: string): string {
@@ -64,6 +65,13 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
     isRefreshing,
     refresh,
   } = useWorkspaceFilesController();
+  const {
+    content: selectedContent,
+    lastError: contentError,
+    isLoading: isContentLoading,
+    loadContent,
+    clearContent,
+  } = useWorkspaceFileContentController();
   const visibleFiles = useMemo(
     () => files.filter((file) => file.status !== 'deleted'),
     [files],
@@ -81,14 +89,23 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
   useEffect(() => {
     if (visibleFiles.length === 0) {
       setSelectedFileId(null);
+      clearContent();
       return;
     }
     if (!selectedFileId || !visibleFiles.some((file) => file.file_id === selectedFileId)) {
       setSelectedFileId(visibleFiles[0].file_id);
     }
-  }, [selectedFileId, visibleFiles]);
+  }, [clearContent, selectedFileId, visibleFiles]);
 
   const selectedFile = visibleFiles.find((file) => file.file_id === selectedFileId) ?? null;
+
+  useEffect(() => {
+    if (!selectedFile || !selectedFile.exists_on_disk || selectedFile.status !== 'active') {
+      clearContent();
+      return;
+    }
+    void loadContent(selectedFile.file_id);
+  }, [clearContent, loadContent, selectedFile]);
 
   return (
     <div className="flex h-full bg-[#1a1a2e] overflow-hidden">
@@ -180,6 +197,11 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
               {lastError}
             </div>
           )}
+          {contentError && (
+            <div className="mb-4 rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782] line-clamp-3">
+              {contentError}
+            </div>
+          )}
 
           {selectedFile ? (
             <div className="max-w-4xl flex flex-col gap-6">
@@ -248,6 +270,20 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                     </div>
                   </dl>
                 </div>
+              </section>
+
+              <section className="border border-[#0f3460] rounded-xl bg-[#16213e] shadow-lg shadow-black/20 overflow-hidden">
+                <div className="flex items-center justify-between gap-3 border-b border-[#0f3460] px-5 py-3">
+                  <h3 className="text-[15px] font-bold text-[#e3e2e6]">Content preview</h3>
+                  <span className="font-mono text-[11px] text-slate-500">
+                    {isContentLoading ? 'loading' : selectedContent ? selectedContent.encoding : 'unavailable'}
+                  </span>
+                </div>
+                <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words p-5 font-mono text-[13px] leading-relaxed text-slate-300">
+                  {isContentLoading
+                    ? 'Loading file content...'
+                    : selectedContent?.text ?? 'Content is not available for this file.'}
+                </pre>
               </section>
 
               <button

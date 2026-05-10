@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import {
   parseWorkspaceFileContent,
@@ -55,7 +55,7 @@ export function useWorkspaceFileContentController(): WorkspaceFileContentControl
   const [lastError, setLastError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const loadContent = async (fileId: string) => {
+  const loadContent = useCallback(async (fileId: string) => {
     setIsLoading(true);
     try {
       setContent(await fetchWorkspaceFileContent(fileId));
@@ -66,13 +66,18 @@ export function useWorkspaceFileContentController(): WorkspaceFileContentControl
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  const clearContent = useCallback(() => {
+    setContent(null);
+    setLastError(null);
+  }, []);
 
   return {
     content,
     lastError,
     isLoading,
     loadContent,
-    clearContent: () => setContent(null),
+    clearContent,
   };
 }
