@@ -361,6 +361,57 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertFalse(snapshot.files[0].exists_on_disk)
             self.assertIsNone(snapshot.files[0].size_bytes)
 
+    def test_load_workspace_file_content_returns_utf8_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, payload, _ = self._seed_workspace(root)
+
+            content = service.load_workspace_file_content("file-live")
+
+            self.assertEqual(content.schema_version, "v1")
+            self.assertEqual(content.vault_id, "vault-001")
+            self.assertEqual(content.device_id, "desktop-shanghai")
+            self.assertEqual(content.vault_root, root)
+            self.assertEqual(content.file_id, "file-live")
+            self.assertEqual(content.path, "Notes/Live.md")
+            self.assertEqual(content.type, "note")
+            self.assertEqual(content.status, "active")
+            self.assertEqual(content.size_bytes, len(payload))
+            self.assertEqual(content.encoding, "utf-8")
+            self.assertEqual(content.text, payload.decode("utf-8"))
+
+    def test_load_workspace_file_content_rejects_non_utf8(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            binary_payload = b"\xff\xfe\xfd"
+            live_path = root / "Notes" / "Live.md"
+            live_path.write_bytes(binary_payload)
+            binary_mtime_ms = live_path.stat().st_mtime_ns // 1_000_000
+            snapshot = service.load_snapshot()
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                snapshot.document.replace_files(
+                    [
+                        replace(
+                            snapshot.document.files[0],
+                            updated_at=binary_mtime_ms,
+                            content_hash="sha256:" + hashlib.sha256(binary_payload).hexdigest(),
+                            meta={
+                                "blob_id": "blob-live",
+                                "size": len(binary_payload),
+                                "mtime": binary_mtime_ms,
+                                "mime_type": "application/octet-stream",
+                            },
+                        )
+                    ],
+                    updated_at=1770000030200,
+                ),
+            )
+
+            with self.assertRaisesRegex(ValueError, "workspace file is not valid UTF-8: file-live"):
+                service.load_workspace_file_content("file-live")
+
     def test_export_vault_package_excludes_runtime_state_and_optional_raw(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "vault"

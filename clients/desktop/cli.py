@@ -182,6 +182,8 @@ def create_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("status")
     subparsers.add_parser("workspace-files")
+    workspace_file_content_parser = subparsers.add_parser("workspace-file-content")
+    workspace_file_content_parser.add_argument("--file-id", required=True)
     subparsers.add_parser("local-settings-snapshot")
     write_settings_parser = subparsers.add_parser("write-local-settings")
     write_settings_parser.add_argument("--input-json", required=True)
@@ -369,6 +371,8 @@ def run_cli(
         result = service.load_snapshot()
     elif args.command == "workspace-files":
         result = service.list_workspace_files()
+    elif args.command == "workspace-file-content":
+        result = service.load_workspace_file_content(args.file_id)
     elif args.command == "local-settings-snapshot":
         result = service.load_local_settings_snapshot()
     elif args.command == "write-local-settings":
