@@ -319,6 +319,7 @@ def main() -> int:
                     "/api/settings/snapshot",
                     method="POST",
                     payload={
+                        "schema_version": "v1",
                         "appearance": {"theme": "system"},
                         "ai": {
                             "local_model_status": "disabled",

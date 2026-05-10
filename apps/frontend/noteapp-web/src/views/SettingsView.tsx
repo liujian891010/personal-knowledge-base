@@ -146,6 +146,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
 
   const saveLocalSettings = async () => {
     await saveSettings({
+      schema_version: 'v1',
       appearance: {
         theme: themeDraft,
       },
