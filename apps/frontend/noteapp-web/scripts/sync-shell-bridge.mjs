@@ -1,9 +1,10 @@
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const appRoot = resolve(scriptPath, '..', '..');
@@ -247,6 +248,108 @@ function ensureWorkspaceInitialized() {
     '--now-ms',
     process.env.NOTEAPP_INIT_NOW_MS || String(Date.now()),
   ]);
+  importExistingWorkspaceFilesIfEmpty();
+}
+
+function posixRelativePath(path) {
+  return path.split(sep).join('/');
+}
+
+function isImportableWorkspaceFile(path) {
+  const lower = path.toLowerCase();
+  return lower.endsWith('.md') || lower.endsWith('.markdown') || lower.endsWith('.txt');
+}
+
+function inferWorkspaceFileType(path) {
+  const lower = path.toLowerCase();
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
+    return 'note';
+  }
+  return 'attachment';
+}
+
+function mimeTypeForWorkspaceFile(path) {
+  const lower = path.toLowerCase();
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
+    return 'text/markdown';
+  }
+  if (lower.endsWith('.txt')) {
+    return 'text/plain';
+  }
+  return undefined;
+}
+
+function buildImportedWorkspaceFileId(relativePath) {
+  return `file-local-${createHash('sha1').update(relativePath).digest('hex').slice(0, 16)}`;
+}
+
+function listImportableWorkspaceFiles(root, current = root) {
+  const entries = [];
+  for (const entry of readdirSync(current, { withFileTypes: true })) {
+    if (entry.name === '.noteapp') {
+      continue;
+    }
+    const fullPath = resolve(current, entry.name);
+    const relativePath = posixRelativePath(relative(root, fullPath));
+    if (relativePath === '.vaultinfo' || relativePath.startsWith('.ai/raw/') || relativePath === '.ai/log.md') {
+      continue;
+    }
+    if (entry.isDirectory()) {
+      entries.push(...listImportableWorkspaceFiles(root, fullPath));
+      continue;
+    }
+    if (entry.isFile() && isImportableWorkspaceFile(relativePath)) {
+      entries.push({ fullPath, relativePath });
+    }
+  }
+  return entries.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+}
+
+function importExistingWorkspaceFilesIfEmpty() {
+  const filemapPath = resolve(selectedVaultRoot, '.noteapp', 'filemap.json');
+  if (!existsSync(filemapPath)) {
+    return;
+  }
+  const document = JSON.parse(readFileSync(filemapPath, 'utf8'));
+  if (Array.isArray(document.files) && document.files.length > 0) {
+    return;
+  }
+  const importableFiles = listImportableWorkspaceFiles(selectedVaultRoot);
+  if (importableFiles.length === 0) {
+    return;
+  }
+  const records = importableFiles.map((item) => {
+    const payload = readFileSync(item.fullPath);
+    const stat = statSync(item.fullPath);
+    const mtime = Math.floor(stat.mtimeMs);
+    const mimeType = mimeTypeForWorkspaceFile(item.relativePath);
+    return {
+      file_id: buildImportedWorkspaceFileId(item.relativePath),
+      path: item.relativePath,
+      type: inferWorkspaceFileType(item.relativePath),
+      status: 'active',
+      updated_at: mtime,
+      meta: {
+        size: payload.length,
+        mtime,
+        ...(mimeType ? { mime_type: mimeType } : {}),
+      },
+    };
+  });
+  const updatedAt = Math.max(document.updated_at || 0, ...records.map((item) => item.updated_at));
+  writeFileSync(
+    filemapPath,
+    `${JSON.stringify(
+      {
+        ...document,
+        updated_at: updatedAt,
+        files: records,
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  );
 }
 
 function workspaceRootPayload() {
