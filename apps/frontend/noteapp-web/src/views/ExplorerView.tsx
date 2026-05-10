@@ -345,27 +345,16 @@ function MarkdownPreview({ markdown }: { markdown: string }) {
 
 function buildExplorerRows(files: WorkspaceFileEntry[], rootName: string): ExplorerRow[] {
   const folderPaths = new Set<string>(['']);
-  const directDocumentCounts = new Map<string, number>();
+  const recursiveDocumentCounts = new Map<string, number>([['', 0]]);
   for (const file of files) {
     const parts = file.path.split(/[\\/]/).filter(Boolean);
     const folderParts = parts.slice(0, -1);
-    const directFolderPath = folderParts.join('/');
-    directDocumentCounts.set(directFolderPath, (directDocumentCounts.get(directFolderPath) ?? 0) + 1);
+    recursiveDocumentCounts.set('', (recursiveDocumentCounts.get('') ?? 0) + 1);
     for (let index = 0; index < folderParts.length; index += 1) {
-      folderPaths.add(folderParts.slice(0, index + 1).join('/'));
+      const folderPath = folderParts.slice(0, index + 1).join('/');
+      folderPaths.add(folderPath);
+      recursiveDocumentCounts.set(folderPath, (recursiveDocumentCounts.get(folderPath) ?? 0) + 1);
     }
-  }
-
-  const subfolderCounts = new Map<string, number>();
-  for (const folderPath of folderPaths) {
-    subfolderCounts.set(folderPath, 0);
-  }
-  for (const folderPath of folderPaths) {
-    if (folderPath === '') {
-      continue;
-    }
-    const parentPath = folderPath.split('/').slice(0, -1).join('/');
-    subfolderCounts.set(parentPath, (subfolderCounts.get(parentPath) ?? 0) + 1);
   }
 
   const rows: ExplorerRow[] = [];
@@ -390,7 +379,7 @@ function buildExplorerRows(files: WorkspaceFileEntry[], rootName: string): Explo
       name: folderPath ? fileName(folderPath) : rootName,
       path: folderPath,
       depth,
-      count: (subfolderCounts.get(folderPath) ?? 0) + (directDocumentCounts.get(folderPath) ?? 0),
+      count: recursiveDocumentCounts.get(folderPath) ?? 0,
     });
     for (const file of folderFiles) {
       rows.push({
@@ -643,7 +632,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                   )}
                   <Folder size={16} className="text-[#a9c8fc]" />
                   <span className="text-[13px] font-semibold flex-1 font-sans truncate">{row.name}</span>
-                  <span className="font-mono text-[10px] text-slate-500" title={`${row.count} 个直接子项`}>{row.count}</span>
+                  <span className="font-mono text-[10px] text-slate-500" title={`${row.count} 篇文档`}>{row.count}</span>
                 </button>
               ) : (
                 <button
