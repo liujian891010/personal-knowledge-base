@@ -32,11 +32,6 @@ function workspaceRootName(path: string): string {
   return fileName(path) || '工作区';
 }
 
-function folderName(path: string, rootName: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts.length > 1 ? parts.slice(0, -1).join('/') : rootName;
-}
-
 function folderPathForFile(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts.slice(0, -1).join('/');
@@ -349,22 +344,29 @@ function MarkdownPreview({ markdown }: { markdown: string }) {
 }
 
 function buildExplorerRows(files: WorkspaceFileEntry[], rootName: string): ExplorerRow[] {
-  const folderCounts = new Map<string, number>();
+  const folderPaths = new Set<string>(['']);
   for (const file of files) {
     const parts = file.path.split(/[\\/]/).filter(Boolean);
     const folderParts = parts.slice(0, -1);
-    if (folderParts.length === 0) {
-      folderCounts.set('', (folderCounts.get('') ?? 0) + 1);
-      continue;
-    }
     for (let index = 0; index < folderParts.length; index += 1) {
-      const folderPath = folderParts.slice(0, index + 1).join('/');
-      folderCounts.set(folderPath, (folderCounts.get(folderPath) ?? 0) + 1);
+      folderPaths.add(folderParts.slice(0, index + 1).join('/'));
     }
   }
 
+  const subfolderCounts = new Map<string, number>();
+  for (const folderPath of folderPaths) {
+    subfolderCounts.set(folderPath, 0);
+  }
+  for (const folderPath of folderPaths) {
+    if (folderPath === '') {
+      continue;
+    }
+    const parentPath = folderPath.split('/').slice(0, -1).join('/');
+    subfolderCounts.set(parentPath, (subfolderCounts.get(parentPath) ?? 0) + 1);
+  }
+
   const rows: ExplorerRow[] = [];
-  const sortedFolders = Array.from(folderCounts.keys()).sort((left, right) => {
+  const sortedFolders = Array.from(folderPaths).sort((left, right) => {
     if (left === '') {
       return -1;
     }
@@ -377,7 +379,7 @@ function buildExplorerRows(files: WorkspaceFileEntry[], rootName: string): Explo
   for (const folderPath of sortedFolders) {
     const depth = folderPath === '' ? 0 : folderPath.split('/').length - 1;
     const folderFiles = files
-      .filter((file) => folderName(file.path, rootName) === (folderPath || rootName))
+      .filter((file) => folderPathForFile(file.path) === folderPath)
       .sort((left, right) => left.path.localeCompare(right.path));
     rows.push({
       kind: 'folder',
@@ -385,7 +387,7 @@ function buildExplorerRows(files: WorkspaceFileEntry[], rootName: string): Explo
       name: folderPath ? fileName(folderPath) : rootName,
       path: folderPath,
       depth,
-      count: folderCounts.get(folderPath) ?? 0,
+      count: subfolderCounts.get(folderPath) ?? 0,
     });
     for (const file of folderFiles) {
       rows.push({
@@ -638,7 +640,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                   )}
                   <Folder size={16} className="text-[#a9c8fc]" />
                   <span className="text-[13px] font-semibold flex-1 font-sans truncate">{row.name}</span>
-                  <span className="font-mono text-[10px] text-slate-500">{row.count}</span>
+                  <span className="font-mono text-[10px] text-slate-500" title={`${row.count} 个子目录`}>{row.count}</span>
                 </button>
               ) : (
                 <button
@@ -766,9 +768,6 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                   <div className="flex items-center gap-3 min-w-0">
                     <Code2 size={16} className="flex-shrink-0 text-[#a9c8fc]" />
                     <h3 className="text-[15px] font-bold text-[#e3e2e6]">Markdown 编辑器</h3>
-                    <span className="font-mono text-[11px] text-slate-500">
-                      {isContentLoading ? '加载中' : selectedContent ? selectedContent.encoding : '不可用'}
-                    </span>
                     {savedAtMs && !isContentDirty && (
                       <span className="hidden sm:inline font-mono text-[11px] text-emerald-300">
                         已保存到本地 {formatFileTime(savedAtMs)}
