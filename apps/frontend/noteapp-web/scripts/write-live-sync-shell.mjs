@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 const scriptPath = fileURLToPath(import.meta.url);
 const appRoot = resolve(scriptPath, '..', '..');
 const repoRoot = resolve(appRoot, '..', '..', '..');
-const outputPath = resolve(appRoot, 'public', 'fixtures', 'live-sync-shell.json');
+const outputPath = process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT
+  ? resolve(process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT)
+  : resolve(appRoot, 'public', 'fixtures', 'live-sync-shell.json');
 
 const args = new Set(process.argv.slice(2));
 const isHelp = args.has('--help') || args.has('-h');
@@ -27,6 +29,8 @@ Optional environment:
   NOTEAPP_BEARER_TOKEN     Device bearer token
   NOTEAPP_SYNC_NOW_MS      Stable generated_at timestamp
   NOTEAPP_ACTIVITY_LIMIT   Activity feed limit, default 20
+  NOTEAPP_SYNC_SNAPSHOT_OUTPUT
+                          Output JSON path, default public/fixtures/live-sync-shell.json
   PYTHON                   Python executable, default python
 
 Options:
@@ -95,7 +99,7 @@ if (isHelp) {
 }
 
 try {
-  mkdirSync(resolve(appRoot, 'public', 'fixtures'), { recursive: true });
+  mkdirSync(resolve(outputPath, '..'), { recursive: true });
   const { python, commandArgs } = buildCommand();
   const env = {
     ...process.env,
