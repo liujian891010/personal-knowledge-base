@@ -10,7 +10,8 @@
     "serve": "node scripts/serve-dist.mjs",
     "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
     "lint": "tsc --noEmit",
-    "validate:sync-shell": "tsx scripts/validate-sync-shell-fixture.mts"
+    "validate:sync-shell": "tsx scripts/validate-sync-shell-fixture.mts",
+    "sync:snapshot": "node scripts/write-live-sync-shell.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

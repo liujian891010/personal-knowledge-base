@@ -28,18 +28,23 @@ npm run build
 The desktop CLI can write the app-shell sync snapshot consumed by the web UI contract:
 
 ```powershell
-$env:PYTHONPATH='../../../packages/vault-core/src;../../..'
-python -m clients.desktop.cli `
-  --vault-root C:\vaults\pkb `
-  --base-url http://127.0.0.1:8000 `
-  --vault-id vault-001 `
-  --device-id desktop-shanghai `
-  sync-shell-snapshot `
-  --output-json public\fixtures\live-sync-shell.json
+$env:PYTHON='C:\Users\ROBERT LIU\AppData\Local\Programs\Python\Python312\python.exe'
+$env:NOTEAPP_VAULT_ROOT='C:\vaults\pkb'
+$env:NOTEAPP_SYNC_BASE_URL='http://127.0.0.1:8000'
+$env:NOTEAPP_VAULT_ID='vault-001'
+$env:NOTEAPP_DEVICE_ID='desktop-shanghai'
+$env:NOTEAPP_BEARER_TOKEN='<device bearer token>'
+npm run sync:snapshot
 ```
 
 The app falls back to `fixtures/live-sync-shell.example.json` when no live public fixture exists.
 Generated files under `public/fixtures/` are local runtime artifacts and are ignored by git.
+
+Preview the generated command without contacting the server:
+
+```powershell
+npm run sync:snapshot -- --dry-run
+```
 
 Validate the checked-in example fixture and TypeScript adapter:
 
