@@ -257,23 +257,20 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     savedAtMs,
     refresh: refreshSettings,
     saveSettings,
-    saveWorkspaceRoot,
+    selectWorkspaceRoot,
   } = useLocalSettingsController();
   const [themeDraft, setThemeDraft] = useState(settingsSummary.theme);
   const [localModelStatusDraft, setLocalModelStatusDraft] = useState(settingsSummary.localModelStatus);
   const [embeddingStatusDraft, setEmbeddingStatusDraft] = useState(settingsSummary.embeddingStatus);
-  const [vaultRootDraft, setVaultRootDraft] = useState(settingsSummary.vaultRoot);
 
   useEffect(() => {
     setThemeDraft(settingsSummary.theme);
     setLocalModelStatusDraft(settingsSummary.localModelStatus);
     setEmbeddingStatusDraft(settingsSummary.embeddingStatus);
-    setVaultRootDraft(settingsSummary.vaultRoot);
   }, [
     settingsSummary.theme,
     settingsSummary.localModelStatus,
     settingsSummary.embeddingStatus,
-    settingsSummary.vaultRoot,
   ]);
 
   const saveLocalSettings = async () => {
@@ -293,9 +290,8 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     || localModelStatusDraft !== settingsSummary.localModelStatus
     || embeddingStatusDraft !== settingsSummary.embeddingStatus
   );
-  const hasVaultRootDraftChanges = vaultRootDraft.trim() !== settingsSummary.vaultRoot;
   const saveWorkspaceFolder = async () => {
-    await saveWorkspaceRoot(vaultRootDraft.trim());
+    await selectWorkspaceRoot();
     await Promise.all([refreshSync(), refreshSettings()]);
   };
   const savedAtLabel = savedAtMs ? `已保存 ${formatActivityTime(savedAtMs)}` : null;
@@ -740,24 +736,23 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                     <h3 className="text-[15px] font-bold">工作区文件夹</h3>
                   </div>
                   <div className="flex flex-col gap-3 lg:flex-row">
-                    <input
-                      value={vaultRootDraft}
-                      disabled={isSettingsSaving || isSettingsRefreshing}
-                      onChange={(event) => setVaultRootDraft(event.target.value)}
-                      placeholder="输入本机文件夹路径，例如 C:\vaults\pkb"
-                      className="min-w-0 flex-1 rounded border border-[#0f3460] bg-[#0d0e11] px-3 py-2 font-mono text-[13px] text-[#e3e2e6] placeholder:text-slate-600 focus:outline-none focus:border-[#e94560] disabled:opacity-50"
-                    />
+                    <div
+                      title={settingsSummary.vaultRoot}
+                      className="min-w-0 flex-1 truncate rounded border border-[#0f3460] bg-[#0d0e11] px-3 py-2 font-mono text-[13px] text-[#e3e2e6]"
+                    >
+                      {settingsSummary.vaultRoot}
+                    </div>
                     <button
-                      disabled={isSettingsSaving || isSettingsRefreshing || !hasVaultRootDraftChanges || !vaultRootDraft.trim()}
+                      disabled={isSettingsSaving || isSettingsRefreshing}
                       onClick={saveWorkspaceFolder}
                       className="inline-flex h-10 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-4 text-[13px] font-semibold text-[#a9c8fc] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <Save size={15} />
-                      应用文件夹
+                      <FolderOpen size={15} />
+                      选择文件夹
                     </button>
                   </div>
                   <p className="mt-2 text-[12px] leading-relaxed text-slate-400">
-                    选择已有文件夹作为当前工作区。应用后会初始化缺失的 `.noteapp` 数据，并刷新笔记库、同步状态和设置。
+                    打开系统文件夹选择框，选择已有文件夹作为当前工作区。应用后会初始化缺失的 `.noteapp` 数据，并刷新笔记库、同步状态和设置。
                   </p>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
