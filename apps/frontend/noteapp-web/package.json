@@ -12,7 +12,8 @@
     "lint": "tsc --noEmit",
     "validate:sync-shell": "tsx scripts/validate-sync-shell-fixture.mts",
     "sync:snapshot": "node scripts/write-live-sync-shell.mjs",
-    "sync:action": "node scripts/execute-sync-action.mjs"
+    "sync:action": "node scripts/execute-sync-action.mjs",
+    "sync:bridge": "node scripts/sync-shell-bridge.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

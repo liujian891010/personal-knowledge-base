@@ -17,7 +17,9 @@ SERVER_ROOT = ROOT / "apps" / "backend" / "noteapp-server"
 FRONTEND_ROOT = ROOT / "apps" / "frontend" / "noteapp-web"
 VAULT_CORE_SRC = ROOT / "packages" / "vault-core" / "src"
 PORT = int(os.environ.get("NOTEAPP_FRONTEND_SNAPSHOT_SMOKE_PORT", "8092"))
+BRIDGE_PORT = int(os.environ.get("NOTEAPP_FRONTEND_SNAPSHOT_BRIDGE_PORT", "3192"))
 BASE_URL = f"http://127.0.0.1:{PORT}"
+BRIDGE_URL = f"http://127.0.0.1:{BRIDGE_PORT}"
 VAULT_ID = "vault-frontend-snapshot-smoke"
 
 
@@ -61,6 +63,30 @@ def wait_for_server() -> None:
             pass
         time.sleep(0.25)
     raise RuntimeError("server did not become ready")
+
+
+def request_bridge_json(path: str) -> tuple[int, dict[str, Any]]:
+    request = urllib.request.Request(f"{BRIDGE_URL}{path}", method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            raw = response.read()
+            return response.status, json.loads(raw.decode("utf-8")) if raw else {}
+    except urllib.error.HTTPError as error:
+        raw = error.read()
+        return error.code, json.loads(raw.decode("utf-8")) if raw else {}
+
+
+def wait_for_bridge() -> None:
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        try:
+            status, payload = request_bridge_json("/health")
+            if status == 200 and payload.get("ok") is True:
+                return
+        except OSError:
+            pass
+        time.sleep(0.25)
+    raise RuntimeError("sync bridge did not become ready")
 
 
 def register_device() -> tuple[str, str]:
@@ -173,6 +199,32 @@ def main() -> int:
             assert payload["device_id"] == device_id, payload
             assert payload["sync_center"]["panel"]["level"] in {"success", "info", "warning", "danger"}, payload
 
+            bridge_env = {
+                **snapshot_env,
+                "NOTEAPP_SYNC_BRIDGE_PORT": str(BRIDGE_PORT),
+            }
+            bridge = subprocess.Popen(
+                ["node", "scripts/sync-shell-bridge.mjs"],
+                cwd=FRONTEND_ROOT,
+                env=bridge_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            try:
+                wait_for_bridge()
+                status, bridge_payload = request_bridge_json("/api/sync/snapshot")
+                assert status == 200, bridge_payload
+                assert bridge_payload["generated_at_ms"] == 1770002000100, bridge_payload
+                assert bridge_payload["vault_id"] == VAULT_ID, bridge_payload
+                assert bridge_payload["device_id"] == device_id, bridge_payload
+            finally:
+                bridge.terminate()
+                try:
+                    bridge.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    bridge.kill()
+
             print(
                 json.dumps(
                     {
@@ -181,6 +233,7 @@ def main() -> int:
                         "vault_id": payload["vault_id"],
                         "device_id": payload["device_id"],
                         "level": payload["sync_center"]["panel"]["level"],
+                        "bridge_url": BRIDGE_URL,
                     },
                     indent=2,
                     sort_keys=True,
