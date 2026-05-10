@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -41,6 +42,7 @@ It forwards to:
   POST /api/sync/actions/:id     npm run sync:action equivalent
   GET  /api/sync/live            Read current live snapshot without running CLI
   GET  /api/settings/snapshot    npm run settings:snapshot equivalent
+  POST /api/settings/snapshot    npm run settings:write equivalent
   GET  /api/settings/live        Read current settings snapshot without running CLI
   GET  /health                   Health check
 `);
@@ -70,6 +72,24 @@ function jsonResponse(request, response, statusCode, payload) {
     'content-type': 'application/json; charset=utf-8',
   });
   response.end(JSON.stringify(payload, null, 2));
+}
+
+function readRequestBody(request) {
+  return new Promise((resolveBody, rejectBody) => {
+    const chunks = [];
+    let size = 0;
+    request.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > 65536) {
+        rejectBody(new Error('request body is too large'));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on('end', () => resolveBody(Buffer.concat(chunks).toString('utf8')));
+    request.on('error', rejectBody);
+  });
 }
 
 function runScript(scriptName, extraEnv = {}) {
@@ -128,6 +148,24 @@ function actionIdFromPath(pathname) {
 
 function errorPayload(error) {
   const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('request body is too large') || message.includes('Unexpected end of JSON input')) {
+    return {
+      statusCode: 400,
+      payload: {
+        code: 'invalid_request',
+        message,
+      },
+    };
+  }
+  if (message.includes('local settings') || message.includes('JSON file must contain an object')) {
+    return {
+      statusCode: 400,
+      payload: {
+        code: 'invalid_settings',
+        message,
+      },
+    };
+  }
   if (message.includes('sync action not found')) {
     return {
       statusCode: 404,
@@ -159,7 +197,7 @@ if (!allowRemoteHost && !isLoopbackHost(host)) {
   process.exit(1);
 }
 
-const server = createServer((request, response) => {
+const server = createServer(async (request, response) => {
   if (!isAllowedOrigin(request.headers.origin)) {
     response.writeHead(403, {
       'cache-control': 'no-store',
@@ -221,6 +259,24 @@ const server = createServer((request, response) => {
       runScript('write-local-settings-snapshot.mjs', {
         NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
       });
+      jsonResponse(request, response, 200, readSettingsSnapshot());
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/settings/snapshot') {
+      const rawBody = await readRequestBody(request);
+      const payload = JSON.parse(rawBody);
+      const tempRoot = mkdtempSync(resolve(tmpdir(), 'noteapp-settings-'));
+      try {
+        const inputPath = resolve(tempRoot, 'settings.json');
+        writeFileSync(inputPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+        runScript('write-local-settings.mjs', {
+          NOTEAPP_SETTINGS_INPUT_JSON: inputPath,
+          NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
+        });
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
+      }
       jsonResponse(request, response, 200, readSettingsSnapshot());
       return;
     }

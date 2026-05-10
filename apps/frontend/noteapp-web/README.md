@@ -57,6 +57,13 @@ Generate the local settings snapshot consumed by the Settings panes:
 npm run settings:snapshot
 ```
 
+Write local settings and refresh the same live fixture:
+
+```powershell
+$env:NOTEAPP_SETTINGS_INPUT_JSON='C:\vaults\pkb-settings.json'
+npm run settings:write
+```
+
 Execute an action id from the snapshot and refresh the same live fixture:
 
 ```powershell
@@ -79,6 +86,7 @@ GET  http://127.0.0.1:3187/api/sync/snapshot
 POST http://127.0.0.1:3187/api/sync/actions/<action-id>
 GET  http://127.0.0.1:3187/api/sync/live
 GET  http://127.0.0.1:3187/api/settings/snapshot
+POST http://127.0.0.1:3187/api/settings/snapshot
 GET  http://127.0.0.1:3187/api/settings/live
 ```
 

@@ -69,9 +69,20 @@ def request_bridge_json(
     path: str,
     *,
     method: str = "GET",
+    payload: Optional[dict[str, Any]] = None,
     headers: Optional[dict[str, str]] = None,
 ) -> tuple[int, dict[str, Any]]:
-    request = urllib.request.Request(f"{BRIDGE_URL}{path}", headers=headers or {}, method=method)
+    body = None
+    resolved_headers = headers or {}
+    if payload is not None:
+        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        resolved_headers = {**resolved_headers, "Content-Type": "application/json"}
+    request = urllib.request.Request(
+        f"{BRIDGE_URL}{path}",
+        data=body,
+        headers=resolved_headers,
+        method=method,
+    )
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             raw = response.read()
@@ -304,9 +315,32 @@ def main() -> int:
                 assert settings_bridge_payload["vault_id"] == VAULT_ID, settings_bridge_payload
                 assert settings_bridge_payload["device_id"] == device_id, settings_bridge_payload
                 assert settings_bridge_payload["appearance"]["theme"] == "light", settings_bridge_payload
+                status, written_settings_payload = request_bridge_json(
+                    "/api/settings/snapshot",
+                    method="POST",
+                    payload={
+                        "appearance": {"theme": "system"},
+                        "ai": {
+                            "local_model_status": "disabled",
+                            "embedding_status": "ready",
+                        },
+                    },
+                )
+                assert status == 200, written_settings_payload
+                assert written_settings_payload["source"] == "file", written_settings_payload
+                assert written_settings_payload["appearance"]["theme"] == "system", written_settings_payload
+                assert written_settings_payload["ai"]["local_model_status"] == "disabled", written_settings_payload
+                assert written_settings_payload["ai"]["embedding_status"] == "ready", written_settings_payload
+                assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+                    "appearance": {"theme": "system"},
+                    "ai": {
+                        "local_model_status": "disabled",
+                        "embedding_status": "ready",
+                    },
+                }
                 status, live_settings_payload = request_bridge_json("/api/settings/live")
                 assert status == 200, live_settings_payload
-                assert live_settings_payload == settings_bridge_payload, live_settings_payload
+                assert live_settings_payload == written_settings_payload, live_settings_payload
                 status, missing_action = request_bridge_json(
                     "/api/sync/actions/not-a-real-action",
                     method="POST",
