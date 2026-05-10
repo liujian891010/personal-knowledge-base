@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const scriptPath = fileURLToPath(import.meta.url);
 const appRoot = resolve(scriptPath, '..', '..');
 const defaultSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'live-sync-shell.json');
+const defaultSettingsSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'local-settings-snapshot.json');
 const host = process.env.NOTEAPP_SYNC_BRIDGE_HOST || '127.0.0.1';
 const port = Number(process.env.NOTEAPP_SYNC_BRIDGE_PORT || 3187);
 const allowRemoteHost = process.env.NOTEAPP_SYNC_BRIDGE_ALLOW_REMOTE === 'true';
@@ -14,6 +15,9 @@ const allowedOrigin = process.env.NOTEAPP_SYNC_BRIDGE_ORIGIN || 'http://127.0.0.
 const snapshotPath = process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT
   ? resolve(process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT)
   : defaultSnapshotPath;
+const settingsSnapshotPath = process.env.NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT
+  ? resolve(process.env.NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT)
+  : defaultSettingsSnapshotPath;
 
 const args = new Set(process.argv.slice(2));
 
@@ -29,11 +33,15 @@ Environment:
                                   Set true to allow non-loopback hosts
   NOTEAPP_SYNC_BRIDGE_ORIGIN     CORS origin, default http://127.0.0.1:3000
   NOTEAPP_SYNC_SNAPSHOT_OUTPUT   Output JSON path, default public/fixtures/live-sync-shell.json
+  NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT
+                                  Output JSON path, default public/fixtures/local-settings-snapshot.json
 
 It forwards to:
   GET  /api/sync/snapshot        npm run sync:snapshot equivalent
   POST /api/sync/actions/:id     npm run sync:action equivalent
   GET  /api/sync/live            Read current live snapshot without running CLI
+  GET  /api/settings/snapshot    npm run settings:snapshot equivalent
+  GET  /api/settings/live        Read current settings snapshot without running CLI
   GET  /health                   Health check
 `);
 }
@@ -70,7 +78,6 @@ function runScript(scriptName, extraEnv = {}) {
     env: {
       ...process.env,
       ...extraEnv,
-      NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
     },
     encoding: 'utf8',
     stdout: 'pipe',
@@ -98,6 +105,13 @@ function readSnapshot() {
     throw new Error(`sync snapshot was not found: ${snapshotPath}`);
   }
   return JSON.parse(readFileSync(snapshotPath, 'utf8'));
+}
+
+function readSettingsSnapshot() {
+  if (!existsSync(settingsSnapshotPath)) {
+    throw new Error(`settings snapshot was not found: ${settingsSnapshotPath}`);
+  }
+  return JSON.parse(readFileSync(settingsSnapshotPath, 'utf8'));
 }
 
 function actionIdFromPath(pathname) {
@@ -179,6 +193,7 @@ const server = createServer((request, response) => {
         port,
         allowRemoteHost,
         snapshotPath,
+        settingsSnapshotPath,
         allowedOrigin,
       });
       return;
@@ -190,8 +205,23 @@ const server = createServer((request, response) => {
     }
 
     if (request.method === 'GET' && url.pathname === '/api/sync/snapshot') {
-      runScript('write-live-sync-shell.mjs');
+      runScript('write-live-sync-shell.mjs', {
+        NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
+      });
       jsonResponse(request, response, 200, readSnapshot());
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/settings/live') {
+      jsonResponse(request, response, 200, readSettingsSnapshot());
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/settings/snapshot') {
+      runScript('write-local-settings-snapshot.mjs', {
+        NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
+      });
+      jsonResponse(request, response, 200, readSettingsSnapshot());
       return;
     }
 
@@ -199,6 +229,7 @@ const server = createServer((request, response) => {
     if (request.method === 'POST' && actionId) {
       runScript('execute-sync-action.mjs', {
         NOTEAPP_SYNC_ACTION_ID: actionId,
+        NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
       });
       jsonResponse(request, response, 200, readSnapshot());
       return;
