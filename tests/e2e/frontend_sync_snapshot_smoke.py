@@ -189,14 +189,15 @@ def main() -> int:
         try:
             wait_for_server()
             device_id, token = register_device()
-            vault_root = Path(work_dir) / "中文初始库"
+            vault_root = Path(work_dir) / "一级目录" / "中文初始库"
             output_path = Path(work_dir) / "live-sync-shell.json"
             settings_output_path = Path(work_dir) / "local-settings-snapshot.json"
             workspace_files_output_path = Path(work_dir) / "workspace-files.json"
             workspace_root_output_path = Path(work_dir) / "workspace-root.json"
-            picked_vault_root = Path(work_dir) / "中文工作区"
-            picked_vault_root.mkdir()
-            (picked_vault_root / "中文路径.md").write_bytes("# 中文标题\n\n从文件夹选择\n".encode("gb18030"))
+            picked_vault_root = Path(work_dir) / "一级目录" / "中文工作区"
+            picked_note_path = picked_vault_root / "二级目录" / "中文路径.md"
+            picked_note_path.parent.mkdir(parents=True)
+            picked_note_path.write_bytes("# 中文标题\n\n从文件夹选择\n".encode("gb18030"))
             pythonpath = os.pathsep.join([str(VAULT_CORE_SRC), str(ROOT)])
             cli_env = {
                 **os.environ,
@@ -363,9 +364,10 @@ def main() -> int:
                 assert root_payload["vault_root"] == str(vault_root), root_payload
                 assert root_payload["exists"] is True, root_payload
                 assert root_payload["initialized"] is True, root_payload
-                switched_vault_root = Path(work_dir) / "switched-vault"
-                switched_vault_root.mkdir()
-                switched_note_path = switched_vault_root / "Imported.md"
+                switched_vault_root = Path(work_dir) / "level-one" / "switched-vault"
+                switched_vault_root.mkdir(parents=True)
+                switched_note_path = switched_vault_root / "Nested" / "Imported.md"
+                switched_note_path.parent.mkdir()
                 switched_note_path.write_text("# Imported\n\nfrom selected folder\n", encoding="utf-8", newline="\n")
                 status, switched_settings = request_bridge_json(
                     "/api/workspace/root",
@@ -384,7 +386,7 @@ def main() -> int:
                 status, switched_workspace_payload = request_bridge_json("/api/workspace/files")
                 assert status == 200, switched_workspace_payload
                 assert switched_workspace_payload["total_count"] == 1, switched_workspace_payload
-                assert switched_workspace_payload["files"][0]["path"] == "Imported.md", switched_workspace_payload
+                assert switched_workspace_payload["files"][0]["path"] == "Nested/Imported.md", switched_workspace_payload
                 status, switched_sync_payload = request_bridge_json("/api/sync/live")
                 assert status == 200, switched_sync_payload
                 assert switched_sync_payload["sync_center"]["panel"]["change_badge_count"] == 1, switched_sync_payload
@@ -397,13 +399,13 @@ def main() -> int:
                 status, picked_workspace_payload = request_bridge_json("/api/workspace/files")
                 assert status == 200, picked_workspace_payload
                 assert picked_workspace_payload["total_count"] == 1, picked_workspace_payload
-                assert picked_workspace_payload["files"][0]["path"] == "中文路径.md", picked_workspace_payload
+                assert picked_workspace_payload["files"][0]["path"] == "二级目录/中文路径.md", picked_workspace_payload
                 picked_file_id = picked_workspace_payload["files"][0]["file_id"]
                 status, picked_content_payload = request_bridge_json(
                     f"/api/workspace/files/{picked_file_id}/content"
                 )
                 assert status == 200, picked_content_payload
-                assert picked_content_payload["path"] == "中文路径.md", picked_content_payload
+                assert picked_content_payload["path"] == "二级目录/中文路径.md", picked_content_payload
                 assert picked_content_payload["encoding"] == "gb18030", picked_content_payload
                 assert picked_content_payload["text"] == "# 中文标题\n\n从文件夹选择\n", picked_content_payload
                 status, _ = request_bridge_json(

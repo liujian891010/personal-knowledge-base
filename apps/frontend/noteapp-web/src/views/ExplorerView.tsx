@@ -20,7 +20,7 @@ function fileName(path: string): string {
 
 function folderName(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts.length > 1 ? parts[0] : '知识库根目录';
+  return parts.length > 1 ? parts.slice(0, -1).join('/') : '知识库根目录';
 }
 
 function formatBytes(value: number | null): string {
