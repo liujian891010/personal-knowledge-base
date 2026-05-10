@@ -11,34 +11,65 @@ import {
 const syncBridgeUrl = 'http://127.0.0.1:3187';
 const fallbackSnapshot = parseSyncShellSnapshot(bundledExampleSnapshot);
 
+type SyncShellSource = 'bridge' | 'live-fixture' | 'example';
+
+interface SnapshotLoadResult {
+  snapshot: SyncShellSnapshot;
+  source: SyncShellSource;
+  error: string | null;
+}
+
 export interface SyncShellController {
   summary: SyncShellSummary;
+  source: SyncShellSource;
+  lastError: string | null;
   isRefreshing: boolean;
   isExecuting: boolean;
   refresh: () => Promise<void>;
   executePrimaryAction: () => Promise<void>;
 }
 
-async function loadSnapshot(): Promise<SyncShellSnapshot> {
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function loadSnapshot(): Promise<SnapshotLoadResult> {
+  let bridgeError: string | null = null;
+  let fixtureError: string | null = null;
+
   try {
     const bridgeResponse = await fetch(`${syncBridgeUrl}/api/sync/snapshot`, { cache: 'no-store' });
     if (bridgeResponse.ok) {
-      return parseSyncShellSnapshot(await bridgeResponse.json());
+      return {
+        snapshot: parseSyncShellSnapshot(await bridgeResponse.json()),
+        source: 'bridge',
+        error: null,
+      };
     }
-  } catch {
-    // Fall through to static live fixture and bundled example.
+    bridgeError = `bridge returned ${bridgeResponse.status}`;
+  } catch (error) {
+    bridgeError = `bridge unavailable: ${errorMessage(error)}`;
   }
 
   try {
     const fixtureResponse = await fetch('/fixtures/live-sync-shell.json', { cache: 'no-store' });
     if (fixtureResponse.ok) {
-      return parseSyncShellSnapshot(await fixtureResponse.json());
+      return {
+        snapshot: parseSyncShellSnapshot(await fixtureResponse.json()),
+        source: 'live-fixture',
+        error: bridgeError,
+      };
     }
-  } catch {
-    // Fall through to bundled example.
+    fixtureError = `live fixture returned ${fixtureResponse.status}`;
+  } catch (error) {
+    fixtureError = `live fixture unavailable: ${errorMessage(error)}`;
   }
 
-  return fallbackSnapshot;
+  return {
+    snapshot: fallbackSnapshot,
+    source: 'example',
+    error: [bridgeError, fixtureError].filter(Boolean).join('; '),
+  };
 }
 
 async function executeAction(actionId: string): Promise<SyncShellSnapshot> {
@@ -53,6 +84,8 @@ async function executeAction(actionId: string): Promise<SyncShellSnapshot> {
 
 export function useSyncShellController(): SyncShellController {
   const [snapshot, setSnapshot] = useState<SyncShellSnapshot>(fallbackSnapshot);
+  const [source, setSource] = useState<SyncShellSource>('example');
+  const [lastError, setLastError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
 
@@ -61,11 +94,13 @@ export function useSyncShellController(): SyncShellController {
 
     setIsRefreshing(true);
     loadSnapshot()
-      .then((loaded) => {
+      .then((result) => {
         if (cancelled) {
           return;
         }
-        setSnapshot(loaded);
+        setSnapshot(result.snapshot);
+        setSource(result.source);
+        setLastError(result.error);
       })
       .finally(() => {
         if (!cancelled) {
@@ -81,7 +116,10 @@ export function useSyncShellController(): SyncShellController {
   const refresh = async () => {
     setIsRefreshing(true);
     try {
-      setSnapshot(await loadSnapshot());
+      const result = await loadSnapshot();
+      setSnapshot(result.snapshot);
+      setSource(result.source);
+      setLastError(result.error);
     } finally {
       setIsRefreshing(false);
     }
@@ -95,6 +133,10 @@ export function useSyncShellController(): SyncShellController {
     setIsExecuting(true);
     try {
       setSnapshot(await executeAction(action.action_id));
+      setSource('bridge');
+      setLastError(null);
+    } catch (error) {
+      setLastError(errorMessage(error));
     } finally {
       setIsExecuting(false);
     }
@@ -103,6 +145,8 @@ export function useSyncShellController(): SyncShellController {
   const summary = useMemo(() => summarizeSyncShellSnapshot(snapshot), [snapshot]);
   return {
     summary,
+    source,
+    lastError,
     isRefreshing,
     isExecuting,
     refresh,
