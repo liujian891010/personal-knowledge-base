@@ -9,6 +9,7 @@ const appRoot = resolve(scriptPath, '..', '..');
 const defaultSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'live-sync-shell.json');
 const host = process.env.NOTEAPP_SYNC_BRIDGE_HOST || '127.0.0.1';
 const port = Number(process.env.NOTEAPP_SYNC_BRIDGE_PORT || 3187);
+const allowRemoteHost = process.env.NOTEAPP_SYNC_BRIDGE_ALLOW_REMOTE === 'true';
 const allowedOrigin = process.env.NOTEAPP_SYNC_BRIDGE_ORIGIN || 'http://127.0.0.1:3000';
 const snapshotPath = process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT
   ? resolve(process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT)
@@ -24,6 +25,8 @@ Local-only HTTP bridge for the web UI sync shell.
 Environment:
   NOTEAPP_SYNC_BRIDGE_HOST       Host, default 127.0.0.1
   NOTEAPP_SYNC_BRIDGE_PORT       Port, default 3187
+  NOTEAPP_SYNC_BRIDGE_ALLOW_REMOTE
+                                  Set true to allow non-loopback hosts
   NOTEAPP_SYNC_BRIDGE_ORIGIN     CORS origin, default http://127.0.0.1:3000
   NOTEAPP_SYNC_SNAPSHOT_OUTPUT   Output JSON path, default public/fixtures/live-sync-shell.json
 
@@ -37,6 +40,10 @@ It forwards to:
 
 function isAllowedOrigin(origin) {
   return !origin || allowedOrigin === '*' || origin === allowedOrigin;
+}
+
+function isLoopbackHost(value) {
+  return value === '127.0.0.1' || value === 'localhost' || value === '::1';
 }
 
 function corsOrigin(origin) {
@@ -108,6 +115,14 @@ function actionIdFromPath(pathname) {
 if (args.has('--help') || args.has('-h')) {
   printHelp();
   process.exit(0);
+}
+
+if (!allowRemoteHost && !isLoopbackHost(host)) {
+  console.error(
+    `Refusing to bind sync bridge to non-loopback host ${host}. ` +
+      'Set NOTEAPP_SYNC_BRIDGE_ALLOW_REMOTE=true to override.',
+  );
+  process.exit(1);
 }
 
 const server = createServer((request, response) => {

@@ -125,6 +125,26 @@ def run_checked(command: list[str], *, cwd: Path, env: dict[str, str]) -> None:
         )
 
 
+def assert_bridge_rejects_remote_host(env: dict[str, str]) -> None:
+    result = subprocess.run(
+        ["node", "scripts/sync-shell-bridge.mjs"],
+        cwd=FRONTEND_ROOT,
+        env={
+            **env,
+            "NOTEAPP_SYNC_BRIDGE_HOST": "0.0.0.0",
+        },
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode != 0, result.stdout
+    assert "Refusing to bind sync bridge to non-loopback host" in result.stdout, result.stdout
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as data_dir, tempfile.TemporaryDirectory() as work_dir:
         server_env = dict(os.environ)
@@ -208,6 +228,7 @@ def main() -> int:
                 **snapshot_env,
                 "NOTEAPP_SYNC_BRIDGE_PORT": str(BRIDGE_PORT),
             }
+            assert_bridge_rejects_remote_host(bridge_env)
             bridge = subprocess.Popen(
                 ["node", "scripts/sync-shell-bridge.mjs"],
                 cwd=FRONTEND_ROOT,
