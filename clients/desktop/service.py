@@ -666,6 +666,32 @@ class DesktopLocalSettingsSnapshot:
 
 
 @dataclass(frozen=True)
+class DesktopWorkspaceFileEntry:
+    file_id: str
+    path: str
+    type: str
+    status: str
+    updated_at: int
+    exists_on_disk: bool
+    size_bytes: Optional[int]
+    content_hash: Optional[str] = None
+    last_known_revision: Optional[int] = None
+    conflict_source_file_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class DesktopWorkspaceFilesSnapshot:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    files: list[DesktopWorkspaceFileEntry]
+    total_count: int
+    active_count: int
+    missing_count: int
+
+
+@dataclass(frozen=True)
 class DesktopSyncPanelAction:
     action_id: str
     label: str
@@ -802,6 +828,38 @@ class DesktopSyncService:
 
     def load_snapshot(self) -> DesktopWorkspaceSnapshot:
         return self.workspace.load_snapshot()
+
+    def list_workspace_files(self) -> DesktopWorkspaceFilesSnapshot:
+        snapshot = self.load_snapshot()
+        files: list[DesktopWorkspaceFileEntry] = []
+        for record in snapshot.document.sorted_files():
+            disk_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            exists_on_disk = disk_path.exists() and disk_path.is_file()
+            size_bytes = disk_path.stat().st_size if exists_on_disk else None
+            files.append(
+                DesktopWorkspaceFileEntry(
+                    file_id=record.file_id,
+                    path=record.path,
+                    type=record.type,
+                    status=record.status,
+                    updated_at=record.updated_at,
+                    exists_on_disk=exists_on_disk,
+                    size_bytes=size_bytes,
+                    content_hash=record.content_hash,
+                    last_known_revision=record.last_known_revision,
+                    conflict_source_file_id=record.conflict_source_file_id,
+                )
+            )
+        return DesktopWorkspaceFilesSnapshot(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            files=files,
+            total_count=len(files),
+            active_count=sum(1 for item in files if item.status == "active"),
+            missing_count=sum(1 for item in files if item.status == "active" and not item.exists_on_disk),
+        )
 
     def load_local_settings_snapshot(self) -> DesktopLocalSettingsSnapshot:
         settings_path = self.workspace.paths.settings_path

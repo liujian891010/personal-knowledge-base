@@ -148,6 +148,30 @@ class FakeService:
         self.calls.append(("status", None))
         return {"kind": "status", "files": 1}
 
+    def list_workspace_files(self):
+        self.calls.append(("workspace-files", None))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "files": [
+                {
+                    "file_id": "file-a",
+                    "path": "Notes/A.md",
+                    "type": "note",
+                    "status": "active",
+                    "updated_at": 1770000040000,
+                    "exists_on_disk": True,
+                    "size_bytes": 123,
+                    "content_hash": "sha256:aaa",
+                }
+            ],
+            "total_count": 1,
+            "active_count": 1,
+            "missing_count": 0,
+        }
+
     def load_local_settings_snapshot(self):
         self.calls.append(("local-settings-snapshot", None))
         return {
@@ -862,6 +886,26 @@ class DesktopCliTests(unittest.TestCase):
         self.assertTrue(payload["sync"]["bearer_token_configured"])
         self.assertEqual(payload["appearance"]["theme"], "dark")
         self.assertEqual(self.service.calls, [("local-settings-snapshot", None)])
+
+    def test_workspace_files_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "workspace-files",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["schema_version"], "v1")
+        self.assertEqual(payload["total_count"], 1)
+        self.assertEqual(payload["files"][0]["path"], "Notes/A.md")
+        self.assertTrue(payload["files"][0]["exists_on_disk"])
+        self.assertEqual(self.service.calls, [("workspace-files", None)])
 
     def test_write_local_settings_command_routes_to_service(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
