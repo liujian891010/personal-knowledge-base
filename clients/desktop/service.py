@@ -32,6 +32,7 @@ from vault_core import (
     cleanup_failed_commit_submission,
     finalize_commit_submission_cleanup,
     FileMapDocument,
+    FileRecord,
     isolate_staging_orphans,
     load_commit_intent_journal,
     load_filemap,
@@ -96,6 +97,16 @@ def _write_bytes_atomic(path: Path, payload: bytes) -> None:
 
 def _compute_content_hash(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _decode_workspace_text(payload: bytes, *, file_id: str) -> tuple[str, str]:
+    encodings = ("utf-8-sig",) if payload.startswith(b"\xef\xbb\xbf") else ("utf-8", "gb18030")
+    for encoding in encodings:
+        try:
+            return payload.decode(encoding), encoding
+        except UnicodeDecodeError:
+            continue
+    raise ValueError(f"workspace file is not valid UTF-8 or GB18030 text: {file_id}")
 
 
 def _append_jsonl_record(path: Path, payload: dict[str, object]) -> None:
@@ -165,6 +176,7 @@ _LOCAL_SETTINGS_EMBEDDING_STATUSES = {
     "error",
 }
 _WORKSPACE_FILE_CONTENT_MAX_BYTES = 1_000_000
+_WORKSPACE_IMPORTABLE_SUFFIXES = {".md", ".markdown", ".txt"}
 
 
 def _require_local_settings_object(payload: Mapping[str, Any], key: str) -> dict[str, Any]:
@@ -233,6 +245,48 @@ def _normalize_local_settings_payload(payload: Mapping[str, Any]) -> dict[str, o
             ),
         },
     }
+
+
+def _workspace_posix_relative_path(vault_root: Path, path: Path) -> str:
+    return PurePosixPath(*path.relative_to(vault_root).parts).as_posix()
+
+
+def _is_existing_workspace_import_path(relative_path: str) -> bool:
+    normalized = PurePosixPath(relative_path)
+    if normalized.parts[:1] == (NOTEAPP_DIRNAME,):
+        return False
+    if normalized.parts == (VAULTINFO_FILENAME,):
+        return False
+    if normalized.parts[:2] == (".ai", "raw"):
+        return False
+    if len(normalized.parts) == 2 and normalized.parts[0] == ".ai" and normalized.parts[1].lower() == "log.md":
+        return False
+    return normalized.suffix.lower() in _WORKSPACE_IMPORTABLE_SUFFIXES
+
+
+def _infer_imported_workspace_file_type(relative_path: str) -> str:
+    suffix = PurePosixPath(relative_path).suffix.lower()
+    if suffix in {".md", ".markdown"}:
+        return "note"
+    return "attachment"
+
+
+def _infer_imported_workspace_mime_type(relative_path: str) -> Optional[str]:
+    suffix = PurePosixPath(relative_path).suffix.lower()
+    if suffix in {".md", ".markdown"}:
+        return "text/markdown"
+    if suffix == ".txt":
+        return "text/plain"
+    return None
+
+
+def _iter_existing_workspace_import_files(vault_root: Path) -> Iterable[tuple[str, Path]]:
+    for path in vault_root.rglob("*"):
+        if not path.is_file():
+            continue
+        relative_path = _workspace_posix_relative_path(vault_root, path)
+        if _is_existing_workspace_import_path(relative_path):
+            yield relative_path, path
 
 
 def _build_pull_apply_ops_hash(plan: "DesktopPullRequiredBlobPlan") -> str:
@@ -849,6 +903,44 @@ class DesktopSyncService:
     def load_snapshot(self) -> DesktopWorkspaceSnapshot:
         return self.workspace.load_snapshot()
 
+    def import_existing_workspace_files_if_empty(self) -> DesktopWorkspaceFilesSnapshot:
+        snapshot = self.load_snapshot()
+        if snapshot.document.files:
+            return self.list_workspace_files()
+
+        records: list[FileRecord] = []
+        for relative_path, disk_path in sorted(
+            _iter_existing_workspace_import_files(self.workspace.vault_root),
+            key=lambda item: item[0],
+        ):
+            payload_size = disk_path.stat().st_size
+            mtime_ms = disk_path.stat().st_mtime_ns // 1_000_000
+            mime_type = _infer_imported_workspace_mime_type(relative_path)
+            records.append(
+                FileRecord(
+                    file_id=self.file_id_builder(relative_path),
+                    path=relative_path,
+                    type=_infer_imported_workspace_file_type(relative_path),
+                    status="active",
+                    updated_at=mtime_ms,
+                    meta={
+                        "size": payload_size,
+                        "mtime": mtime_ms,
+                        **({} if mime_type is None else {"mime_type": mime_type}),
+                    },
+                )
+            )
+
+        if not records:
+            return self.list_workspace_files()
+
+        updated_at = max(snapshot.document.updated_at, *(record.updated_at for record in records))
+        write_filemap_atomic(
+            self.workspace.paths.filemap_path,
+            snapshot.document.replace_files(records, updated_at=updated_at),
+        )
+        return self.list_workspace_files()
+
     def list_workspace_files(self) -> DesktopWorkspaceFilesSnapshot:
         snapshot = self.load_snapshot()
         files: list[DesktopWorkspaceFileEntry] = []
@@ -894,10 +986,7 @@ class DesktopSyncService:
         payload = content_path.read_bytes()
         if len(payload) > _WORKSPACE_FILE_CONTENT_MAX_BYTES:
             raise ValueError(f"workspace file is too large to render: {file_id}")
-        try:
-            text = payload.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError(f"workspace file is not valid UTF-8: {file_id}") from exc
+        text, encoding = _decode_workspace_text(payload, file_id=file_id)
         stat = content_path.stat()
         return DesktopWorkspaceFileContent(
             schema_version="v1",
@@ -913,6 +1002,7 @@ class DesktopSyncService:
             content_hash=_compute_content_hash(payload),
             tracked_content_hash=record.content_hash,
             text=text,
+            encoding=encoding,
         )
 
     def write_workspace_file_content(self, file_id: str, text: str) -> DesktopWorkspaceFileContent:
@@ -925,7 +1015,8 @@ class DesktopSyncService:
         content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
         if not content_path.exists() or not content_path.is_file():
             raise FileNotFoundError(f"workspace file content not found: {file_id}")
-        _write_bytes_atomic(content_path, text.encode("utf-8"))
+        _, encoding = _decode_workspace_text(content_path.read_bytes(), file_id=file_id)
+        _write_bytes_atomic(content_path, text.encode(encoding))
         return self.load_workspace_file_content(file_id)
 
     def load_local_settings_snapshot(self) -> DesktopLocalSettingsSnapshot:

@@ -148,6 +148,10 @@ class FakeService:
         self.calls.append(("status", None))
         return {"kind": "status", "files": 1}
 
+    def import_existing_workspace_files_if_empty(self):
+        self.calls.append(("import-existing-workspace-files", None))
+        return self.list_workspace_files()
+
     def list_workspace_files(self):
         self.calls.append(("workspace-files", None))
         return {
@@ -944,6 +948,26 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(payload["files"][0]["path"], "Notes/A.md")
         self.assertTrue(payload["files"][0]["exists_on_disk"])
         self.assertEqual(self.service.calls, [("workspace-files", None)])
+
+    def test_import_existing_workspace_files_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "import-existing-workspace-files",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["total_count"], 1)
+        self.assertEqual(
+            self.service.calls,
+            [("import-existing-workspace-files", None), ("workspace-files", None)],
+        )
 
     def test_workspace_file_content_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(

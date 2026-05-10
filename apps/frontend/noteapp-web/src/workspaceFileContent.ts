@@ -12,7 +12,7 @@ export interface WorkspaceFileContent {
   content_hash?: string | null;
   tracked_content_hash?: string | null;
   text: string;
-  encoding: 'utf-8';
+  encoding: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -40,7 +40,7 @@ export function parseWorkspaceFileContent(payload: unknown): WorkspaceFileConten
     throw new Error('workspace file content must be an object');
   }
   const encoding = requireString(payload, 'encoding');
-  if (encoding !== 'utf-8') {
+  if (!['utf-8', 'utf-8-sig', 'gb18030'].includes(encoding)) {
     throw new Error(`unsupported workspace file content encoding: ${encoding}`);
   }
   return {
