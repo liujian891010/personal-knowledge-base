@@ -191,6 +191,7 @@ def main() -> int:
             output_path = Path(work_dir) / "live-sync-shell.json"
             settings_output_path = Path(work_dir) / "local-settings-snapshot.json"
             workspace_files_output_path = Path(work_dir) / "workspace-files.json"
+            workspace_root_output_path = Path(work_dir) / "workspace-root.json"
             pythonpath = os.pathsep.join([str(VAULT_CORE_SRC), str(ROOT)])
             cli_env = {
                 **os.environ,
@@ -276,6 +277,7 @@ def main() -> int:
                 "NOTEAPP_SYNC_SNAPSHOT_OUTPUT": str(output_path),
                 "NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT": str(settings_output_path),
                 "NOTEAPP_WORKSPACE_FILES_OUTPUT": str(workspace_files_output_path),
+                "NOTEAPP_WORKSPACE_ROOT_OUTPUT": str(workspace_root_output_path),
             }
             run_checked(
                 ["node", "scripts/write-live-sync-shell.mjs"],
@@ -343,11 +345,40 @@ def main() -> int:
                 assert allowed_origin["allowRemoteHost"] is False, allowed_origin
                 assert allowed_origin["settingsSnapshotPath"] == str(settings_output_path), allowed_origin
                 assert allowed_origin["workspaceFilesPath"] == str(workspace_files_output_path), allowed_origin
+                assert allowed_origin["workspaceRootPath"] == str(workspace_root_output_path), allowed_origin
+                assert allowed_origin["vaultRoot"] == str(vault_root), allowed_origin
                 status, rejected_origin = request_bridge_json(
                     "/health",
                     headers={"Origin": "http://evil.example"},
                 )
                 assert status == 403, rejected_origin
+                status, root_payload = request_bridge_json("/api/workspace/root")
+                assert status == 200, root_payload
+                assert root_payload["vault_root"] == str(vault_root), root_payload
+                assert root_payload["exists"] is True, root_payload
+                assert root_payload["initialized"] is True, root_payload
+                switched_vault_root = Path(work_dir) / "switched-vault"
+                switched_vault_root.mkdir()
+                status, switched_settings = request_bridge_json(
+                    "/api/workspace/root",
+                    method="POST",
+                    payload={"vault_root": str(switched_vault_root)},
+                )
+                assert status == 200, switched_settings
+                assert switched_settings["vault_root"] == str(switched_vault_root), switched_settings
+                assert (switched_vault_root / ".noteapp" / "filemap.json").exists(), switched_settings
+                assert json.loads(workspace_root_output_path.read_text(encoding="utf-8"))["vault_root"] == str(
+                    switched_vault_root
+                )
+                status, switched_root_payload = request_bridge_json("/api/workspace/root")
+                assert status == 200, switched_root_payload
+                assert switched_root_payload["vault_root"] == str(switched_vault_root), switched_root_payload
+                status, _ = request_bridge_json(
+                    "/api/workspace/root",
+                    method="POST",
+                    payload={"vault_root": str(vault_root)},
+                )
+                assert status == 200
                 status, bridge_payload = request_bridge_json("/api/sync/snapshot")
                 assert status == 200, bridge_payload
                 assert bridge_payload["generated_at_ms"] == 1770002000100, bridge_payload

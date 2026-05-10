@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -10,6 +10,7 @@ const appRoot = resolve(scriptPath, '..', '..');
 const defaultSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'live-sync-shell.json');
 const defaultSettingsSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'local-settings-snapshot.json');
 const defaultWorkspaceFilesPath = resolve(appRoot, 'public', 'fixtures', 'workspace-files.json');
+const defaultWorkspaceRootPath = resolve(appRoot, 'public', 'fixtures', 'workspace-root.json');
 const host = process.env.NOTEAPP_SYNC_BRIDGE_HOST || '127.0.0.1';
 const port = Number(process.env.NOTEAPP_SYNC_BRIDGE_PORT || 3187);
 const allowRemoteHost = process.env.NOTEAPP_SYNC_BRIDGE_ALLOW_REMOTE === 'true';
@@ -23,6 +24,11 @@ const settingsSnapshotPath = process.env.NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT
 const workspaceFilesPath = process.env.NOTEAPP_WORKSPACE_FILES_OUTPUT
   ? resolve(process.env.NOTEAPP_WORKSPACE_FILES_OUTPUT)
   : defaultWorkspaceFilesPath;
+const workspaceRootPath = process.env.NOTEAPP_WORKSPACE_ROOT_OUTPUT
+  ? resolve(process.env.NOTEAPP_WORKSPACE_ROOT_OUTPUT)
+  : defaultWorkspaceRootPath;
+const initialVaultRoot = process.env.NOTEAPP_VAULT_ROOT || '';
+let selectedVaultRoot = readPersistedWorkspaceRoot() || initialVaultRoot;
 
 const args = new Set(process.argv.slice(2));
 
@@ -41,6 +47,7 @@ Environment:
   NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT
                                   Output JSON path, default public/fixtures/local-settings-snapshot.json
   NOTEAPP_WORKSPACE_FILES_OUTPUT  Output JSON path, default public/fixtures/workspace-files.json
+  NOTEAPP_WORKSPACE_ROOT_OUTPUT   Selected workspace root JSON path, default public/fixtures/workspace-root.json
 
 It forwards to:
   GET  /api/sync/snapshot        npm run sync:snapshot equivalent
@@ -51,6 +58,8 @@ It forwards to:
   GET  /api/settings/live        Read current settings snapshot without running CLI
   GET  /api/workspace/files      npm run workspace:files equivalent
   GET  /api/workspace/live       Read current workspace files without running CLI
+  GET  /api/workspace/root       Read selected workspace root
+  POST /api/workspace/root       Validate and switch selected workspace root
   GET  /health                   Health check
 `);
 }
@@ -99,13 +108,50 @@ function readRequestBody(request) {
   });
 }
 
+function readPersistedWorkspaceRoot() {
+  if (!existsSync(workspaceRootPath)) {
+    return '';
+  }
+  try {
+    const payload = JSON.parse(readFileSync(workspaceRootPath, 'utf8'));
+    return typeof payload.vault_root === 'string' ? payload.vault_root : '';
+  } catch {
+    return '';
+  }
+}
+
+function persistWorkspaceRoot(vaultRoot) {
+  mkdirSync(resolve(workspaceRootPath, '..'), { recursive: true });
+  writeFileSync(
+    workspaceRootPath,
+    `${JSON.stringify(
+      {
+        schema_version: 'v1',
+        vault_root: vaultRoot,
+        updated_at_ms: Date.now(),
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  );
+}
+
+function bridgeEnv(extraEnv = {}) {
+  return {
+    ...process.env,
+    NOTEAPP_VAULT_ROOT: selectedVaultRoot,
+    ...extraEnv,
+  };
+}
+
 function runScript(scriptName, extraEnv = {}) {
+  if (!selectedVaultRoot || !selectedVaultRoot.trim()) {
+    throw new Error('workspace root is not configured');
+  }
   const result = spawnSync(process.execPath, [`scripts/${scriptName}`], {
     cwd: appRoot,
-    env: {
-      ...process.env,
-      ...extraEnv,
-    },
+    env: bridgeEnv(extraEnv),
     encoding: 'utf8',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -125,6 +171,113 @@ function runScript(scriptName, extraEnv = {}) {
         .join('\n'),
     );
   }
+}
+
+function runDesktopCli(commandArgs) {
+  if (!selectedVaultRoot || !selectedVaultRoot.trim()) {
+    throw new Error('workspace root is not configured');
+  }
+  const python = process.env.PYTHON || 'python';
+  const result = spawnSync(
+    python,
+    [
+      '-m',
+      'clients.desktop.cli',
+      '--vault-root',
+      selectedVaultRoot,
+      '--base-url',
+      requireBridgeEnv('NOTEAPP_SYNC_BASE_URL'),
+      '--vault-id',
+      requireBridgeEnv('NOTEAPP_VAULT_ID'),
+      '--device-id',
+      requireBridgeEnv('NOTEAPP_DEVICE_ID'),
+      ...(process.env.NOTEAPP_BEARER_TOKEN ? [`--bearer-token=${process.env.NOTEAPP_BEARER_TOKEN}`] : []),
+      ...commandArgs,
+    ],
+    {
+      cwd: resolve(appRoot, '..', '..', '..'),
+      env: bridgeEnv({
+        PYTHONPATH: buildPythonPath(),
+      }),
+      encoding: 'utf8',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  );
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      [
+        `desktop cli failed with exit code ${result.status}`,
+        result.stdout.trim(),
+        result.stderr.trim(),
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+  }
+}
+
+function requireBridgeEnv(name) {
+  const value = process.env[name];
+  if (!value || !value.trim()) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
+}
+
+function buildPythonPath() {
+  const repoRoot = resolve(appRoot, '..', '..', '..');
+  const entries = [
+    resolve(repoRoot, 'packages', 'vault-core', 'src'),
+    repoRoot,
+  ];
+  if (process.env.PYTHONPATH) {
+    entries.push(process.env.PYTHONPATH);
+  }
+  return entries.join(process.platform === 'win32' ? ';' : ':');
+}
+
+function ensureWorkspaceInitialized() {
+  runDesktopCli([
+    'init',
+    '--now-ms',
+    process.env.NOTEAPP_INIT_NOW_MS || String(Date.now()),
+  ]);
+}
+
+function workspaceRootPayload() {
+  const exists = Boolean(selectedVaultRoot) && existsSync(selectedVaultRoot);
+  const initialized = exists && existsSync(resolve(selectedVaultRoot, '.noteapp', 'filemap.json'));
+  return {
+    schema_version: 'v1',
+    vault_root: selectedVaultRoot,
+    source: selectedVaultRoot === initialVaultRoot ? 'environment' : 'runtime',
+    exists,
+    initialized,
+    config_path: workspaceRootPath,
+  };
+}
+
+function normalizeWorkspaceRootPayload(payload) {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('workspace root request must contain an object');
+  }
+  const value = payload.vault_root;
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('workspace root must be a non-empty string');
+  }
+  const resolved = resolve(value.trim());
+  if (!existsSync(resolved)) {
+    throw new Error(`workspace root does not exist: ${resolved}`);
+  }
+  if (!statSync(resolved).isDirectory()) {
+    throw new Error(`workspace root is not a directory: ${resolved}`);
+  }
+  return resolved;
 }
 
 function readSnapshot() {
@@ -175,7 +328,11 @@ function workspaceContentFileIdFromPath(pathname) {
 
 function errorPayload(error) {
   const message = error instanceof Error ? error.message : String(error);
-  if (message.includes('request body is too large') || message.includes('Unexpected end of JSON input')) {
+  if (
+    message.includes('request body is too large')
+    || message.includes('Unexpected end of JSON input')
+    || message.includes('workspace root')
+  ) {
     return {
       statusCode: 400,
       payload: {
@@ -260,6 +417,8 @@ const server = createServer(async (request, response) => {
         snapshotPath,
         settingsSnapshotPath,
         workspaceFilesPath,
+        workspaceRootPath,
+        vaultRoot: selectedVaultRoot,
         allowedOrigin,
       });
       return;
@@ -311,6 +470,30 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/api/workspace/live') {
       jsonResponse(request, response, 200, readWorkspaceFiles());
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/workspace/root') {
+      jsonResponse(request, response, 200, workspaceRootPayload());
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/workspace/root') {
+      const rawBody = await readRequestBody(request);
+      const payload = JSON.parse(rawBody);
+      selectedVaultRoot = normalizeWorkspaceRootPayload(payload);
+      persistWorkspaceRoot(selectedVaultRoot);
+      ensureWorkspaceInitialized();
+      runScript('write-local-settings-snapshot.mjs', {
+        NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
+      });
+      runScript('write-workspace-files.mjs', {
+        NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+      });
+      runScript('write-live-sync-shell.mjs', {
+        NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
+      });
+      jsonResponse(request, response, 200, readSettingsSnapshot());
       return;
     }
 

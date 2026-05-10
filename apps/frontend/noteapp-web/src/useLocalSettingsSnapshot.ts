@@ -33,6 +33,7 @@ export interface LocalSettingsController {
   savedAtMs: number | null;
   refresh: () => Promise<void>;
   saveSettings: (payload: LocalSettingsWritePayload) => Promise<void>;
+  saveWorkspaceRoot: (vaultRoot: string) => Promise<void>;
 }
 
 function errorMessage(error: unknown): string {
@@ -109,6 +110,20 @@ async function saveBridgeSettings(payload: LocalSettingsWritePayload): Promise<L
   return parseLocalSettingsSnapshot(await response.json());
 }
 
+async function saveBridgeWorkspaceRoot(vaultRoot: string): Promise<LocalSettingsSnapshot> {
+  const response = await fetch(`${syncBridgeUrl}/api/workspace/root`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ vault_root: vaultRoot }),
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, 'workspace root save'));
+  }
+  return parseLocalSettingsSnapshot(await response.json());
+}
+
 export function useLocalSettingsController(): LocalSettingsController {
   const [snapshot, setSnapshot] = useState<LocalSettingsSnapshot>(fallbackSnapshot);
   const [source, setSource] = useState<LocalSettingsSnapshotSource>('example');
@@ -167,6 +182,20 @@ export function useLocalSettingsController(): LocalSettingsController {
     }
   };
 
+  const saveWorkspaceRoot = async (vaultRoot: string) => {
+    setIsSaving(true);
+    try {
+      setSnapshot(await saveBridgeWorkspaceRoot(vaultRoot));
+      setSource('bridge');
+      setLastError(null);
+      setSavedAtMs(Date.now());
+    } catch (error) {
+      setLastError(errorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const summary = useMemo(() => summarizeLocalSettingsSnapshot(snapshot), [snapshot]);
   return {
     snapshot,
@@ -178,5 +207,6 @@ export function useLocalSettingsController(): LocalSettingsController {
     savedAtMs,
     refresh,
     saveSettings,
+    saveWorkspaceRoot,
   };
 }
