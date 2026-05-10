@@ -112,6 +112,26 @@ function actionIdFromPath(pathname) {
   return decodeURIComponent(encoded);
 }
 
+function errorPayload(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('sync action not found')) {
+    return {
+      statusCode: 404,
+      payload: {
+        code: 'sync_action_not_found',
+        message,
+      },
+    };
+  }
+  return {
+    statusCode: 500,
+    payload: {
+      code: 'sync_bridge_error',
+      message,
+    },
+  };
+}
+
 if (args.has('--help') || args.has('-h')) {
   printHelp();
   process.exit(0);
@@ -186,10 +206,8 @@ const server = createServer((request, response) => {
       message: 'Route was not found.',
     });
   } catch (error) {
-    jsonResponse(request, response, 500, {
-      code: 'sync_bridge_error',
-      message: error instanceof Error ? error.message : String(error),
-    });
+    const resolvedError = errorPayload(error);
+    jsonResponse(request, response, resolvedError.statusCode, resolvedError.payload);
   }
 });
 
