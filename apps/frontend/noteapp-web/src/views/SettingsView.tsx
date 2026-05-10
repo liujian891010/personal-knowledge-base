@@ -73,6 +73,7 @@ const valueLabels: Record<string, string> = {
   activity: '活动',
   'background-sync': '后台同步',
   executed: '已执行',
+  blocked: '已阻止',
   disabled: '已禁用',
   unsupported: '不支持',
   failed: '失败',
@@ -155,6 +156,10 @@ function localizeText(value: string): string {
 
 function localizeMessage(value: string): string {
   return value
+    .replace(/submit conflict:/g, '提交冲突：')
+    .replace(/base_revision_conflict/g, '远端基线版本冲突')
+    .replace(/remote head revision (\d+)/g, '远端最新版本 $1')
+    .replace(/run pull before retrying/g, '请先拉取后重试')
     .replace(/^bridge unavailable:/, '本机桥接不可用：')
     .replace(/^sync action returned/, '同步操作返回')
     .replace(/^bridge returned/, '本机桥接返回')

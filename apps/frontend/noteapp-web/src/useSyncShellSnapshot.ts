@@ -54,9 +54,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function latestActionActivity(action: SyncShellAction, snapshot: SyncShellSnapshot) {
+  return [...snapshot.activity_feed.records]
+    .reverse()
+    .find((record) => record.action_id === action.action_id);
+}
+
 function actionResultNotice(action: SyncShellAction, snapshot: SyncShellSnapshot): SyncActionNotice {
   const summary = summarizeSyncShellSnapshot(snapshot);
   const changeCount = summary.changeBadgeCount;
+  const activity = latestActionActivity(action, snapshot);
   if (action.action_id === 'detect-local-changes') {
     return changeCount > 0
       ? {
@@ -75,6 +82,17 @@ function actionResultNotice(action: SyncShellAction, snapshot: SyncShellSnapshot
         };
   }
   if (action.action_id === 'submit-detected-commit') {
+    if (activity?.status === 'blocked') {
+      return {
+        level: 'warning',
+        title: '远端版本已更新，需要先拉取',
+        detail: activity.message
+          ? `提交被远端拒绝：${activity.message}`
+          : '提交被远端拒绝。请先执行拉取，刷新本地同步基线后再提交。',
+        actionId: action.action_id,
+        occurredAtMs: snapshot.generated_at_ms,
+      };
+    }
     return changeCount > 0
       ? {
           level: 'warning',
@@ -118,12 +136,12 @@ async function responseErrorMessage(response: Response, source: string): Promise
     const payload: unknown = await response.json();
     if (isErrorPayload(payload) && typeof payload.message === 'string') {
       const code = typeof payload.code === 'string' ? ` (${payload.code})` : '';
-      return `${source} returned ${response.status}${code}: ${payload.message}`;
+      return `${source}返回 ${response.status}${code}：${payload.message}`;
     }
   } catch {
     // Ignore non-JSON responses and fall back to the HTTP status.
   }
-  return `${source} returned ${response.status}`;
+  return `${source}返回 ${response.status}`;
 }
 
 async function loadSnapshot(): Promise<SnapshotLoadResult> {
@@ -139,9 +157,9 @@ async function loadSnapshot(): Promise<SnapshotLoadResult> {
         error: null,
       };
     }
-    bridgeError = await responseErrorMessage(bridgeResponse, 'bridge');
+    bridgeError = await responseErrorMessage(bridgeResponse, '同步桥接');
   } catch (error) {
-    bridgeError = `bridge unavailable: ${errorMessage(error)}`;
+    bridgeError = `同步桥接不可用：${errorMessage(error)}`;
   }
 
   try {
@@ -153,9 +171,9 @@ async function loadSnapshot(): Promise<SnapshotLoadResult> {
         error: bridgeError,
       };
     }
-    fixtureError = await responseErrorMessage(fixtureResponse, 'live fixture');
+    fixtureError = await responseErrorMessage(fixtureResponse, '本地快照');
   } catch (error) {
-    fixtureError = `live fixture unavailable: ${errorMessage(error)}`;
+    fixtureError = `本地快照不可用：${errorMessage(error)}`;
   }
 
   return {
@@ -170,7 +188,7 @@ async function executeBridgeAction(actionId: string): Promise<SyncShellSnapshot>
     method: 'POST',
   });
   if (!response.ok) {
-    throw new Error(await responseErrorMessage(response, 'sync action'));
+    throw new Error(await responseErrorMessage(response, '同步操作'));
   }
   return parseSyncShellSnapshot(await response.json());
 }
@@ -249,7 +267,7 @@ export function useSyncShellController(): SyncShellController {
       setLastActionNotice({
         level: 'danger',
         title: '同步操作失败',
-        detail: message,
+        detail: `操作未完成：${message}`,
         actionId: action.action_id,
         occurredAtMs: Date.now(),
       });

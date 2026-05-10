@@ -1,6 +1,6 @@
 export type SyncShellLevel = 'success' | 'info' | 'warning' | 'danger';
 export type SyncShellActionEmphasis = 'normal' | 'primary' | 'warning';
-export type SyncShellActivityStatus = 'executed' | 'disabled' | 'unsupported' | 'failed';
+export type SyncShellActivityStatus = 'executed' | 'blocked' | 'disabled' | 'unsupported' | 'failed';
 
 export interface SyncShellAction {
   action_id: string;
@@ -140,7 +140,13 @@ function normalizeActionEmphasis(value: string): SyncShellActionEmphasis {
 }
 
 function normalizeActivityStatus(value: string): SyncShellActivityStatus {
-  if (value === 'executed' || value === 'disabled' || value === 'unsupported' || value === 'failed') {
+  if (
+    value === 'executed' ||
+    value === 'blocked' ||
+    value === 'disabled' ||
+    value === 'unsupported' ||
+    value === 'failed'
+  ) {
     return value;
   }
   throw new Error(`unsupported sync activity status: ${value}`);

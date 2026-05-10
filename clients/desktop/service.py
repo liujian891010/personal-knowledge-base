@@ -1896,7 +1896,7 @@ class DesktopSyncService:
         status: str,
         message: Optional[str],
     ) -> DesktopSyncActivityRecord:
-        level = "success" if status == "executed" else ("warning" if status == "disabled" else "danger")
+        level = "success" if status == "executed" else ("warning" if status in {"blocked", "disabled"} else "danger")
         record = DesktopSyncActivityRecord(
             activity_id=str(uuid4()),
             occurred_at_ms=occurred_at_ms,
@@ -2463,12 +2463,13 @@ class DesktopSyncService:
                 message=f"{type(error).__name__}: {error}",
             )
             raise
+        status, message = self._resolve_sync_action_execution_status(action, payload)
         result = DesktopSyncActionExecutionResult(
             action=action,
             source=source,
-            status="executed",
+            status=status,
             payload=payload,
-            message=None,
+            message=message,
         )
         self._record_sync_activity(
             occurred_at_ms=resolved_now_ms,
@@ -2478,6 +2479,28 @@ class DesktopSyncService:
             message=result.message,
         )
         return result
+
+    def _resolve_sync_action_execution_status(
+        self,
+        action: DesktopSyncPanelAction,
+        payload: object | None,
+    ) -> tuple[str, Optional[str]]:
+        if action.command != "submit-detected-commit" or not isinstance(payload, DesktopCommitSessionResult):
+            return "executed", None
+        if payload.network.commit.status != "conflict":
+            return "executed", None
+
+        conflict = payload.network.commit.conflict
+        if conflict is None:
+            return "blocked", "submit conflict; run pull before retrying"
+        return (
+            "blocked",
+            (
+                f"submit conflict: {conflict.code}; "
+                f"remote head revision {conflict.current_head_revision}; "
+                "run pull before retrying"
+            ),
+        )
 
     def execute_sync_action_and_snapshot(
         self,
@@ -2906,10 +2929,16 @@ class DesktopSyncService:
             raise
 
         if network.commit.status != "committed":
+            cleanup = self.cleanup_failed_commit(normalized_at=resolved_cleanup_at)
+            if network.commit.status == "conflict":
+                cleanup = self._mark_commit_conflict_requires_pull(
+                    cleanup,
+                    conflict=network.commit.conflict,
+                )
             return DesktopCommitSessionResult(
                 prepared=prepared,
                 network=network,
-                cleanup=self.cleanup_failed_commit(normalized_at=resolved_cleanup_at),
+                cleanup=cleanup,
             )
 
         response = network.commit.response
@@ -2938,6 +2967,24 @@ class DesktopSyncService:
             state=state,
             removed_staging_paths=cleanup_commit_staging_artifacts(self.workspace.vault_root),
         )
+
+    def _mark_commit_conflict_requires_pull(
+        self,
+        cleanup: DesktopCommitCleanupResult,
+        *,
+        conflict,
+    ) -> DesktopCommitCleanupResult:
+        if conflict is None:
+            return cleanup
+        updated_state = replace(
+            cleanup.state,
+            remote_head_revision=max(cleanup.state.remote_head_revision, conflict.current_head_revision),
+            last_manifest_summary=None,
+            last_manifest_summary_status="stale",
+        )
+        with closing(self.workspace._open_connection()) as connection:
+            upsert_vault_state(connection, updated_state)
+        return replace(cleanup, state=updated_state)
 
     def prepare_commit(
         self,
@@ -3200,10 +3247,16 @@ class DesktopSyncService:
             raise
 
         if network.commit.status != "committed":
+            cleanup = self.cleanup_failed_commit(normalized_at=resolved_cleanup_at)
+            if network.commit.status == "conflict":
+                cleanup = self._mark_commit_conflict_requires_pull(
+                    cleanup,
+                    conflict=network.commit.conflict,
+                )
             return DesktopCommitSessionResult(
                 prepared=prepared,
                 network=network,
-                cleanup=self.cleanup_failed_commit(normalized_at=resolved_cleanup_at),
+                cleanup=cleanup,
             )
 
         response = network.commit.response

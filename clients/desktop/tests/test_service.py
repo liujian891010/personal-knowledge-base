@@ -1259,6 +1259,9 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertIsNone(result.finalized)
             self.assertIsNotNone(result.cleanup)
             self.assertFalse(result.cleanup.state.commit_in_progress)
+            self.assertEqual(result.cleanup.state.remote_head_revision, 9)
+            self.assertEqual(result.cleanup.state.last_manifest_summary_status, "stale")
+            self.assertIsNone(result.cleanup.state.last_manifest_summary)
             self.assertEqual(
                 [call[0:2] for call in api_opener.calls],
                 [
@@ -1276,7 +1279,34 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 state = load_vault_state(connection, "vault-001")
                 self.assertIsNotNone(state)
                 self.assertEqual(state.last_applied_revision, 7)
+                self.assertEqual(state.remote_head_revision, 9)
                 self.assertFalse(state.commit_in_progress)
+                self.assertEqual(state.last_manifest_summary_status, "stale")
+
+    def test_execute_sync_action_reports_submit_conflict_as_blocked_and_requires_pull(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, payload, _ = self._seed_workspace(root, conflict=True)
+            (root / "Notes" / "Live.md").write_bytes(payload + b" local change")
+
+            result = service.execute_sync_action("submit-detected-commit", now_ms=1770000040999)
+
+            self.assertEqual(result.status, "blocked")
+            self.assertEqual(result.action.action_id, "submit-detected-commit")
+            self.assertIn("base_revision_conflict", result.message or "")
+            self.assertIn("remote head revision 9", result.message or "")
+
+            summary = service.summarize_vault()
+            self.assertTrue(summary.commit_gate.requires_full_pull)
+            self.assertFalse(summary.commit_gate.can_submit_commit)
+            self.assertIn("requires_full_pull", summary.commit_gate.blocking_reasons)
+
+            feed = service.list_sync_activity(limit=5)
+            self.assertEqual(feed.total_count, 1)
+            self.assertEqual(feed.records[0].action_id, "submit-detected-commit")
+            self.assertEqual(feed.records[0].status, "blocked")
+            self.assertEqual(feed.records[0].level, "warning")
+            self.assertIn("base_revision_conflict", feed.records[0].message or "")
 
     def test_submit_workspace_commit_auto_generates_placeholder_encrypted_blobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
