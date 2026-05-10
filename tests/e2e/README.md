@@ -50,6 +50,16 @@ Run from the repository root:
 python tests\e2e\frontend_sync_snapshot_smoke.py
 ```
 
+## Frontend Dist Smoke
+
+`frontend_dist_smoke.py` builds the Vite app, serves `dist/`, verifies SPA fallback, and checks that the bundled sync page text is present.
+
+Run from the repository root:
+
+```powershell
+python tests\e2e\frontend_dist_smoke.py
+```
+
 Optional port override:
 
 ```powershell
