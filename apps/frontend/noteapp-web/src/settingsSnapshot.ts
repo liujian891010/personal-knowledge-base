@@ -29,6 +29,11 @@ export interface LocalSettingsSnapshot {
   ai: LocalAiSettings;
 }
 
+export interface LocalSettingsWritePayload {
+  appearance: LocalAppearanceSettings;
+  ai: LocalAiSettings;
+}
+
 export interface LocalSettingsSummary {
   schemaVersion: string;
   source: LocalSettingsSource;

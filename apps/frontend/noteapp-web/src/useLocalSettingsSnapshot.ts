@@ -6,6 +6,7 @@ import {
   summarizeLocalSettingsSnapshot,
   type LocalSettingsSnapshot,
   type LocalSettingsSummary,
+  type LocalSettingsWritePayload,
 } from './settingsSnapshot';
 
 const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
@@ -28,7 +29,9 @@ export interface LocalSettingsController {
   source: LocalSettingsSnapshotSource;
   lastError: string | null;
   isRefreshing: boolean;
+  isSaving: boolean;
   refresh: () => Promise<void>;
+  saveSettings: (payload: LocalSettingsWritePayload) => Promise<void>;
 }
 
 function errorMessage(error: unknown): string {
@@ -91,11 +94,26 @@ async function loadSnapshot(): Promise<SettingsSnapshotLoadResult> {
   };
 }
 
+async function saveBridgeSettings(payload: LocalSettingsWritePayload): Promise<LocalSettingsSnapshot> {
+  const response = await fetch(`${syncBridgeUrl}/api/settings/snapshot`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, 'settings save'));
+  }
+  return parseLocalSettingsSnapshot(await response.json());
+}
+
 export function useLocalSettingsController(): LocalSettingsController {
   const [snapshot, setSnapshot] = useState<LocalSettingsSnapshot>(fallbackSnapshot);
   const [source, setSource] = useState<LocalSettingsSnapshotSource>('example');
   const [lastError, setLastError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -133,6 +151,19 @@ export function useLocalSettingsController(): LocalSettingsController {
     }
   };
 
+  const saveSettings = async (payload: LocalSettingsWritePayload) => {
+    setIsSaving(true);
+    try {
+      setSnapshot(await saveBridgeSettings(payload));
+      setSource('bridge');
+      setLastError(null);
+    } catch (error) {
+      setLastError(errorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const summary = useMemo(() => summarizeLocalSettingsSnapshot(snapshot), [snapshot]);
   return {
     snapshot,
@@ -140,6 +171,8 @@ export function useLocalSettingsController(): LocalSettingsController {
     source,
     lastError,
     isRefreshing,
+    isSaving,
     refresh,
+    saveSettings,
   };
 }
