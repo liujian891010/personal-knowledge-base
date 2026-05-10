@@ -171,6 +171,7 @@ def main() -> int:
             device_id, token = register_device()
             vault_root = Path(work_dir) / "vault"
             output_path = Path(work_dir) / "live-sync-shell.json"
+            settings_output_path = Path(work_dir) / "local-settings-snapshot.json"
             pythonpath = os.pathsep.join([str(VAULT_CORE_SRC), str(ROOT)])
             cli_env = {
                 **os.environ,
@@ -200,6 +201,21 @@ def main() -> int:
                 env=cli_env,
             )
 
+            settings_path = vault_root / ".noteapp" / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "appearance": {"theme": "light"},
+                        "ai": {
+                            "local_model_status": "available",
+                            "embedding_status": "indexing",
+                        },
+                    },
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+
             snapshot_env = {
                 **os.environ,
                 "PYTHON": sys.executable,
@@ -211,9 +227,15 @@ def main() -> int:
                 "NOTEAPP_SYNC_NOW_MS": "1770002000100",
                 "NOTEAPP_ACTIVITY_LIMIT": "5",
                 "NOTEAPP_SYNC_SNAPSHOT_OUTPUT": str(output_path),
+                "NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT": str(settings_output_path),
             }
             run_checked(
                 ["node", "scripts/write-live-sync-shell.mjs"],
+                cwd=FRONTEND_ROOT,
+                env=snapshot_env,
+            )
+            run_checked(
+                ["node", "scripts/write-local-settings-snapshot.mjs"],
                 cwd=FRONTEND_ROOT,
                 env=snapshot_env,
             )
@@ -223,6 +245,15 @@ def main() -> int:
             assert payload["vault_id"] == VAULT_ID, payload
             assert payload["device_id"] == device_id, payload
             assert payload["sync_center"]["panel"]["level"] in {"success", "info", "warning", "danger"}, payload
+            settings_payload = json.loads(settings_output_path.read_text(encoding="utf-8"))
+            assert settings_payload["schema_version"] == "v1", settings_payload
+            assert settings_payload["source"] == "file", settings_payload
+            assert settings_payload["settings_path"] == str(settings_path), settings_payload
+            assert settings_payload["appearance"]["theme"] == "light", settings_payload
+            assert settings_payload["ai"]["local_model_status"] == "available", settings_payload
+            assert settings_payload["ai"]["embedding_status"] == "indexing", settings_payload
+            assert settings_payload["sync"]["base_url"] == BASE_URL, settings_payload
+            assert settings_payload["sync"]["bearer_token_configured"] is True, settings_payload
 
             bridge_env = {
                 **snapshot_env,
@@ -248,6 +279,7 @@ def main() -> int:
                 assert allowed_origin["host"] == "127.0.0.1", allowed_origin
                 assert allowed_origin["port"] == BRIDGE_PORT, allowed_origin
                 assert allowed_origin["allowRemoteHost"] is False, allowed_origin
+                assert allowed_origin["settingsSnapshotPath"] == str(settings_output_path), allowed_origin
                 status, rejected_origin = request_bridge_json(
                     "/health",
                     headers={"Origin": "http://evil.example"},
@@ -266,6 +298,15 @@ def main() -> int:
                 assert action_payload["vault_id"] == VAULT_ID, action_payload
                 assert action_payload["device_id"] == device_id, action_payload
                 assert "snapshot" not in action_payload, action_payload
+                status, settings_bridge_payload = request_bridge_json("/api/settings/snapshot")
+                assert status == 200, settings_bridge_payload
+                assert settings_bridge_payload["source"] == "file", settings_bridge_payload
+                assert settings_bridge_payload["vault_id"] == VAULT_ID, settings_bridge_payload
+                assert settings_bridge_payload["device_id"] == device_id, settings_bridge_payload
+                assert settings_bridge_payload["appearance"]["theme"] == "light", settings_bridge_payload
+                status, live_settings_payload = request_bridge_json("/api/settings/live")
+                assert status == 200, live_settings_payload
+                assert live_settings_payload == settings_bridge_payload, live_settings_payload
                 status, missing_action = request_bridge_json(
                     "/api/sync/actions/not-a-real-action",
                     method="POST",
@@ -288,6 +329,7 @@ def main() -> int:
                         "vault_id": payload["vault_id"],
                         "device_id": payload["device_id"],
                         "level": payload["sync_center"]["panel"]["level"],
+                        "settings_source": settings_payload["source"],
                         "bridge_url": BRIDGE_URL,
                     },
                     indent=2,
