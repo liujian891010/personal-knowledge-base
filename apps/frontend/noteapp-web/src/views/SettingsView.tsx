@@ -97,6 +97,7 @@ export default function SettingsView() {
                     <button
                       disabled={!syncSummary.primaryActionEnabled || isExecuting || isRefreshing}
                       onClick={executePrimaryAction}
+                      title={syncSummary.primaryActionRequiresConfirmation ? 'Requires confirmation' : undefined}
                       className="px-3 py-1.5 rounded bg-[#0f3460]/30 border border-[#0f3460] text-[13px] font-medium text-[#a9c8fc] disabled:opacity-50 disabled:cursor-not-allowed hover:text-white transition-colors"
                     >
                       {isExecuting ? 'Working...' : syncSummary.primaryActionLabel}

@@ -74,6 +74,7 @@ export interface SyncShellSummary {
   recentActivityCount: number;
   primaryActionLabel: string;
   primaryActionEnabled: boolean;
+  primaryActionRequiresConfirmation: boolean;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -182,5 +183,6 @@ export function summarizeSyncShellSnapshot(snapshot: SyncShellSnapshot): SyncShe
     recentActivityCount: snapshot.activity_feed.total_count,
     primaryActionLabel: snapshot.sync_center.panel.primary_action.label,
     primaryActionEnabled: snapshot.sync_center.panel.primary_action.enabled,
+    primaryActionRequiresConfirmation: snapshot.sync_center.panel.primary_action.requires_confirmation ?? false,
   };
 }
