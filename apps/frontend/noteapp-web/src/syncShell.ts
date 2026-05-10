@@ -136,6 +136,48 @@ function parseAction(payload: unknown, context: string): SyncShellAction {
   };
 }
 
+function parseCard(payload: unknown, context: string): SyncShellCard {
+  if (!isObject(payload)) {
+    throw new Error(`sync shell snapshot is missing card object: ${context}`);
+  }
+  return {
+    card_id: requireString(payload, 'card_id'),
+    kind: requireString(payload, 'kind'),
+    level: normalizeLevel(requireString(payload, 'level')),
+    title: requireString(payload, 'title'),
+    body: requireString(payload, 'body'),
+    badge_count: requireNumber(payload, 'badge_count'),
+    actions: requireArray(payload, 'actions').map((action, index) =>
+      parseAction(action, `${context}.actions[${index}]`),
+    ),
+  };
+}
+
+function parseActivityRecord(payload: unknown, context: string): SyncShellActivityRecord {
+  if (!isObject(payload)) {
+    throw new Error(`sync shell snapshot is missing activity record object: ${context}`);
+  }
+  return {
+    activity_id: requireString(payload, 'activity_id'),
+    occurred_at_ms: requireNumber(payload, 'occurred_at_ms'),
+    level: normalizeLevel(requireString(payload, 'level')),
+    action_id: requireString(payload, 'action_id'),
+    command: requireString(payload, 'command'),
+    status: requireString(payload, 'status'),
+    source: requireString(payload, 'source'),
+    message: typeof payload.message === 'string' ? payload.message : null,
+  };
+}
+
+function parseActivityFeed(payload: Record<string, unknown>, context: string): SyncShellActivityFeed {
+  return {
+    records: requireArray(payload, 'records').map((record, index) =>
+      parseActivityRecord(record, `${context}.records[${index}]`),
+    ),
+    total_count: requireNumber(payload, 'total_count'),
+  };
+}
+
 export function parseSyncShellSnapshot(payload: unknown): SyncShellSnapshot {
   if (!isObject(payload)) {
     throw new Error('sync shell snapshot must be an object');
@@ -146,6 +188,9 @@ export function parseSyncShellSnapshot(payload: unknown): SyncShellSnapshot {
   const primaryAction = requireObject(panel, 'primary_action');
   const recentActivity = requireObject(syncCenter, 'recent_activity');
   const activityFeed = requireObject(payload, 'activity_feed');
+  const cards = requireArray(syncCenter, 'cards').map((card, index) =>
+    parseCard(card, `cards[${index}]`),
+  );
   const secondaryActions = requireArray(panel, 'secondary_actions').map((action, index) =>
     parseAction(action, `secondary_actions[${index}]`),
   );
@@ -156,7 +201,7 @@ export function parseSyncShellSnapshot(payload: unknown): SyncShellSnapshot {
     device_id: requireString(payload, 'device_id'),
     vault_root: requireString(payload, 'vault_root'),
     sync_center: {
-      cards: requireArray(syncCenter, 'cards') as SyncShellCard[],
+      cards,
       panel: {
         level: normalizeLevel(requireString(panel, 'level')),
         headline: requireString(panel, 'headline'),
@@ -166,15 +211,9 @@ export function parseSyncShellSnapshot(payload: unknown): SyncShellSnapshot {
         primary_action: parseAction(primaryAction, 'primary_action'),
         secondary_actions: secondaryActions,
       },
-      recent_activity: {
-        records: requireArray(recentActivity, 'records') as SyncShellActivityRecord[],
-        total_count: requireNumber(recentActivity, 'total_count'),
-      },
+      recent_activity: parseActivityFeed(recentActivity, 'recent_activity'),
     },
-    activity_feed: {
-      records: requireArray(activityFeed, 'records') as SyncShellActivityRecord[],
-      total_count: requireNumber(activityFeed, 'total_count'),
-    },
+    activity_feed: parseActivityFeed(activityFeed, 'activity_feed'),
   };
 }
 
