@@ -133,6 +133,16 @@ def _load_json_object(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _load_text_input(*, input_text: Optional[str], input_text_file: Optional[str]) -> str:
+    if input_text is None and input_text_file is None:
+        raise ValueError("one of --input-text or --input-text-file is required")
+    if input_text is not None and input_text_file is not None:
+        raise ValueError("--input-text and --input-text-file are mutually exclusive")
+    if input_text_file is not None:
+        return Path(input_text_file).read_text(encoding="utf-8")
+    return input_text or ""
+
+
 def _load_payload_dir(file_ids: Sequence[str], path: Path, *, suffix: str) -> dict[str, bytes]:
     decoded: dict[str, bytes] = {}
     for file_id in file_ids:
@@ -184,6 +194,11 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("workspace-files")
     workspace_file_content_parser = subparsers.add_parser("workspace-file-content")
     workspace_file_content_parser.add_argument("--file-id", required=True)
+    write_workspace_file_content_parser = subparsers.add_parser("write-workspace-file-content")
+    write_workspace_file_content_parser.add_argument("--file-id", required=True)
+    write_workspace_file_content_input = write_workspace_file_content_parser.add_mutually_exclusive_group(required=True)
+    write_workspace_file_content_input.add_argument("--input-text")
+    write_workspace_file_content_input.add_argument("--input-text-file")
     subparsers.add_parser("local-settings-snapshot")
     write_settings_parser = subparsers.add_parser("write-local-settings")
     write_settings_parser.add_argument("--input-json", required=True)
@@ -373,6 +388,14 @@ def run_cli(
         result = service.list_workspace_files()
     elif args.command == "workspace-file-content":
         result = service.load_workspace_file_content(args.file_id)
+    elif args.command == "write-workspace-file-content":
+        result = service.write_workspace_file_content(
+            args.file_id,
+            _load_text_input(
+                input_text=args.input_text,
+                input_text_file=args.input_text_file,
+            ),
+        )
     elif args.command == "local-settings-snapshot":
         result = service.load_local_settings_snapshot()
     elif args.command == "write-local-settings":
