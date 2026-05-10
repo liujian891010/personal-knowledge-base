@@ -1,12 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
-  Brain,
-  ChevronRight,
   Cloud,
   FileText,
   Folder,
-  Network,
   Plus,
   RefreshCw,
   Save,
@@ -247,9 +244,9 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center bg-[#0f3460]/30 rounded-md p-0.5 border border-[#0f3460]">
-              <button onClick={() => setView('wiki')} className="px-3 py-1.5 rounded text-[#e94560] hover:bg-[#1f2b4a] hover:text-white transition-colors flex items-center gap-1.5 font-mono text-[12px] font-bold uppercase tracking-wider">
-                <Brain size={14} /> [[wiki]]
-              </button>
+              <span className="px-3 py-1.5 rounded text-slate-500 flex items-center gap-1.5 font-mono text-[12px] font-bold uppercase tracking-wider">
+                AI Wiki 暂不开放
+              </span>
             </div>
           </div>
         </header>
@@ -380,14 +377,9 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                 />
               </section>
 
-              <button
-                onClick={() => setView('wiki')}
-                className="inline-flex w-fit items-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-3 py-2 text-[13px] text-[#a9c8fc] hover:text-white transition-colors"
-              >
-                <Network size={14} />
-                <span>打开知识图谱</span>
-                <ChevronRight size={14} />
-              </button>
+              <div className="inline-flex w-fit items-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-3 py-2 text-[13px] text-slate-500">
+                知识图谱暂不进入当前收口版本
+              </div>
             </div>
           ) : (
             <div className="max-w-2xl rounded-xl border border-[#0f3460] bg-[#16213e] p-6 text-[13px] text-slate-400">

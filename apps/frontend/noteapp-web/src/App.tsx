@@ -1,48 +1,59 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  LayoutDashboard, Network, FolderOpen, AlertTriangle, Settings, Cloud, Plus, FileText, Brain, Search, Bell, MoreVertical, Trash2
+  AlertTriangle,
+  Cloud,
+  FolderOpen,
+  Settings,
 } from 'lucide-react';
 
-import DashboardView from './views/DashboardView';
 import ExplorerView from './views/ExplorerView';
-import WikiView from './views/WikiView';
-import GraphView from './views/GraphView';
 import ConflictsView from './views/ConflictsView';
 import SettingsView from './views/SettingsView';
-import TrashView from './views/TrashView';
 
-function Sidebar({ currentView, setView }: { currentView: string, setView: (v: string) => void }) {
-  const navItems = [
-    { id: 'dashboard', icon: LayoutDashboard, label: '仪表盘' },
-    { id: 'graph', icon: Network, label: '图谱视图' },
-    { id: 'explorer', icon: FolderOpen, label: '笔记库浏览' },
-    { id: 'conflicts', icon: AlertTriangle, label: '冲突解决' },
-  ];
+type AppView = 'explorer' | 'conflicts' | 'settings' | 'sync';
 
+interface NavItem {
+  id: AppView;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  label: string;
+}
+
+const navItems: NavItem[] = [
+  { id: 'explorer', icon: FolderOpen, label: '笔记库浏览' },
+  { id: 'sync', icon: Cloud, label: '同步状态' },
+  { id: 'conflicts', icon: AlertTriangle, label: '冲突解决' },
+  { id: 'settings', icon: Settings, label: '设置' },
+];
+
+function Sidebar({ currentView, setView }: { currentView: AppView, setView: (view: AppView) => void }) {
   return (
-    <aside className="hidden md:flex flex-col h-full w-64 border-r border-[#0f3460] bg-[#16213e] flex-shrink-0 z-40">
-      <div className="p-6 border-b border-[#0f3460]">
-        <div className="flex items-center space-x-3 mb-6 cursor-pointer" onClick={() => setView('dashboard')}>
-          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-[#e94560] to-purple-600 flex items-center justify-center text-white font-bold border border-[#e94560]/30 shadow-lg">N</div>
-          <div>
-            <h1 className="text-xl font-black text-[#e94560] tracking-tighter">NoteAI</h1>
-            <p className="text-[10px] text-slate-400 uppercase tracking-widest font-sans font-medium">本地优先的笔记库</p>
+    <aside className="hidden md:flex h-full w-64 flex-shrink-0 flex-col border-r border-[#0f3460] bg-[#16213e] z-40">
+      <div className="border-b border-[#0f3460] p-6">
+        <button className="flex items-center space-x-3 text-left" onClick={() => setView('explorer')}>
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#e94560]/30 bg-gradient-to-br from-[#e94560] to-[#0f3460] font-bold text-white shadow-lg">
+            N
           </div>
-        </div>
-        <button className="w-full py-2.5 px-4 bg-[#e94560] text-white rounded-lg text-[13px] font-medium hover:brightness-105 hover:shadow-[0_0_8px_rgba(233,69,96,0.5)] transition-all flex items-center justify-center space-x-2 bg-gradient-to-b from-white/10 to-transparent">
-          <Plus size={18} />
-          <span>新建笔记</span>
+          <div>
+            <h1 className="text-xl font-black tracking-tighter text-[#e94560]">NoteAI</h1>
+            <p className="font-sans text-[10px] font-medium uppercase tracking-widest text-slate-400">
+              本地优先的笔记库
+            </p>
+          </div>
         </button>
       </div>
-       
-      <nav className="py-2 text-sm font-sans font-medium tracking-wide">
+
+      <nav className="flex-1 py-2 text-sm font-medium tracking-wide">
         <ul className="space-y-1">
-          {navItems.map(item => (
+          {navItems.map((item) => (
             <li key={item.id}>
-              <button 
+              <button
                 onClick={() => setView(item.id)}
-                className={`w-full flex items-center space-x-3 px-4 py-3 transition-colors duration-200 ${currentView === item.id ? 'bg-[#1f2b4a] text-[#e94560] border-l-4 border-[#e94560]' : 'text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a] border-l-4 border-transparent'}`}
+                className={`flex w-full items-center space-x-3 border-l-4 px-4 py-3 transition-colors duration-200 ${
+                  currentView === item.id
+                    ? 'border-[#e94560] bg-[#1f2b4a] text-[#e94560]'
+                    : 'border-transparent text-slate-400 hover:bg-[#1f2b4a] hover:text-slate-200'
+                }`}
               >
                 <item.icon size={20} />
                 <span>{item.label}</span>
@@ -52,90 +63,64 @@ function Sidebar({ currentView, setView }: { currentView: string, setView: (v: s
         </ul>
       </nav>
 
-      {/* 嵌入式文件树 */}
-      <div className="flex-1 overflow-y-auto px-2 py-2">
-        <div className="flex flex-col mb-4">
-          <div className="flex items-center gap-2 px-2 py-1 text-slate-300">
-            <FolderOpen size={16} />
-            <span className="text-[13px] font-semibold flex-1 font-sans">笔记</span>
-          </div>
-          <div className="flex flex-col ml-6 border-l border-[#0f3460] pl-2 mt-1 gap-1">
-            <button onClick={() => setView('explorer')} className={`flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] font-sans truncate ${currentView === 'explorer' ? 'bg-[#1f2b4a] text-[#e94560]' : 'text-slate-400 hover:text-slate-200'}`}>
-              <FileText size={14} /> 产品路线图.md
-            </button>
-          </div>
-        </div>
-        
-        <div className="flex flex-col">
-          <div className="flex items-center gap-2 px-2 py-1 text-slate-300">
-            <Brain size={16} className="text-[#e94560]" />
-            <span className="text-[13px] font-semibold flex-1 font-sans">.ai/wiki</span>
-          </div>
-          <div className="flex flex-col ml-6 border-l border-[#0f3460] pl-2 mt-1 gap-1">
-            <button onClick={() => setView('wiki')} className={`flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] font-sans truncate ${currentView === 'wiki' ? 'bg-gradient-to-r from-[#16213e] to-[#1f2b4a]/20 text-[#e94560] border-l-2 border-[#e94560]' : 'text-slate-400 hover:text-slate-200'}`}>
-               <Network size={14} /> 架构_V2.wiki
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="p-4 border-t border-[#0f3460] text-sm font-sans font-medium tracking-wide">
-        <button onClick={() => setView('trash')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded transition-colors duration-200 ${currentView === 'trash' ? 'bg-[#0f3460]/20 text-[#e94560] border-l-2 border-[#e94560]' : 'text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a]'}`}>
-          <Trash2 size={20} />
-          <span>回收站</span>
-        </button>
-        <button onClick={() => setView('settings')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded transition-colors duration-200 ${currentView === 'settings' ? 'bg-[#0f3460]/20 text-[#e94560] border-l-2 border-[#e94560]' : 'text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a]'}`}>
-          <Settings size={20} />
-          <span>设置</span>
-        </button>
-        <button onClick={() => setView('sync')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded transition-colors duration-200 ${currentView === 'sync' ? 'bg-[#0f3460]/20 text-[#e94560] border-l-2 border-[#e94560]' : 'text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a]'}`}>
-          <Cloud size={20} />
-          <span>同步状态</span>
-        </button>
-        <div className="mt-4 flex items-center gap-3 px-4 py-2">
-            <img src="https://ui-avatars.com/api/?name=Alex+Chen&background=e94560&color=fff" alt="用户头像" className="w-8 h-8 rounded-full border border-[#0f3460]" />
-            <div className="flex-1 min-w-0 text-left">
-                <p className="text-[13px] font-medium text-[#e3e2e6] truncate">Alex Chen</p>
-                <p className="text-xs text-slate-500 truncate">专业版</p>
-            </div>
+      <div className="border-t border-[#0f3460] p-4">
+        <div className="rounded-lg border border-[#0f3460] bg-[#121316] px-3 py-2">
+          <div className="text-[12px] font-semibold text-[#e3e2e6]">当前收口范围</div>
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
+            仅开放已接入真实工作区与同步桥接的页面。AI Wiki、图谱、回收站和仪表盘暂不进入主流程。
+          </p>
         </div>
       </div>
     </aside>
   );
 }
 
-function TopBar() {
+function MobileNav({ currentView, setView }: { currentView: AppView, setView: (view: AppView) => void }) {
   return (
-    <header className="flex justify-between items-center px-6 w-full sticky top-0 z-30 h-16 border-b border-[#0f3460] bg-[#16213e]/80 backdrop-blur-md flex-shrink-0">
-      <div className="flex items-center space-x-6">
-        <div className="relative hidden md:block">
-          <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input type="text" placeholder="搜索笔记库..." className="w-64 bg-[#121316] border border-[#0f3460] rounded-lg pl-10 pr-4 py-1.5 text-[13px] font-sans focus:outline-none focus:border-[#e94560] focus:ring-1 focus:ring-[#e94560]/50 transition-all placeholder:text-slate-500 text-white" />
-        </div>
+    <nav className="grid h-16 flex-shrink-0 grid-cols-4 border-t border-[#0f3460] bg-[#16213e] md:hidden">
+      {navItems.map((item) => (
+        <button
+          key={item.id}
+          onClick={() => setView(item.id)}
+          className={`flex flex-col items-center justify-center gap-1 text-[11px] ${
+            currentView === item.id ? 'text-[#e94560]' : 'text-slate-400'
+          }`}
+        >
+          <item.icon size={18} />
+          <span>{item.label}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function TopBar({ currentView }: { currentView: AppView }) {
+  const currentItem = navItems.find((item) => item.id === currentView);
+
+  return (
+    <header className="sticky top-0 z-30 flex h-16 w-full flex-shrink-0 items-center justify-between border-b border-[#0f3460] bg-[#16213e]/80 px-4 backdrop-blur-md md:px-6">
+      <div>
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">当前页面</div>
+        <h2 className="text-base font-bold text-[#e3e2e6]">{currentItem?.label ?? '笔记库浏览'}</h2>
       </div>
-      <div className="flex items-center space-x-4">
-        <button className="hidden md:flex bg-[#0f3460] text-white px-3 py-1.5 rounded text-[13px] font-sans font-medium hover:brightness-105 hover:shadow-[0_0_8px_rgba(15,52,96,0.5)] transition-all">快速记录</button>
-        <div className="flex items-center space-x-2 text-slate-400">
-          <button className="p-2 hover:text-[#e94560] hover:bg-white/5 rounded-full"><Bell size={20} /></button>
-          <button className="p-2 hover:text-[#e94560] hover:bg-white/5 rounded-full"><MoreVertical size={20} /></button>
-          <img src="https://ui-avatars.com/api/?name=Alex+Chen&background=e94560&color=fff" alt="头像" className="w-8 h-8 rounded-full border border-[#0f3460] md:hidden" />
-        </div>
+      <div className="rounded border border-[#0f3460] bg-[#121316] px-2 py-1 text-[11px] text-slate-400">
+        MVP 收口版
       </div>
     </header>
   );
 }
 
 export default function App() {
-  const [currentView, setCurrentView] = useState('dashboard');
+  const [currentView, setCurrentView] = useState<AppView>('explorer');
 
   return (
-    <div className="flex h-screen bg-[#1a1a2e] text-[#e3e2e6] font-sans overflow-hidden">
+    <div className="flex h-screen overflow-hidden bg-[#1a1a2e] font-sans text-[#e3e2e6]">
       <Sidebar currentView={currentView} setView={setCurrentView} />
-      
-      <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden relative bg-[#1a1a2e]">
-        <TopBar />
-        
-        <div className="flex-1 overflow-hidden relative">
+
+      <div className="relative flex h-screen min-w-0 flex-1 flex-col overflow-hidden bg-[#1a1a2e]">
+        <TopBar currentView={currentView} />
+
+        <div className="relative flex-1 overflow-hidden">
           <AnimatePresence mode="wait">
             <motion.div
               key={currentView}
@@ -143,19 +128,17 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
-              className="h-full flex flex-col"
+              className="flex h-full flex-col"
             >
-              {currentView === 'dashboard' && <DashboardView />}
               {currentView === 'explorer' && <ExplorerView setView={setCurrentView} />}
-              {currentView === 'wiki' && <WikiView />}
-              {currentView === 'graph' && <GraphView />}
               {currentView === 'conflicts' && <ConflictsView />}
               {currentView === 'settings' && <SettingsView initialTab="general" />}
               {currentView === 'sync' && <SettingsView initialTab="sync" />}
-              {currentView === 'trash' && <TrashView />}
             </motion.div>
           </AnimatePresence>
         </div>
+
+        <MobileNav currentView={currentView} setView={setCurrentView} />
       </div>
     </div>
   );
