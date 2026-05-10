@@ -6,7 +6,7 @@ from contextlib import closing, suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Callable, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -539,6 +539,39 @@ class DesktopVaultSummary:
 
 
 @dataclass(frozen=True)
+class DesktopLocalSyncSettings:
+    base_url: str
+    bearer_token_configured: bool
+    request_timeout_seconds: float
+    blob_timeout_seconds: float
+    user_agent: str
+
+
+@dataclass(frozen=True)
+class DesktopLocalAppearanceSettings:
+    theme: str
+
+
+@dataclass(frozen=True)
+class DesktopLocalAiSettings:
+    local_model_status: str
+    embedding_status: str
+
+
+@dataclass(frozen=True)
+class DesktopLocalSettingsSnapshot:
+    schema_version: str
+    source: str
+    settings_path: Path
+    vault_root: Path
+    vault_id: str
+    device_id: str
+    sync: DesktopLocalSyncSettings
+    appearance: DesktopLocalAppearanceSettings
+    ai: DesktopLocalAiSettings
+
+
+@dataclass(frozen=True)
 class DesktopSyncPanelAction:
     action_id: str
     label: str
@@ -675,6 +708,59 @@ class DesktopSyncService:
 
     def load_snapshot(self) -> DesktopWorkspaceSnapshot:
         return self.workspace.load_snapshot()
+
+    def load_local_settings_snapshot(self) -> DesktopLocalSettingsSnapshot:
+        settings_path = self.workspace.paths.settings_path
+        source = "default"
+        payload: dict[str, Any] = {}
+        if settings_path.exists():
+            raw_payload = json.loads(settings_path.read_text(encoding="utf-8"))
+            if not isinstance(raw_payload, dict):
+                raise ValueError(f"local settings must contain an object: {settings_path}")
+            payload = raw_payload
+            source = "file"
+
+        appearance_payload = payload.get("appearance", {})
+        if not isinstance(appearance_payload, dict):
+            appearance_payload = {}
+        ai_payload = payload.get("ai", {})
+        if not isinstance(ai_payload, dict):
+            ai_payload = {}
+
+        theme = appearance_payload.get("theme")
+        local_model_status = ai_payload.get("local_model_status")
+        embedding_status = ai_payload.get("embedding_status")
+
+        return DesktopLocalSettingsSnapshot(
+            schema_version="v1",
+            source=source,
+            settings_path=settings_path,
+            vault_root=self.workspace.vault_root,
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            sync=DesktopLocalSyncSettings(
+                base_url=self.config.base_url,
+                bearer_token_configured=self.config.bearer_token is not None,
+                request_timeout_seconds=self.config.request_timeout_seconds,
+                blob_timeout_seconds=self.config.blob_timeout_seconds,
+                user_agent=self.config.user_agent,
+            ),
+            appearance=DesktopLocalAppearanceSettings(
+                theme=theme if isinstance(theme, str) and theme else "dark",
+            ),
+            ai=DesktopLocalAiSettings(
+                local_model_status=(
+                    local_model_status
+                    if isinstance(local_model_status, str) and local_model_status
+                    else "not_configured"
+                ),
+                embedding_status=(
+                    embedding_status
+                    if isinstance(embedding_status, str) and embedding_status
+                    else "not_configured"
+                ),
+            ),
+        )
 
     def pull_reconcile(self, *, rewritten_at: int) -> PullReconcileSessionResult:
         return self.workspace.pull_reconcile(rewritten_at=rewritten_at)
