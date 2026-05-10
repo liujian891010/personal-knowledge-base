@@ -8,6 +8,7 @@ from unittest import mock
 from contextlib import closing
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Optional
 from urllib.request import Request
 from zipfile import ZipFile
 
@@ -82,8 +83,9 @@ class FakeHttpResponse:
 
 
 class RecordingApiOpener:
-    def __init__(self, *, conflict: bool = False) -> None:
+    def __init__(self, *, conflict: bool = False, remote_payload: bytes = b"# Live note\n") -> None:
         self.conflict = conflict
+        self.remote_payload = remote_payload
         self.calls: list[tuple[str, str, object | None, float]] = []
 
     def __call__(self, request: Request, timeout: float) -> FakeHttpResponse:
@@ -99,7 +101,8 @@ class RecordingApiOpener:
                 }
             )
         if request.get_method() == "GET" and request.full_url.endswith("/vaults/vault-001/manifests/9"):
-            payload = b"# Live note\n"
+            payload = self.remote_payload
+            content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
             return self._json_response(
                 {
                     "schema_version": "v1",
@@ -113,8 +116,8 @@ class RecordingApiOpener:
                             "file_id": "file-live",
                             "path": "Notes/Live.md",
                             "type": "note",
-                            "content_hash": "sha256:" + hashlib.sha256(payload).hexdigest(),
-                            "blob_id": "blob-live",
+                            "content_hash": content_hash,
+                            "blob_id": build_placeholder_blob_id(content_hash),
                             "size": len(payload),
                             "mtime": 1770000030080,
                             "mime_type": "text/markdown",
@@ -139,6 +142,22 @@ class RecordingApiOpener:
                             "headers": {"x-upload-token": "upload-1"},
                         }
                         for item in blobs
+                    ]
+                }
+            )
+        if request.get_method() == "POST" and request.full_url.endswith("/vaults/vault-001/blobs/download-init"):
+            blob_ids = [] if body is None else list(body.get("blob_ids", []))
+            return self._json_response(
+                {
+                    "downloads": [
+                        {
+                            "blob_id": blob_id,
+                            "download_url": f"https://blob.example.com/download/{blob_id}",
+                            "encrypted_size": len(build_placeholder_encrypted_blob_payload(self.remote_payload)),
+                            "expires_at": "2026-05-08T12:00:00Z",
+                            "headers": {"x-download-token": "download-1"},
+                        }
+                        for blob_id in blob_ids
                     ]
                 }
             )
@@ -175,12 +194,18 @@ class RecordingApiOpener:
 
 
 class RecordingBlobOpener:
-    def __init__(self) -> None:
+    def __init__(self, *, downloaded_blobs: Optional[dict[str, bytes]] = None) -> None:
         self.calls: list[tuple[str, str, bytes | None, dict[str, str], float]] = []
+        self.downloaded_blobs = dict(downloaded_blobs or {})
 
     def __call__(self, request: Request, timeout: float) -> FakeHttpResponse:
         headers = {key.lower(): value for key, value in request.header_items()}
         self.calls.append((request.get_method(), request.full_url, request.data, headers, timeout))
+        if request.get_method() == "GET" and "/download/" in request.full_url:
+            blob_id = request.full_url.rsplit("/", 1)[-1]
+            if blob_id not in self.downloaded_blobs:
+                raise AssertionError(f"unexpected blob download: {blob_id}")
+            return FakeHttpResponse(status_code=200, body=self.downloaded_blobs[blob_id])
         return FakeHttpResponse(status_code=200, body=b"")
 
 
@@ -287,11 +312,18 @@ class DesktopSyncServiceTests(unittest.TestCase):
         root: Path,
         *,
         conflict: bool = False,
+        remote_payload: bytes = b"# Live note\n",
         blob_crypto_provider=None,
         file_id_builder=None,
     ):
-        api_opener = RecordingApiOpener(conflict=conflict)
-        blob_opener = RecordingBlobOpener()
+        remote_content_hash = "sha256:" + hashlib.sha256(remote_payload).hexdigest()
+        remote_blob_id = build_placeholder_blob_id(remote_content_hash)
+        api_opener = RecordingApiOpener(conflict=conflict, remote_payload=remote_payload)
+        blob_opener = RecordingBlobOpener(
+            downloaded_blobs={
+                remote_blob_id: build_placeholder_encrypted_blob_payload(remote_payload),
+            },
+        )
         service = build_desktop_sync_service(
             DesktopSyncHttpConfig(
                 base_url="https://sync.example.com",
@@ -990,7 +1022,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             root = Path(tmpdir)
             service, _, _, _, _ = self._seed_workspace(root)
 
-            with mock.patch.object(type(service), "pull_and_ack", side_effect=RuntimeError("network down")):
+            with mock.patch.object(type(service), "pull_and_apply", side_effect=RuntimeError("network down")):
                 with self.assertRaisesRegex(RuntimeError, "network down"):
                     service.execute_sync_action("pull", now_ms=1770000040904)
 
@@ -1385,6 +1417,66 @@ class DesktopSyncServiceTests(unittest.TestCase):
                     for call in api_opener.calls
                 )
             )
+
+    def test_execute_pull_action_downloads_and_applies_remote_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            remote_payload = b"# Remote note\n"
+            service, api_opener, blob_opener, _, _ = self._seed_workspace(
+                root,
+                remote_payload=remote_payload,
+            )
+            remote_hash = "sha256:" + hashlib.sha256(remote_payload).hexdigest()
+            remote_blob_id = build_placeholder_blob_id(remote_hash)
+
+            result = service.execute_sync_action("pull", now_ms=1770000041999)
+
+            self.assertEqual(result.status, "executed")
+            self.assertEqual((root / "Notes" / "Live.md").read_bytes(), remote_payload)
+            self.assertEqual(service.detect_local_changes().change_count, 0)
+            filemap = load_filemap(service.workspace.paths.filemap_path)
+            self.assertEqual(filemap.files[0].content_hash, remote_hash)
+            self.assertEqual(filemap.files[0].last_known_revision, 9)
+            self.assertTrue(
+                any(
+                    call[0] == "POST" and call[1].endswith("/vaults/vault-001/blobs/download-init")
+                    for call in api_opener.calls
+                )
+            )
+            self.assertEqual(
+                [call[0:2] for call in blob_opener.calls if call[0] == "GET"],
+                [("GET", f"https://blob.example.com/download/{remote_blob_id}")],
+            )
+
+    def test_execute_pull_action_preserves_dirty_local_file_as_conflict_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            remote_payload = b"# Remote note\n"
+            service, _, _, payload, _ = self._seed_workspace(
+                root,
+                remote_payload=remote_payload,
+            )
+            live_path = root / "Notes" / "Live.md"
+            local_dirty_payload = payload + b" local dirty\n"
+            live_path.write_bytes(local_dirty_payload)
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                state = load_vault_state(connection, "vault-001")
+                self.assertIsNotNone(state)
+                upsert_vault_state(
+                    connection,
+                    replace(state, last_manifest_summary=None, last_manifest_summary_status="stale"),
+                )
+
+            result = service.execute_sync_action("pull", now_ms=1770000041999)
+            snapshot = service.load_snapshot()
+            conflict_records = [record for record in snapshot.document.files if record.status == "conflict_copy"]
+
+            self.assertEqual(result.status, "executed")
+            self.assertEqual(live_path.read_bytes(), remote_payload)
+            self.assertTrue(snapshot.state.has_unresolved_conflicts)
+            self.assertEqual(len(conflict_records), 1)
+            self.assertEqual(conflict_records[0].conflict_source_file_id, "file-live")
+            self.assertEqual((root / conflict_records[0].path).read_bytes(), local_dirty_payload)
 
     def test_submit_workspace_commit_auto_generates_placeholder_encrypted_blobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
