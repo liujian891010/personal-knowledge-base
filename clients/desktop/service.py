@@ -163,6 +163,7 @@ _LOCAL_SETTINGS_EMBEDDING_STATUSES = {
     "disabled",
     "error",
 }
+_WORKSPACE_FILE_CONTENT_MAX_BYTES = 1_000_000
 
 
 def _require_local_settings_object(payload: Mapping[str, Any], key: str) -> dict[str, Any]:
@@ -692,6 +693,23 @@ class DesktopWorkspaceFilesSnapshot:
 
 
 @dataclass(frozen=True)
+class DesktopWorkspaceFileContent:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    file_id: str
+    path: str
+    type: str
+    status: str
+    updated_at: int
+    size_bytes: int
+    content_hash: Optional[str]
+    text: str
+    encoding: str = "utf-8"
+
+
+@dataclass(frozen=True)
 class DesktopSyncPanelAction:
     action_id: str
     label: str
@@ -859,6 +877,35 @@ class DesktopSyncService:
             total_count=len(files),
             active_count=sum(1 for item in files if item.status == "active"),
             missing_count=sum(1 for item in files if item.status == "active" and not item.exists_on_disk),
+        )
+
+    def load_workspace_file_content(self, file_id: str) -> DesktopWorkspaceFileContent:
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        if record.status != "active":
+            raise ValueError(f"workspace file is not active: {file_id}")
+        payload = self._load_workspace_content_for_records([record])[file_id]
+        if len(payload) > _WORKSPACE_FILE_CONTENT_MAX_BYTES:
+            raise ValueError(f"workspace file is too large to render: {file_id}")
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"workspace file is not valid UTF-8: {file_id}") from exc
+        return DesktopWorkspaceFileContent(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            file_id=record.file_id,
+            path=record.path,
+            type=record.type,
+            status=record.status,
+            updated_at=record.updated_at,
+            size_bytes=len(payload),
+            content_hash=record.content_hash,
+            text=text,
         )
 
     def load_local_settings_snapshot(self) -> DesktopLocalSettingsSnapshot:

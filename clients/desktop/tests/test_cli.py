@@ -172,6 +172,24 @@ class FakeService:
             "missing_count": 0,
         }
 
+    def load_workspace_file_content(self, file_id):
+        self.calls.append(("workspace-file-content", file_id))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "file_id": file_id,
+            "path": "Notes/A.md",
+            "type": "note",
+            "status": "active",
+            "updated_at": 1770000040000,
+            "size_bytes": 8,
+            "content_hash": "sha256:aaa",
+            "encoding": "utf-8",
+            "text": "# A\n",
+        }
+
     def load_local_settings_snapshot(self):
         self.calls.append(("local-settings-snapshot", None))
         return {
@@ -906,6 +924,28 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(payload["files"][0]["path"], "Notes/A.md")
         self.assertTrue(payload["files"][0]["exists_on_disk"])
         self.assertEqual(self.service.calls, [("workspace-files", None)])
+
+    def test_workspace_file_content_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "workspace-file-content",
+            "--file-id",
+            "file-a",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["schema_version"], "v1")
+        self.assertEqual(payload["file_id"], "file-a")
+        self.assertEqual(payload["path"], "Notes/A.md")
+        self.assertEqual(payload["text"], "# A\n")
+        self.assertEqual(self.service.calls, [("workspace-file-content", "file-a")])
 
     def test_write_local_settings_command_routes_to_service(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
