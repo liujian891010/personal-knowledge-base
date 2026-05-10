@@ -21,6 +21,8 @@ import { useWorkspaceFilesController } from '../useWorkspaceFiles';
 import { useWorkspaceFileContentController } from '../useWorkspaceFileContent';
 import type { WorkspaceFileEntry } from '../workspaceFiles';
 
+const explorerCollapsedFoldersStoragePrefix = 'noteapp.explorer.collapsedFolders.v1';
+
 function fileName(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] || path;
@@ -38,6 +40,15 @@ function folderName(path: string, rootName: string): string {
 function folderPathForFile(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts.slice(0, -1).join('/');
+}
+
+function folderAncestors(folderPath: string): string[] {
+  const parts = folderPath.split('/').filter(Boolean);
+  const ancestors = [''];
+  for (let index = 0; index < parts.length; index += 1) {
+    ancestors.push(parts.slice(0, index + 1).join('/'));
+  }
+  return ancestors;
 }
 
 function isDescendantOfCollapsedFolder(path: string, collapsedFolders: Set<string>): boolean {
@@ -82,6 +93,34 @@ function isRowVisible(row: ExplorerRow, collapsedFolders: Set<string>): boolean 
   }
 
   return !isDescendantOfCollapsedFolder(folderPathForFile(row.file.path), collapsedFolders);
+}
+
+function collapsedFoldersStorageKey(vaultRoot: string): string {
+  return `${explorerCollapsedFoldersStoragePrefix}:${vaultRoot || 'default'}`;
+}
+
+function readCollapsedFolders(storageKey: string): Set<string> {
+  try {
+    const rawValue = window.localStorage.getItem(storageKey);
+    if (!rawValue) {
+      return new Set();
+    }
+    const parsed: unknown = JSON.parse(rawValue);
+    if (!Array.isArray(parsed)) {
+      return new Set();
+    }
+    return new Set(parsed.filter((value): value is string => typeof value === 'string'));
+  } catch {
+    return new Set();
+  }
+}
+
+function writeCollapsedFolders(storageKey: string, collapsedFolders: Set<string>) {
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(Array.from(collapsedFolders)));
+  } catch {
+    // 浏览器可能禁用了 localStorage；目录折叠仍可在当前会话内使用。
+  }
 }
 
 function MarkdownFileIcon({ size = 16, tone = 'normal' }: { size?: number; tone?: 'normal' | 'danger' }) {
@@ -453,7 +492,9 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
   );
   const rootName = useMemo(() => workspaceRootName(summary.vaultRoot), [summary.vaultRoot]);
   const explorerRows = useMemo(() => buildExplorerRows(visibleFiles, rootName), [rootName, visibleFiles]);
+  const folderStorageKey = useMemo(() => collapsedFoldersStorageKey(summary.vaultRoot), [summary.vaultRoot]);
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
+  const [loadedFolderStorageKey, setLoadedFolderStorageKey] = useState<string | null>(null);
   const visibleExplorerRows = useMemo(
     () => explorerRows.filter((row) => isRowVisible(row, collapsedFolders)),
     [collapsedFolders, explorerRows],
@@ -475,6 +516,35 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
   const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(false);
   const [draftText, setDraftText] = useState('');
   const [editorMode, setEditorMode] = useState<MarkdownEditorMode>('preview');
+
+  useEffect(() => {
+    setCollapsedFolders(readCollapsedFolders(folderStorageKey));
+    setLoadedFolderStorageKey(folderStorageKey);
+  }, [folderStorageKey]);
+
+  useEffect(() => {
+    if (loadedFolderStorageKey !== folderStorageKey) {
+      return;
+    }
+    writeCollapsedFolders(folderStorageKey, collapsedFolders);
+  }, [collapsedFolders, folderStorageKey, loadedFolderStorageKey]);
+
+  useEffect(() => {
+    if (!selectedFile || loadedFolderStorageKey !== folderStorageKey) {
+      return;
+    }
+    const ancestors = folderAncestors(folderPathForFile(selectedFile.path));
+    setCollapsedFolders((current) => {
+      if (!ancestors.some((ancestor) => current.has(ancestor))) {
+        return current;
+      }
+      const next = new Set(current);
+      for (const ancestor of ancestors) {
+        next.delete(ancestor);
+      }
+      return next;
+    });
+  }, [folderStorageKey, loadedFolderStorageKey, selectedFile]);
 
   useEffect(() => {
     if (!selectedFile || !selectedFile.exists_on_disk || selectedFile.status !== 'active') {
