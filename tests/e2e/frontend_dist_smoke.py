@@ -94,6 +94,10 @@ def main() -> int:
         assert "已拉取远端基线，可继续提交" in bundle, "sync pull recovery notice was not bundled"
         assert "远端版本已更新，需要先拉取" in bundle, "sync submit conflict notice was not bundled"
         assert "同步操作失败" in bundle, "sync failure notice was not bundled"
+        assert "早上好" not in bundle, "static dashboard demo page should not be bundled in MVP shell"
+        assert "神经网络简介" not in bundle, "static graph demo page should not be bundled in MVP shell"
+        assert "初始化新的 Wiki" not in bundle, "static wiki demo page should not be bundled in MVP shell"
+        assert "回收站中的项目" not in bundle, "static trash demo page should not be bundled in MVP shell"
 
         print(
             {
