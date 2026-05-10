@@ -927,6 +927,58 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(snapshot.ai.local_model_status, "available")
             self.assertEqual(snapshot.ai.embedding_status, "indexing")
 
+    def test_write_local_settings_normalizes_and_returns_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            snapshot = service.write_local_settings(
+                {
+                    "appearance": {"theme": "system"},
+                    "ai": {
+                        "local_model_status": "disabled",
+                        "embedding_status": "ready",
+                    },
+                }
+            )
+
+            self.assertEqual(snapshot.source, "file")
+            self.assertEqual(snapshot.appearance.theme, "system")
+            self.assertEqual(snapshot.ai.local_model_status, "disabled")
+            self.assertEqual(snapshot.ai.embedding_status, "ready")
+            self.assertEqual(
+                json.loads((root / ".noteapp" / "settings.json").read_text(encoding="utf-8")),
+                {
+                    "appearance": {"theme": "system"},
+                    "ai": {
+                        "local_model_status": "disabled",
+                        "embedding_status": "ready",
+                    },
+                },
+            )
+
+    def test_write_local_settings_rejects_unsupported_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+
+            with self.assertRaisesRegex(ValueError, "local settings contains unsupported keys: sync"):
+                service.write_local_settings(
+                    {
+                        "sync": {"base_url": "https://evil.example.com"},
+                    }
+                )
+
+    def test_write_local_settings_rejects_unsupported_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+
+            with self.assertRaisesRegex(ValueError, "appearance.theme is not supported: sepia"):
+                service.write_local_settings(
+                    {
+                        "appearance": {"theme": "sepia"},
+                    }
+                )
+
     def test_prepare_commit_materializes_snapshot_and_blob_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, payload, encrypted_payload = self._seed_workspace(Path(tmpdir))
