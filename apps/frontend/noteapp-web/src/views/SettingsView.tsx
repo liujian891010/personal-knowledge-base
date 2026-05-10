@@ -130,6 +130,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     lastError: settingsError,
     isRefreshing: isSettingsRefreshing,
     isSaving: isSettingsSaving,
+    savedAtMs,
     refresh: refreshSettings,
     saveSettings,
   } = useLocalSettingsController();
@@ -154,6 +155,12 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
       },
     });
   };
+  const hasSettingsDraftChanges = (
+    themeDraft !== settingsSummary.theme
+    || localModelStatusDraft !== settingsSummary.localModelStatus
+    || embeddingStatusDraft !== settingsSummary.embeddingStatus
+  );
+  const savedAtLabel = savedAtMs ? `Saved ${formatActivityTime(savedAtMs)}` : null;
 
   const renderActionButton = (
     action: SyncShellAction,
@@ -374,7 +381,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                       <RefreshCw size={15} className={isSettingsRefreshing ? 'animate-spin' : ''} />
                     </button>
                     <button
-                      disabled={isSettingsSaving || isSettingsRefreshing}
+                      disabled={isSettingsSaving || isSettingsRefreshing || !hasSettingsDraftChanges}
                       onClick={saveLocalSettings}
                       title="Save settings"
                       className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#0f3460]/30 border border-[#0f3460] text-[#a9c8fc] hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -413,6 +420,9 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                 {settingsError && (
                   <p className="text-[12px] text-[#ffb782] mt-4 line-clamp-3">{settingsError}</p>
                 )}
+                {!settingsError && savedAtLabel && (
+                  <p className="text-[12px] text-emerald-300 mt-4">{savedAtLabel}</p>
+                )}
               </section>
             )}
 
@@ -435,7 +445,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                       <RefreshCw size={15} className={isSettingsRefreshing ? 'animate-spin' : ''} />
                     </button>
                     <button
-                      disabled={isSettingsSaving || isSettingsRefreshing}
+                      disabled={isSettingsSaving || isSettingsRefreshing || !hasSettingsDraftChanges}
                       onClick={saveLocalSettings}
                       title="Save settings"
                       className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#0f3460]/30 border border-[#0f3460] text-[#a9c8fc] hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -468,6 +478,9 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                 </div>
                 {settingsError && (
                   <p className="text-[12px] text-[#ffb782] mt-4 line-clamp-3">{settingsError}</p>
+                )}
+                {!settingsError && savedAtLabel && (
+                  <p className="text-[12px] text-emerald-300 mt-4">{savedAtLabel}</p>
                 )}
               </section>
             )}
