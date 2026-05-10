@@ -23,15 +23,15 @@ function fileName(path: string): string {
 
 function folderName(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts.length > 1 ? parts[0] : 'Vault root';
+  return parts.length > 1 ? parts[0] : '知识库根目录';
 }
 
 function formatBytes(value: number | null): string {
   if (value === null) {
-    return 'Missing';
+    return '缺失';
   }
   if (value < 1024) {
-    return `${value} B`;
+    return `${value} 字节`;
   }
   if (value < 1024 * 1024) {
     return `${(value / 1024).toFixed(1)} KB`;
@@ -46,6 +46,42 @@ function formatFileTime(ms: number): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(ms));
+}
+
+function sourceLabel(source: string): string {
+  if (source === 'bridge') {
+    return '本机桥接';
+  }
+  if (source === 'live-fixture') {
+    return '实时快照';
+  }
+  if (source === 'example') {
+    return '示例数据';
+  }
+  return source;
+}
+
+function statusLabel(file: WorkspaceFileEntry): string {
+  if (!file.exists_on_disk) {
+    return '磁盘缺失';
+  }
+  if (file.status === 'active') {
+    return '正常';
+  }
+  if (file.status === 'deleted') {
+    return '已删除';
+  }
+  if (file.status === 'conflict_copy') {
+    return '冲突副本';
+  }
+  return file.status;
+}
+
+function fileTypeLabel(type: string): string {
+  if (type === 'note') {
+    return '笔记';
+  }
+  return type;
 }
 
 function statusClasses(file: WorkspaceFileEntry): string {
@@ -130,7 +166,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
       await saveContent(selectedFile.file_id, draftText);
       await refresh();
     } catch {
-      // The hook stores the user-visible error message.
+      // 错误信息由 hook 写入页面状态。
     }
   }
 
@@ -139,18 +175,18 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
       <aside className="hidden md:flex w-72 border-r border-[#0f3460] bg-[#16213e]/80 flex-shrink-0 flex-col max-h-full overflow-hidden">
         <div className="p-4 border-b border-[#0f3460] flex items-center justify-between bg-[#16213e]">
           <div className="min-w-0">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Workspace</span>
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">工作区</span>
             <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-slate-500">
-              <span>{source}</span>
-              <span>{summary.activeCount} active</span>
-              {summary.missingCount > 0 && <span className="text-[#e94560]">{summary.missingCount} missing</span>}
+              <span>{sourceLabel(source)}</span>
+              <span>{summary.activeCount} 个正常</span>
+              {summary.missingCount > 0 && <span className="text-[#e94560]">{summary.missingCount} 个缺失</span>}
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={refresh}
               disabled={isRefreshing}
-              title="Refresh workspace"
+              title="刷新工作区"
               className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white disabled:opacity-50 transition-colors"
             >
               <RefreshCw size={15} className={isRefreshing ? 'animate-spin' : ''} />
@@ -162,7 +198,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
         </div>
         <div className="flex-1 overflow-y-auto py-2">
           {filesByFolder.length === 0 ? (
-            <div className="p-4 text-[13px] text-slate-400">No tracked files.</div>
+            <div className="p-4 text-[13px] text-slate-400">暂无已跟踪文件。</div>
           ) : (
             filesByFolder.map(([folder, folderFiles]) => (
               <div key={folder} className="flex flex-col">
@@ -200,12 +236,12 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
             <div className="flex items-center gap-2 text-slate-300 min-w-0">
               <FileText size={18} className="text-[#e94560] flex-shrink-0" />
               <span className="text-[13px] font-semibold truncate">
-                {selectedFile ? fileName(selectedFile.path) : 'Workspace'}
+                {selectedFile ? fileName(selectedFile.path) : '工作区'}
               </span>
             </div>
             <div className="h-4 w-px bg-[#0f3460] hidden sm:block" />
             <div className="hidden sm:flex items-center gap-2 text-slate-500 font-mono text-[11px] min-w-0">
-              <span>{summary.totalCount} tracked</span>
+              <span>{summary.totalCount} 个已跟踪</span>
               {selectedFile && <span className="truncate">{formatBytes(selectedFile.size_bytes)}</span>}
             </div>
           </div>
@@ -237,9 +273,9 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2 mb-3">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded border font-mono text-[11px] uppercase tracking-wider font-bold ${statusClasses(selectedFile)}`}>
-                        {selectedFile.exists_on_disk ? selectedFile.status : 'missing'}
+                        {statusLabel(selectedFile)}
                       </span>
-                      <span className="font-mono text-[11px] text-slate-500">{selectedFile.type}</span>
+                      <span className="font-mono text-[11px] text-slate-500">{fileTypeLabel(selectedFile.type)}</span>
                     </div>
                     <h2 className="text-2xl font-bold text-[#e3e2e6] truncate">{fileName(selectedFile.path)}</h2>
                     <p className="font-mono text-[12px] text-slate-500 mt-2 break-words">{selectedFile.path}</p>
@@ -247,7 +283,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                   {!selectedFile.exists_on_disk && (
                     <div className="flex items-center gap-2 text-[#e94560] text-[12px]">
                       <AlertTriangle size={16} />
-                      <span>Missing on disk</span>
+                      <span>磁盘文件缺失</span>
                     </div>
                   )}
                 </div>
@@ -255,45 +291,45 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
 
               <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="border border-[#0f3460] rounded-xl bg-[#16213e] p-5">
-                  <h3 className="text-[15px] font-bold text-[#e3e2e6] mb-4">File metadata</h3>
+                  <h3 className="text-[15px] font-bold text-[#e3e2e6] mb-4">文件元数据</h3>
                   <dl className="grid grid-cols-1 gap-3 text-[13px]">
                     <div>
-                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">File ID</dt>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">文件 ID</dt>
                       <dd className="font-mono text-[#e3e2e6] break-words mt-1">{selectedFile.file_id}</dd>
                     </div>
                     <div>
-                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Updated</dt>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">更新时间</dt>
                       <dd className="font-mono text-[#e3e2e6] mt-1">{formatFileTime(selectedFile.updated_at)}</dd>
                     </div>
                     <div>
-                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Size</dt>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">大小</dt>
                       <dd className="font-mono text-[#e3e2e6] mt-1">{formatBytes(selectedFile.size_bytes)}</dd>
                     </div>
                     <div>
-                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Revision</dt>
-                      <dd className="font-mono text-[#e3e2e6] mt-1">{selectedFile.last_known_revision ?? 'local'}</dd>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">版本</dt>
+                      <dd className="font-mono text-[#e3e2e6] mt-1">{selectedFile.last_known_revision ?? '本地'}</dd>
                     </div>
                   </dl>
                 </div>
 
                 <div className="border border-[#0f3460] rounded-xl bg-[#16213e] p-5">
-                  <h3 className="text-[15px] font-bold text-[#e3e2e6] mb-4">Workspace</h3>
+                  <h3 className="text-[15px] font-bold text-[#e3e2e6] mb-4">工作区</h3>
                   <dl className="grid grid-cols-1 gap-3 text-[13px]">
                     <div>
-                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Vault</dt>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">知识库</dt>
                       <dd className="font-mono text-[#e3e2e6] break-words mt-1">{summary.vaultId}</dd>
                     </div>
                     <div>
-                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Device</dt>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">设备</dt>
                       <dd className="font-mono text-[#e3e2e6] break-words mt-1">{summary.deviceId}</dd>
                     </div>
                     <div>
-                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Root</dt>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">根目录</dt>
                       <dd className="font-mono text-[#e3e2e6] break-words mt-1">{summary.vaultRoot}</dd>
                     </div>
                     <div>
-                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">Content hash</dt>
-                      <dd className="font-mono text-[#e3e2e6] break-words mt-1">{selectedFile.content_hash ?? 'none'}</dd>
+                      <dt className="text-[11px] uppercase tracking-wider text-slate-500">内容哈希</dt>
+                      <dd className="font-mono text-[#e3e2e6] break-words mt-1">{selectedFile.content_hash ?? '无'}</dd>
                     </div>
                   </dl>
                 </div>
@@ -302,13 +338,13 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
               <section className="border border-[#0f3460] rounded-xl bg-[#16213e] shadow-lg shadow-black/20 overflow-hidden">
                 <div className="flex items-center justify-between gap-3 border-b border-[#0f3460] px-5 py-3">
                   <div className="flex items-center gap-3 min-w-0">
-                    <h3 className="text-[15px] font-bold text-[#e3e2e6]">Content editor</h3>
+                    <h3 className="text-[15px] font-bold text-[#e3e2e6]">内容编辑器</h3>
                     <span className="font-mono text-[11px] text-slate-500">
-                      {isContentLoading ? 'loading' : selectedContent ? selectedContent.encoding : 'unavailable'}
+                      {isContentLoading ? '加载中' : selectedContent ? selectedContent.encoding : '不可用'}
                     </span>
                     {savedAtMs && !isContentDirty && (
                       <span className="hidden sm:inline font-mono text-[11px] text-emerald-300">
-                        saved locally {formatFileTime(savedAtMs)}
+                        已保存到本地 {formatFileTime(savedAtMs)}
                       </span>
                     )}
                   </div>
@@ -316,31 +352,31 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                     {savedAtMs && !isContentDirty && (
                       <button
                         onClick={() => setView('sync')}
-                        title="Open sync status"
+                        title="打开同步状态"
                         className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-3 text-[12px] font-semibold text-[#a9c8fc] hover:text-white transition-colors"
                       >
                         <Cloud size={14} />
-                        <span>Open Sync</span>
+                        <span>打开同步</span>
                       </button>
                     )}
                     <button
                       onClick={handleSaveContent}
                       disabled={!canEditContent || !isContentDirty || isContentLoading || isContentSaving}
-                      title="Save file content"
+                      title="保存文件内容"
                       className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
                     >
                       <Save size={14} />
-                      <span>{isContentSaving ? 'Saving' : 'Save'}</span>
+                      <span>{isContentSaving ? '保存中' : '保存'}</span>
                     </button>
                   </div>
                 </div>
                 <textarea
-                  value={isContentLoading ? 'Loading file content...' : draftText}
+                  value={isContentLoading ? '正在加载文件内容...' : draftText}
                   onChange={(event) => setDraftText(event.target.value)}
                   disabled={!canEditContent || isContentLoading || isContentSaving}
                   spellCheck={false}
                   className="block h-[420px] w-full resize-y overflow-auto bg-[#121316] p-5 font-mono text-[13px] leading-relaxed text-slate-300 outline-none placeholder:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-500"
-                  placeholder="Content is not available for this file."
+                  placeholder="此文件内容不可用。"
                 />
               </section>
 
@@ -349,13 +385,13 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                 className="inline-flex w-fit items-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-3 py-2 text-[13px] text-[#a9c8fc] hover:text-white transition-colors"
               >
                 <Network size={14} />
-                <span>Open wiki graph</span>
+                <span>打开知识图谱</span>
                 <ChevronRight size={14} />
               </button>
             </div>
           ) : (
             <div className="max-w-2xl rounded-xl border border-[#0f3460] bg-[#16213e] p-6 text-[13px] text-slate-400">
-              No tracked file is selected.
+              当前未选择已跟踪文件。
             </div>
           )}
         </div>

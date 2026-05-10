@@ -77,13 +77,13 @@ def main() -> int:
         assert assets, index_html
         status, bundle = read_url(assets[0])
         assert status == 200, status
-        assert "Sync Status" in bundle, "settings sync view was not bundled"
-        assert "Sync cards" in bundle, "sync cards view was not bundled"
-        assert "Connection" in bundle, "settings snapshot connection view was not bundled"
-        assert "Local model" in bundle, "settings AI view was not bundled"
-        assert "Workspace" in bundle, "workspace explorer view was not bundled"
-        assert "File metadata" in bundle, "workspace file metadata view was not bundled"
-        assert "Content editor" in bundle, "workspace file content editor was not bundled"
+        assert "同步状态" in bundle, "settings sync view was not bundled"
+        assert "同步卡片" in bundle, "sync cards view was not bundled"
+        assert "连接" in bundle, "settings snapshot connection view was not bundled"
+        assert "本地模型" in bundle, "settings AI view was not bundled"
+        assert "工作区" in bundle, "workspace explorer view was not bundled"
+        assert "文件元数据" in bundle, "workspace file metadata view was not bundled"
+        assert "内容编辑器" in bundle, "workspace file content editor was not bundled"
 
         print(
             {
