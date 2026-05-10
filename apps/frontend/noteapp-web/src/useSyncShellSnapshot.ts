@@ -18,6 +18,15 @@ const syncBridgeUrl = (
 const fallbackSnapshot = parseSyncShellSnapshot(bundledExampleSnapshot);
 
 type SyncShellSource = 'bridge' | 'live-fixture' | 'example';
+type SyncActionNoticeLevel = 'success' | 'info' | 'warning' | 'danger';
+
+export interface SyncActionNotice {
+  level: SyncActionNoticeLevel;
+  title: string;
+  detail: string;
+  actionId: string;
+  occurredAtMs: number;
+}
 
 interface SnapshotLoadResult {
   snapshot: SyncShellSnapshot;
@@ -32,6 +41,7 @@ export interface SyncShellController {
   secondaryActions: SyncShellAction[];
   source: SyncShellSource;
   lastError: string | null;
+  lastActionNotice: SyncActionNotice | null;
   isRefreshing: boolean;
   isExecuting: boolean;
   executingActionId: string | null;
@@ -42,6 +52,61 @@ export interface SyncShellController {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function actionResultNotice(action: SyncShellAction, snapshot: SyncShellSnapshot): SyncActionNotice {
+  const summary = summarizeSyncShellSnapshot(snapshot);
+  const changeCount = summary.changeBadgeCount;
+  if (action.action_id === 'detect-local-changes') {
+    return changeCount > 0
+      ? {
+          level: 'info',
+          title: '已检查本地变更',
+          detail: `发现 ${changeCount} 个待同步文件。`,
+          actionId: action.action_id,
+          occurredAtMs: snapshot.generated_at_ms,
+        }
+      : {
+          level: 'success',
+          title: '没有需要同步的本地变更',
+          detail: '本地工作区当前没有检测到待提交内容。',
+          actionId: action.action_id,
+          occurredAtMs: snapshot.generated_at_ms,
+        };
+  }
+  if (action.action_id === 'submit-detected-commit') {
+    return changeCount > 0
+      ? {
+          level: 'warning',
+          title: '本地变更提交后仍有待同步内容',
+          detail: `仍检测到 ${changeCount} 个本地变更，请再次检查后继续提交。`,
+          actionId: action.action_id,
+          occurredAtMs: snapshot.generated_at_ms,
+        }
+      : {
+          level: 'success',
+          title: '本地变更已提交',
+          detail: '本地工作区当前没有待同步文件。',
+          actionId: action.action_id,
+          occurredAtMs: snapshot.generated_at_ms,
+        };
+  }
+  if (action.action_id === 'pull') {
+    return {
+      level: summary.level === 'success' ? 'success' : 'info',
+      title: '已检查远端变更',
+      detail: summary.detail,
+      actionId: action.action_id,
+      occurredAtMs: snapshot.generated_at_ms,
+    };
+  }
+  return {
+    level: summary.level === 'danger' ? 'danger' : summary.level,
+    title: '同步操作已完成',
+    detail: summary.detail,
+    actionId: action.action_id,
+    occurredAtMs: snapshot.generated_at_ms,
+  };
 }
 
 function isErrorPayload(payload: unknown): payload is { code?: string; message?: string } {
@@ -114,13 +179,14 @@ function confirmAction(action: SyncShellAction): boolean {
   if (!action.requires_confirmation) {
     return true;
   }
-  return window.confirm(`Run sync action "${action.label}"?`);
+  return window.confirm('确定执行此同步操作吗？');
 }
 
 export function useSyncShellController(): SyncShellController {
   const [snapshot, setSnapshot] = useState<SyncShellSnapshot>(fallbackSnapshot);
   const [source, setSource] = useState<SyncShellSource>('example');
   const [lastError, setLastError] = useState<string | null>(null);
+  const [lastActionNotice, setLastActionNotice] = useState<SyncActionNotice | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
   const [executingActionId, setExecutingActionId] = useState<string | null>(null);
@@ -156,6 +222,7 @@ export function useSyncShellController(): SyncShellController {
       setSnapshot(result.snapshot);
       setSource(result.source);
       setLastError(result.error);
+      setLastActionNotice(null);
     } finally {
       setIsRefreshing(false);
     }
@@ -171,11 +238,21 @@ export function useSyncShellController(): SyncShellController {
     setIsExecuting(true);
     setExecutingActionId(action.action_id);
     try {
-      setSnapshot(await executeBridgeAction(action.action_id));
+      const nextSnapshot = await executeBridgeAction(action.action_id);
+      setSnapshot(nextSnapshot);
       setSource('bridge');
       setLastError(null);
+      setLastActionNotice(actionResultNotice(action, nextSnapshot));
     } catch (error) {
-      setLastError(errorMessage(error));
+      const message = errorMessage(error);
+      setLastError(message);
+      setLastActionNotice({
+        level: 'danger',
+        title: '同步操作失败',
+        detail: message,
+        actionId: action.action_id,
+        occurredAtMs: Date.now(),
+      });
     } finally {
       setIsExecuting(false);
       setExecutingActionId(null);
@@ -194,6 +271,7 @@ export function useSyncShellController(): SyncShellController {
     secondaryActions: snapshot.sync_center.panel.secondary_actions,
     source,
     lastError,
+    lastActionNotice,
     isRefreshing,
     isExecuting,
     executingActionId,
