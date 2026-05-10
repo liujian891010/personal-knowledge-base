@@ -173,6 +173,31 @@ class FakeService:
             },
         }
 
+    def write_local_settings(self, payload):
+        self.calls.append(("write-local-settings", payload))
+        return {
+            "schema_version": "v1",
+            "source": "file",
+            "settings_path": "C:/vault/.noteapp/settings.json",
+            "vault_root": "C:/vault",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "sync": {
+                "base_url": "https://sync.example.com",
+                "bearer_token_configured": True,
+                "request_timeout_seconds": 30.0,
+                "blob_timeout_seconds": 60.0,
+                "user_agent": "pkb-desktop-sync/0.1",
+            },
+            "appearance": {
+                "theme": payload["appearance"]["theme"],
+            },
+            "ai": {
+                "local_model_status": payload["ai"]["local_model_status"],
+                "embedding_status": payload["ai"]["embedding_status"],
+            },
+        }
+
     def detect_local_changes(self):
         self.calls.append(("detect-local-changes", None))
         return self.detect_local_changes_payload
@@ -837,6 +862,59 @@ class DesktopCliTests(unittest.TestCase):
         self.assertTrue(payload["sync"]["bearer_token_configured"])
         self.assertEqual(payload["appearance"]["theme"], "dark")
         self.assertEqual(self.service.calls, [("local-settings-snapshot", None)])
+
+    def test_write_local_settings_command_routes_to_service(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "settings.json"
+            input_path.write_text(
+                json.dumps(
+                    {
+                        "appearance": {"theme": "light"},
+                        "ai": {
+                            "local_model_status": "available",
+                            "embedding_status": "indexing",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "--bearer-token",
+                "token-1",
+                "write-local-settings",
+                "--input-json",
+                str(input_path),
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["source"], "file")
+        self.assertEqual(payload["appearance"]["theme"], "light")
+        self.assertEqual(payload["ai"]["local_model_status"], "available")
+        self.assertEqual(payload["ai"]["embedding_status"], "indexing")
+        self.assertEqual(
+            self.service.calls,
+            [
+                (
+                    "write-local-settings",
+                    {
+                        "appearance": {"theme": "light"},
+                        "ai": {
+                            "local_model_status": "available",
+                            "embedding_status": "indexing",
+                        },
+                    },
+                )
+            ],
+        )
 
     def test_sync_panel_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(

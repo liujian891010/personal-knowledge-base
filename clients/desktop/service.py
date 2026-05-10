@@ -104,6 +104,11 @@ def _append_jsonl_record(path: Path, payload: dict[str, object]) -> None:
         handle.write("\n")
 
 
+def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
+    rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+    _write_bytes_atomic(path, (rendered + "\n").encode("utf-8"))
+
+
 def _load_jsonl_records(path: Path) -> list[dict[str, object]]:
     if not path.exists() or not path.is_file():
         return []
@@ -137,6 +142,90 @@ def _resolve_activity_feed_level(feed: "DesktopSyncActivityFeed") -> str:
     if any(record.level == "warning" for record in feed.records):
         return "warning"
     return "info"
+
+
+_LOCAL_SETTINGS_TOP_LEVEL_KEYS = {"appearance", "ai"}
+_LOCAL_SETTINGS_APPEARANCE_KEYS = {"theme"}
+_LOCAL_SETTINGS_AI_KEYS = {"local_model_status", "embedding_status"}
+_LOCAL_SETTINGS_THEMES = {"dark", "light", "system"}
+_LOCAL_SETTINGS_MODEL_STATUSES = {
+    "not_configured",
+    "available",
+    "unavailable",
+    "disabled",
+    "error",
+}
+_LOCAL_SETTINGS_EMBEDDING_STATUSES = {
+    "not_configured",
+    "ready",
+    "indexing",
+    "disabled",
+    "error",
+}
+
+
+def _require_local_settings_object(payload: Mapping[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key, {})
+    if not isinstance(value, dict):
+        raise ValueError(f"local settings {key} must be an object")
+    return dict(value)
+
+
+def _require_allowed_keys(payload: Mapping[str, Any], allowed_keys: set[str], label: str) -> None:
+    unknown_keys = sorted(str(key) for key in payload if key not in allowed_keys)
+    if unknown_keys:
+        raise ValueError(f"{label} contains unsupported keys: {', '.join(unknown_keys)}")
+
+
+def _normalize_local_settings_choice(
+    payload: Mapping[str, Any],
+    key: str,
+    allowed_values: set[str],
+    default: str,
+    label: str,
+) -> str:
+    value = payload.get(key, default)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{label} must be a non-empty string")
+    if value not in allowed_values:
+        raise ValueError(f"{label} is not supported: {value}")
+    return value
+
+
+def _normalize_local_settings_payload(payload: Mapping[str, Any]) -> dict[str, object]:
+    _require_allowed_keys(payload, _LOCAL_SETTINGS_TOP_LEVEL_KEYS, "local settings")
+    appearance_payload = _require_local_settings_object(payload, "appearance")
+    ai_payload = _require_local_settings_object(payload, "ai")
+    _require_allowed_keys(appearance_payload, _LOCAL_SETTINGS_APPEARANCE_KEYS, "local settings appearance")
+    _require_allowed_keys(ai_payload, _LOCAL_SETTINGS_AI_KEYS, "local settings ai")
+
+    return {
+        "appearance": {
+            "theme": _normalize_local_settings_choice(
+                appearance_payload,
+                "theme",
+                _LOCAL_SETTINGS_THEMES,
+                "dark",
+                "local settings appearance.theme",
+            ),
+        },
+        "ai": {
+            "local_model_status": _normalize_local_settings_choice(
+                ai_payload,
+                "local_model_status",
+                _LOCAL_SETTINGS_MODEL_STATUSES,
+                "not_configured",
+                "local settings ai.local_model_status",
+            ),
+            "embedding_status": _normalize_local_settings_choice(
+                ai_payload,
+                "embedding_status",
+                _LOCAL_SETTINGS_EMBEDDING_STATUSES,
+                "not_configured",
+                "local settings ai.embedding_status",
+            ),
+        },
+    }
 
 
 def _build_pull_apply_ops_hash(plan: "DesktopPullRequiredBlobPlan") -> str:
@@ -761,6 +850,11 @@ class DesktopSyncService:
                 ),
             ),
         )
+
+    def write_local_settings(self, payload: Mapping[str, Any]) -> DesktopLocalSettingsSnapshot:
+        normalized = _normalize_local_settings_payload(payload)
+        _write_json_atomic(self.workspace.paths.settings_path, normalized)
+        return self.load_local_settings_snapshot()
 
     def pull_reconcile(self, *, rewritten_at: int) -> PullReconcileSessionResult:
         return self.workspace.pull_reconcile(rewritten_at=rewritten_at)

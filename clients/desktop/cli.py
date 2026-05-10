@@ -126,6 +126,13 @@ def _load_base64_payload_map(path: Path) -> dict[str, bytes]:
     return decoded
 
 
+def _load_json_object(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON file must contain an object: {path}")
+    return payload
+
+
 def _load_payload_dir(file_ids: Sequence[str], path: Path, *, suffix: str) -> dict[str, bytes]:
     decoded: dict[str, bytes] = {}
     for file_id in file_ids:
@@ -175,6 +182,8 @@ def create_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("status")
     subparsers.add_parser("local-settings-snapshot")
+    write_settings_parser = subparsers.add_parser("write-local-settings")
+    write_settings_parser.add_argument("--input-json", required=True)
     subparsers.add_parser("detect-local-changes")
     subparsers.add_parser("worker-state")
     subparsers.add_parser("worker-health")
@@ -359,6 +368,8 @@ def run_cli(
         result = service.load_snapshot()
     elif args.command == "local-settings-snapshot":
         result = service.load_local_settings_snapshot()
+    elif args.command == "write-local-settings":
+        result = service.write_local_settings(_load_json_object(Path(args.input_json)))
     elif args.command == "detect-local-changes":
         result = service.detect_local_changes()
     elif args.command == "worker-state":
