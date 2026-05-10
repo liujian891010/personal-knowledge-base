@@ -110,6 +110,15 @@ function actionResultNotice(action: SyncShellAction, snapshot: SyncShellSnapshot
         };
   }
   if (action.action_id === 'pull') {
+    if (summary.conflictBadgeCount > 0) {
+      return {
+        level: 'warning',
+        title: '已应用远端内容，请处理本地冲突副本',
+        detail: `检测到 ${summary.conflictBadgeCount} 个本地冲突副本，请检查后保留或清理。`,
+        actionId: action.action_id,
+        occurredAtMs: snapshot.generated_at_ms,
+      };
+    }
     if (changeCount > 0) {
       return {
         level: 'info',

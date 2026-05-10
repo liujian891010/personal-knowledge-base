@@ -2550,7 +2550,7 @@ class DesktopSyncService:
         if action.command == "recover":
             return self.resume_commit_recovery(normalized_at=resolved_now_ms)
         if action.command == "pull":
-            return self.pull_and_ack(rewritten_at=resolved_now_ms)
+            return self.pull_and_apply(rewritten_at=resolved_now_ms)
         if action.command == "submit-detected-commit":
             return self.submit_detected_changes_if_needed(
                 created_at=resolved_now_ms,
