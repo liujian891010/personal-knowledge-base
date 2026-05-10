@@ -242,6 +242,13 @@ def main() -> int:
                 assert action_payload["vault_id"] == VAULT_ID, action_payload
                 assert action_payload["device_id"] == device_id, action_payload
                 assert "snapshot" not in action_payload, action_payload
+                status, missing_action = request_bridge_json(
+                    "/api/sync/actions/not-a-real-action",
+                    method="POST",
+                )
+                assert status == 500, missing_action
+                assert missing_action["code"] == "sync_bridge_error", missing_action
+                assert "sync action not found" in missing_action["message"], missing_action
             finally:
                 bridge.terminate()
                 try:
