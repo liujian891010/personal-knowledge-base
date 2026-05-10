@@ -1,5 +1,6 @@
 export type SyncShellLevel = 'success' | 'info' | 'warning' | 'danger';
 export type SyncShellActionEmphasis = 'normal' | 'primary' | 'warning';
+export type SyncShellActivityStatus = 'executed' | 'disabled' | 'unsupported' | 'failed';
 
 export interface SyncShellAction {
   action_id: string;
@@ -38,7 +39,7 @@ export interface SyncShellActivityRecord {
   level: SyncShellLevel;
   action_id: string;
   command: string;
-  status: string;
+  status: SyncShellActivityStatus;
   source: string;
   message?: string | null;
 }
@@ -138,6 +139,13 @@ function normalizeActionEmphasis(value: string): SyncShellActionEmphasis {
   throw new Error(`unsupported sync action emphasis: ${value}`);
 }
 
+function normalizeActivityStatus(value: string): SyncShellActivityStatus {
+  if (value === 'executed' || value === 'disabled' || value === 'unsupported' || value === 'failed') {
+    return value;
+  }
+  throw new Error(`unsupported sync activity status: ${value}`);
+}
+
 function parseAction(payload: unknown, context: string): SyncShellAction {
   if (!isObject(payload)) {
     throw new Error(`sync shell snapshot is missing action object: ${context}`);
@@ -181,7 +189,7 @@ function parseActivityRecord(payload: unknown, context: string): SyncShellActivi
     level: normalizeLevel(requireString(payload, 'level')),
     action_id: requireString(payload, 'action_id'),
     command: requireString(payload, 'command'),
-    status: requireString(payload, 'status'),
+    status: normalizeActivityStatus(requireString(payload, 'status')),
     source: requireString(payload, 'source'),
     message: typeof payload.message === 'string' ? payload.message : null,
   };
