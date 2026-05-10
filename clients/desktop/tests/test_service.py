@@ -1478,6 +1478,37 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(conflict_records[0].conflict_source_file_id, "file-live")
             self.assertEqual((root / conflict_records[0].path).read_bytes(), local_dirty_payload)
 
+    def test_pull_conflict_resolve_all_returns_sync_to_clear_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            remote_payload = b"# Remote note\n"
+            service, _, _, payload, _ = self._seed_workspace(
+                root,
+                remote_payload=remote_payload,
+            )
+            live_path = root / "Notes" / "Live.md"
+            live_path.write_bytes(payload + b" local dirty\n")
+            with closing(open_database(service.workspace.paths.db_path)) as connection:
+                state = load_vault_state(connection, "vault-001")
+                self.assertIsNotNone(state)
+                upsert_vault_state(
+                    connection,
+                    replace(state, last_manifest_summary=None, last_manifest_summary_status="stale"),
+                )
+            service.execute_sync_action("pull", now_ms=1770000041999)
+            self.assertGreater(service.build_sync_panel_model(now_ms=1770000042000).conflict_badge_count, 0)
+
+            result = service.execute_sync_action("resolve-conflicts-all", now_ms=1770000042999)
+            snapshot = service.build_sync_shell_snapshot(now_ms=1770000043000)
+
+            self.assertEqual(result.status, "executed")
+            self.assertFalse(result.payload.state.has_unresolved_conflicts)
+            self.assertEqual(snapshot.sync_center.panel.level, "success")
+            self.assertEqual(snapshot.sync_center.panel.conflict_badge_count, 0)
+            self.assertEqual(snapshot.sync_center.panel.change_badge_count, 0)
+            self.assertEqual(service.list_conflicts().conflict_copies, [])
+            self.assertEqual(live_path.read_bytes(), remote_payload)
+
     def test_submit_workspace_commit_auto_generates_placeholder_encrypted_blobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, api_opener, blob_opener, payload, _ = self._seed_workspace(Path(tmpdir))
