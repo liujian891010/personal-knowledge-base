@@ -54,6 +54,20 @@ $env:NOTEAPP_SYNC_ACTION_ID='submit-detected-commit'
 npm run sync:action
 ```
 
+Run the local HTTP bridge used by the browser UI:
+
+```powershell
+npm run sync:bridge
+```
+
+Bridge endpoints:
+
+```text
+GET  http://127.0.0.1:3187/api/sync/snapshot
+POST http://127.0.0.1:3187/api/sync/actions/<action-id>
+GET  http://127.0.0.1:3187/api/sync/live
+```
+
 Validate the checked-in example fixture and TypeScript adapter:
 
 ```powershell
