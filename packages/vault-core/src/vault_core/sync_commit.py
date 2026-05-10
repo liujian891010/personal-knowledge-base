@@ -1042,7 +1042,11 @@ def prepare_commit_intent(
         status="prepared",
         created_at=created_at,
         updated_at=created_at,
-        intent_delete_seq_upper_bound=state.local_delete_sequence,
+        intent_delete_seq_upper_bound=(
+            state.local_delete_sequence
+            if state.local_delete_sequence > 0
+            else None
+        ),
     )
     updated_state = apply_commit_submitted_state(state)
     upsert_commit_intent_journal(connection, journal)

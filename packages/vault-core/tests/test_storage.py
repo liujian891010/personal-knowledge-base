@@ -869,9 +869,29 @@ class VaultCoreStorageTests(unittest.TestCase):
                 stored_journal = load_commit_intent_journal(connection, "vault_pkb_001")
                 self.assertEqual(bundle.journal.status, "prepared")
                 self.assertEqual(bundle.journal.intent_manifest_hash, "pending")
+                self.assertEqual(bundle.journal.intent_delete_seq_upper_bound, 2)
                 self.assertTrue(bundle.state.commit_in_progress)
                 self.assertIsNotNone(stored_journal)
                 self.assertEqual(stored_journal, bundle.journal)
+
+    def test_prepare_commit_intent_omits_empty_delete_sequence_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with closing(open_database(Path(tmpdir) / "state.sqlite3")) as connection:
+                bootstrap_database(connection)
+                state = initialize_vault_state(connection, "vault_pkb_001")
+
+                bundle = prepare_commit_intent(
+                    connection,
+                    state=state,
+                    commit_intent_id="intent_prepared",
+                    created_by_device="desktop-shanghai",
+                    created_at=1770000018300,
+                )
+
+                stored_journal = load_commit_intent_journal(connection, "vault_pkb_001")
+                self.assertIsNone(bundle.journal.intent_delete_seq_upper_bound)
+                self.assertIsNotNone(stored_journal)
+                self.assertIsNone(stored_journal.intent_delete_seq_upper_bound)
 
     def test_build_content_snapshot_plan_freezes_active_files_into_staging_paths(self) -> None:
         document = FileMapDocument(
