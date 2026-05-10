@@ -72,7 +72,7 @@ function buildCommand() {
   ];
 
   if (process.env.NOTEAPP_BEARER_TOKEN) {
-    commandArgs.push('--bearer-token', process.env.NOTEAPP_BEARER_TOKEN);
+    commandArgs.push(`--bearer-token=${process.env.NOTEAPP_BEARER_TOKEN}`);
   }
 
   commandArgs.push('local-settings-snapshot');
@@ -90,6 +90,8 @@ try {
   const env = {
     ...process.env,
     PYTHONPATH: buildPythonPath(),
+    PYTHONIOENCODING: 'utf-8',
+    PYTHONUTF8: '1',
   };
 
   if (isDryRun) {
