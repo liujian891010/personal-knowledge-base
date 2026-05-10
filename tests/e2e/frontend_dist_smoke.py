@@ -83,7 +83,7 @@ def main() -> int:
         assert "本地模型" in bundle, "settings AI view was not bundled"
         assert "工作区" in bundle, "workspace explorer view was not bundled"
         assert "工作区文件夹" in bundle, "workspace folder selector was not bundled"
-        assert "应用文件夹" in bundle, "workspace folder apply action was not bundled"
+        assert "选择文件夹" in bundle, "workspace folder picker action was not bundled"
         assert "文件元数据" in bundle, "workspace file metadata view was not bundled"
         assert "内容编辑器" in bundle, "workspace file content editor was not bundled"
         assert "已检查本地变更" in bundle, "sync action notice view was not bundled"

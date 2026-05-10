@@ -192,6 +192,9 @@ def main() -> int:
             settings_output_path = Path(work_dir) / "local-settings-snapshot.json"
             workspace_files_output_path = Path(work_dir) / "workspace-files.json"
             workspace_root_output_path = Path(work_dir) / "workspace-root.json"
+            picked_vault_root = Path(work_dir) / "picked-vault"
+            picked_vault_root.mkdir()
+            (picked_vault_root / "Picked.md").write_text("# Picked\n\nfrom folder picker\n", encoding="utf-8", newline="\n")
             pythonpath = os.pathsep.join([str(VAULT_CORE_SRC), str(ROOT)])
             cli_env = {
                 **os.environ,
@@ -278,6 +281,7 @@ def main() -> int:
                 "NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT": str(settings_output_path),
                 "NOTEAPP_WORKSPACE_FILES_OUTPUT": str(workspace_files_output_path),
                 "NOTEAPP_WORKSPACE_ROOT_OUTPUT": str(workspace_root_output_path),
+                "NOTEAPP_WORKSPACE_SELECT_ROOT": str(picked_vault_root),
             }
             run_checked(
                 ["node", "scripts/write-live-sync-shell.mjs"],
@@ -382,6 +386,16 @@ def main() -> int:
                 status, switched_sync_payload = request_bridge_json("/api/sync/live")
                 assert status == 200, switched_sync_payload
                 assert switched_sync_payload["sync_center"]["panel"]["change_badge_count"] == 1, switched_sync_payload
+                status, picked_settings = request_bridge_json(
+                    "/api/workspace/select-folder",
+                    method="POST",
+                )
+                assert status == 200, picked_settings
+                assert picked_settings["vault_root"] == str(picked_vault_root), picked_settings
+                status, picked_workspace_payload = request_bridge_json("/api/workspace/files")
+                assert status == 200, picked_workspace_payload
+                assert picked_workspace_payload["total_count"] == 1, picked_workspace_payload
+                assert picked_workspace_payload["files"][0]["path"] == "Picked.md", picked_workspace_payload
                 status, _ = request_bridge_json(
                     "/api/workspace/root",
                     method="POST",

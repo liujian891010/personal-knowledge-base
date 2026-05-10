@@ -34,6 +34,7 @@ export interface LocalSettingsController {
   refresh: () => Promise<void>;
   saveSettings: (payload: LocalSettingsWritePayload) => Promise<void>;
   saveWorkspaceRoot: (vaultRoot: string) => Promise<void>;
+  selectWorkspaceRoot: () => Promise<void>;
 }
 
 function errorMessage(error: unknown): string {
@@ -124,6 +125,16 @@ async function saveBridgeWorkspaceRoot(vaultRoot: string): Promise<LocalSettings
   return parseLocalSettingsSnapshot(await response.json());
 }
 
+async function selectBridgeWorkspaceRoot(): Promise<LocalSettingsSnapshot> {
+  const response = await fetch(`${syncBridgeUrl}/api/workspace/select-folder`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, 'workspace folder picker'));
+  }
+  return parseLocalSettingsSnapshot(await response.json());
+}
+
 export function useLocalSettingsController(): LocalSettingsController {
   const [snapshot, setSnapshot] = useState<LocalSettingsSnapshot>(fallbackSnapshot);
   const [source, setSource] = useState<LocalSettingsSnapshotSource>('example');
@@ -196,6 +207,20 @@ export function useLocalSettingsController(): LocalSettingsController {
     }
   };
 
+  const selectWorkspaceRoot = async () => {
+    setIsSaving(true);
+    try {
+      setSnapshot(await selectBridgeWorkspaceRoot());
+      setSource('bridge');
+      setLastError(null);
+      setSavedAtMs(Date.now());
+    } catch (error) {
+      setLastError(errorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const summary = useMemo(() => summarizeLocalSettingsSnapshot(snapshot), [snapshot]);
   return {
     snapshot,
@@ -208,5 +233,6 @@ export function useLocalSettingsController(): LocalSettingsController {
     refresh,
     saveSettings,
     saveWorkspaceRoot,
+    selectWorkspaceRoot,
   };
 }

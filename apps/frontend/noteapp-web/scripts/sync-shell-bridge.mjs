@@ -61,6 +61,8 @@ It forwards to:
   GET  /api/workspace/live       Read current workspace files without running CLI
   GET  /api/workspace/root       Read selected workspace root
   POST /api/workspace/root       Validate and switch selected workspace root
+  POST /api/workspace/select-folder
+                                  Open a native folder picker and switch selected workspace root
   GET  /health                   Health check
 `);
 }
@@ -369,7 +371,10 @@ function normalizeWorkspaceRootPayload(payload) {
   if (!payload || typeof payload !== 'object') {
     throw new Error('workspace root request must contain an object');
   }
-  const value = payload.vault_root;
+  return normalizeWorkspaceRootPath(payload.vault_root);
+}
+
+function normalizeWorkspaceRootPath(value) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error('workspace root must be a non-empty string');
   }
@@ -381,6 +386,71 @@ function normalizeWorkspaceRootPayload(payload) {
     throw new Error(`workspace root is not a directory: ${resolved}`);
   }
   return resolved;
+}
+
+function selectWorkspaceRootWithDialog() {
+  if (process.env.NOTEAPP_WORKSPACE_SELECT_ROOT) {
+    return normalizeWorkspaceRootPath(process.env.NOTEAPP_WORKSPACE_SELECT_ROOT);
+  }
+  if (process.platform !== 'win32') {
+    throw new Error('workspace folder selection is only implemented for the Windows bridge');
+  }
+
+  const script = [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+    '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
+    '$dialog.Description = "Select workspace folder"',
+    '$dialog.ShowNewFolderButton = $true',
+    'if ($env:NOTEAPP_WORKSPACE_DIALOG_INITIAL -and (Test-Path -LiteralPath $env:NOTEAPP_WORKSPACE_DIALOG_INITIAL)) { $dialog.SelectedPath = $env:NOTEAPP_WORKSPACE_DIALOG_INITIAL }',
+    '$result = $dialog.ShowDialog()',
+    'if ($result -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath; exit 0 }',
+    'exit 2',
+  ].join('; ');
+
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-STA', '-Command', script], {
+    env: {
+      ...process.env,
+      NOTEAPP_WORKSPACE_DIALOG_INITIAL: selectedVaultRoot,
+    },
+    encoding: 'utf8',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status === 2) {
+    throw new Error('workspace folder selection was cancelled');
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      [
+        `workspace folder selection failed with exit code ${result.status}`,
+        result.stdout.trim(),
+        result.stderr.trim(),
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+  }
+  return normalizeWorkspaceRootPath(result.stdout.trim());
+}
+
+function applyWorkspaceRoot(vaultRoot) {
+  selectedVaultRoot = vaultRoot;
+  persistWorkspaceRoot(selectedVaultRoot);
+  ensureWorkspaceInitialized();
+  runScript('write-local-settings-snapshot.mjs', {
+    NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
+  });
+  runScript('write-workspace-files.mjs', {
+    NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+  });
+  runScript('write-live-sync-shell.mjs', {
+    NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
+  });
+  return readSettingsSnapshot();
 }
 
 function readSnapshot() {
@@ -584,19 +654,12 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && url.pathname === '/api/workspace/root') {
       const rawBody = await readRequestBody(request);
       const payload = JSON.parse(rawBody);
-      selectedVaultRoot = normalizeWorkspaceRootPayload(payload);
-      persistWorkspaceRoot(selectedVaultRoot);
-      ensureWorkspaceInitialized();
-      runScript('write-local-settings-snapshot.mjs', {
-        NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
-      });
-      runScript('write-workspace-files.mjs', {
-        NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
-      });
-      runScript('write-live-sync-shell.mjs', {
-        NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
-      });
-      jsonResponse(request, response, 200, readSettingsSnapshot());
+      jsonResponse(request, response, 200, applyWorkspaceRoot(normalizeWorkspaceRootPayload(payload)));
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/workspace/select-folder') {
+      jsonResponse(request, response, 200, applyWorkspaceRoot(selectWorkspaceRootWithDialog()));
       return;
     }
 
