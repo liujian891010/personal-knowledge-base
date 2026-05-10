@@ -3,6 +3,7 @@ node_modules/
 dist/
 apps/frontend/noteapp-web/fixtures/live-sync-shell.json
 apps/frontend/noteapp-web/bridge.local.json
+apps/backend/noteapp-server/.data/
 
 # Python
 __pycache__/
