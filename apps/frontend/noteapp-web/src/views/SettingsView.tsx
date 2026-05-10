@@ -2,8 +2,12 @@ import React, { useState } from 'react';
 import { Settings, Cloud, Palette, Bot, Key, Laptop, Smartphone as Phone, Monitor, ChevronRight, Activity, RefreshCw } from 'lucide-react';
 import { useSyncShellController } from '../useSyncShellSnapshot';
 
-export default function SettingsView() {
-  const [activeTab, setActiveTab] = useState('sync');
+type SettingsViewProps = {
+  initialTab?: string;
+};
+
+export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps) {
+  const [activeTab, setActiveTab] = useState(initialTab);
   const {
     summary: syncSummary,
     secondaryActions,
