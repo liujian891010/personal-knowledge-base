@@ -30,6 +30,7 @@ export interface LocalSettingsSnapshot {
 }
 
 export interface LocalSettingsWritePayload {
+  schema_version: 'v1';
   appearance: LocalAppearanceSettings;
   ai: LocalAiSettings;
 }
