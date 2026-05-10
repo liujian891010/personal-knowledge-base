@@ -359,6 +359,8 @@ def main() -> int:
                 assert root_payload["initialized"] is True, root_payload
                 switched_vault_root = Path(work_dir) / "switched-vault"
                 switched_vault_root.mkdir()
+                switched_note_path = switched_vault_root / "Imported.md"
+                switched_note_path.write_text("# Imported\n\nfrom selected folder\n", encoding="utf-8", newline="\n")
                 status, switched_settings = request_bridge_json(
                     "/api/workspace/root",
                     method="POST",
@@ -373,6 +375,13 @@ def main() -> int:
                 status, switched_root_payload = request_bridge_json("/api/workspace/root")
                 assert status == 200, switched_root_payload
                 assert switched_root_payload["vault_root"] == str(switched_vault_root), switched_root_payload
+                status, switched_workspace_payload = request_bridge_json("/api/workspace/files")
+                assert status == 200, switched_workspace_payload
+                assert switched_workspace_payload["total_count"] == 1, switched_workspace_payload
+                assert switched_workspace_payload["files"][0]["path"] == "Imported.md", switched_workspace_payload
+                status, switched_sync_payload = request_bridge_json("/api/sync/live")
+                assert status == 200, switched_sync_payload
+                assert switched_sync_payload["sync_center"]["panel"]["change_badge_count"] == 1, switched_sync_payload
                 status, _ = request_bridge_json(
                     "/api/workspace/root",
                     method="POST",

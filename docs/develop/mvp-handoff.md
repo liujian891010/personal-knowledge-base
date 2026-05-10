@@ -135,7 +135,8 @@ $env:PYTHONPATH='packages/vault-core/src;.'; & 'C:\Users\ROBERT LIU\AppData\Loca
 
 1. 校验该文件夹是否存在。
 2. 初始化缺失的 `.noteapp` 工作区数据。
-3. 刷新设置快照、工作区文件列表和同步状态。
+3. 如果工作区是空 filemap，会自动登记已有的 `.md`、`.markdown`、`.txt` 文件。
+4. 刷新设置快照、工作区文件列表和同步状态。
 
 浏览器不能直接读取操作系统的完整文件夹路径，所以当前 MVP 使用“输入或粘贴路径”的方式完成选择。
 
