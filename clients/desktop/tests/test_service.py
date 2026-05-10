@@ -446,18 +446,20 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 file_id_builder=lambda path: "file-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
             )
             service.ensure_initialized(now_ms=1770000030000)
-            (root / "中文路径.md").write_bytes("# 中文标题\n".encode("gb18030"))
+            nested_path = root / "二级目录" / "中文路径.md"
+            nested_path.parent.mkdir()
+            nested_path.write_bytes("# 中文标题\n".encode("gb18030"))
             (root / ".noteapp" / "ignored.md").write_text("# ignored\n", encoding="utf-8")
 
             snapshot = service.import_existing_workspace_files_if_empty()
 
             self.assertEqual(snapshot.total_count, 1)
-            self.assertEqual(snapshot.files[0].path, "中文路径.md")
+            self.assertEqual(snapshot.files[0].path, "二级目录/中文路径.md")
             self.assertEqual(snapshot.files[0].type, "note")
             self.assertTrue(snapshot.files[0].exists_on_disk)
             self.assertEqual(snapshot.files[0].size_bytes, len("# 中文标题\n".encode("gb18030")))
             document = load_filemap(service.workspace.paths.filemap_path)
-            self.assertEqual(document.files[0].path, "中文路径.md")
+            self.assertEqual(document.files[0].path, "二级目录/中文路径.md")
 
     def test_load_workspace_file_content_returns_utf8_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
