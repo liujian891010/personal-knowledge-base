@@ -883,6 +883,50 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
         self.assertEqual(decrypted, payload)
 
+    def test_load_local_settings_snapshot_returns_defaults_without_settings_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            snapshot = service.load_local_settings_snapshot()
+
+            self.assertEqual(snapshot.schema_version, "v1")
+            self.assertEqual(snapshot.source, "default")
+            self.assertEqual(snapshot.settings_path, root / ".noteapp" / "settings.json")
+            self.assertEqual(snapshot.vault_root, root)
+            self.assertEqual(snapshot.vault_id, "vault-001")
+            self.assertEqual(snapshot.device_id, "desktop-shanghai")
+            self.assertEqual(snapshot.sync.base_url, "https://sync.example.com")
+            self.assertFalse(snapshot.sync.bearer_token_configured)
+            self.assertEqual(snapshot.appearance.theme, "dark")
+            self.assertEqual(snapshot.ai.local_model_status, "not_configured")
+            self.assertEqual(snapshot.ai.embedding_status, "not_configured")
+
+    def test_load_local_settings_snapshot_reads_local_settings_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            settings_path = root / ".noteapp" / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "appearance": {"theme": "light"},
+                        "ai": {
+                            "local_model_status": "available",
+                            "embedding_status": "indexing",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            snapshot = service.load_local_settings_snapshot()
+
+            self.assertEqual(snapshot.source, "file")
+            self.assertEqual(snapshot.appearance.theme, "light")
+            self.assertEqual(snapshot.ai.local_model_status, "available")
+            self.assertEqual(snapshot.ai.embedding_status, "indexing")
+
     def test_prepare_commit_materializes_snapshot_and_blob_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, _, _, payload, encrypted_payload = self._seed_workspace(Path(tmpdir))

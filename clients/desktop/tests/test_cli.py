@@ -148,6 +148,31 @@ class FakeService:
         self.calls.append(("status", None))
         return {"kind": "status", "files": 1}
 
+    def load_local_settings_snapshot(self):
+        self.calls.append(("local-settings-snapshot", None))
+        return {
+            "schema_version": "v1",
+            "source": "default",
+            "settings_path": "C:/vault/.noteapp/settings.json",
+            "vault_root": "C:/vault",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "sync": {
+                "base_url": "https://sync.example.com",
+                "bearer_token_configured": True,
+                "request_timeout_seconds": 30.0,
+                "blob_timeout_seconds": 60.0,
+                "user_agent": "pkb-desktop-sync/0.1",
+            },
+            "appearance": {
+                "theme": "dark",
+            },
+            "ai": {
+                "local_model_status": "not_configured",
+                "embedding_status": "not_configured",
+            },
+        }
+
     def detect_local_changes(self):
         self.calls.append(("detect-local-changes", None))
         return self.detect_local_changes_payload
@@ -790,6 +815,28 @@ class DesktopCliTests(unittest.TestCase):
         self.assertTrue(payload["commit_gate"]["can_submit_commit"])
         self.assertEqual(payload["changes"]["change_count"], 2)
         self.assertEqual(self.service.calls, [("vault-summary", None)])
+
+    def test_local_settings_snapshot_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "--bearer-token",
+            "token-1",
+            "local-settings-snapshot",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["schema_version"], "v1")
+        self.assertEqual(payload["sync"]["base_url"], "https://sync.example.com")
+        self.assertTrue(payload["sync"]["bearer_token_configured"])
+        self.assertEqual(payload["appearance"]["theme"], "dark")
+        self.assertEqual(self.service.calls, [("local-settings-snapshot", None)])
 
     def test_sync_panel_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(
