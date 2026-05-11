@@ -59,6 +59,7 @@ from vault_core import (
     load_commit_intent_journal,
     load_filemap,
     load_sync_apply_journal,
+    load_tombstone_ledger,
     load_vault_state,
     open_database,
     upsert_sync_apply_journal,
@@ -617,6 +618,168 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             with self.assertRaisesRegex(KeyError, "file_id not found in workspace filemap: missing"):
                 service.write_workspace_file_content("missing", "# Missing\n")
+
+    def test_workspace_file_draft_round_trips_and_clears(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            missing = service.load_workspace_file_draft("file-live")
+            self.assertFalse(missing.has_draft)
+            self.assertIsNone(missing.text)
+
+            draft = service.write_workspace_file_draft("file-live", "# Draft\n")
+
+            self.assertTrue(draft.has_draft)
+            self.assertEqual(draft.text, "# Draft\n")
+            self.assertEqual((root / ".noteapp" / "drafts" / "file-live.draft").read_text(encoding="utf-8"), "# Draft\n")
+
+            cleared = service.clear_workspace_file_draft("file-live")
+            self.assertFalse(cleared.has_draft)
+            self.assertFalse((root / ".noteapp" / "drafts" / "file-live.draft").exists())
+
+    def test_write_workspace_file_content_clears_existing_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            service.write_workspace_file_draft("file-live", "# Draft\n")
+
+            service.write_workspace_file_content("file-live", "# Saved\n")
+
+            self.assertFalse((root / ".noteapp" / "drafts" / "file-live.draft").exists())
+
+    def test_create_rename_delete_workspace_note_updates_filemap_and_disk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            created = service.create_workspace_note(
+                "Notes/New Note.md",
+                text="# New\n",
+                now_ms=1770000031000,
+            )
+
+            self.assertEqual(created.operation, "create")
+            self.assertTrue((root / "Notes" / "New Note.md").exists())
+            self.assertEqual(created.file.path, "Notes/New Note.md")
+            created_file_id = created.file.file_id
+            self.assertIn(created_file_id, [record.file_id for record in load_filemap(service.workspace.paths.filemap_path).files])
+
+            renamed = service.rename_workspace_note(
+                created_file_id,
+                "Renamed Note.md",
+                now_ms=1770000032000,
+            )
+
+            self.assertEqual(renamed.file.path, "Notes/Renamed Note.md")
+            self.assertFalse((root / "Notes" / "New Note.md").exists())
+            self.assertEqual((root / "Notes" / "Renamed Note.md").read_text(encoding="utf-8"), "# New\n")
+
+            deleted = service.delete_workspace_note(created_file_id, now_ms=1770000033000)
+
+            self.assertEqual(deleted.file.status, "deleted")
+            self.assertFalse((root / "Notes" / "Renamed Note.md").exists())
+            trash_path = root / ".noteapp" / "trash" / f"1770000033000-{created_file_id}.md"
+            self.assertTrue(trash_path.exists())
+            self.assertEqual(trash_path.read_text(encoding="utf-8"), "# New\n")
+            self.assertEqual(load_tombstone_ledger(service.workspace.paths.ledger_path)[-1].file_id, created_file_id)
+            self.assertEqual(service.load_snapshot().state.local_delete_sequence, 2)
+
+            trash = service.list_workspace_trash()
+            self.assertEqual(trash.total_count, 1)
+            self.assertEqual(trash.items[0].file_id, created_file_id)
+            self.assertTrue(trash.items[0].exists_in_trash)
+
+            restored = service.restore_workspace_trash_item(created_file_id, now_ms=1770000034000)
+            self.assertEqual(restored.file.status, "active")
+            self.assertTrue((root / "Notes" / "Renamed Note.md").exists())
+            self.assertEqual(load_tombstone_ledger(service.workspace.paths.ledger_path), [])
+            self.assertEqual(service.list_workspace_trash().total_count, 0)
+
+            service.delete_workspace_note(created_file_id, now_ms=1770000035000)
+            trash_path = root / ".noteapp" / "trash" / f"1770000035000-{created_file_id}.md"
+            trash_path.unlink()
+            purged = service.purge_workspace_trash_item(created_file_id)
+            self.assertEqual(purged.total_count, 0)
+            purged_record = next(
+                record
+                for record in load_filemap(service.workspace.paths.filemap_path).files
+                if record.file_id == created_file_id
+            )
+            self.assertEqual(purged_record.status, "deleted")
+            self.assertIn("trash_purged_at", purged_record.meta or {})
+            self.assertEqual(load_tombstone_ledger(service.workspace.paths.ledger_path)[-1].file_id, created_file_id)
+
+    def test_rename_workspace_note_rejects_folder_moves(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            with self.assertRaisesRegex(ValueError, "only supports changing the file name"):
+                service.rename_workspace_note("file-live", "Archive/Live.md", now_ms=1770000032000)
+
+            self.assertTrue((root / "Notes" / "Live.md").exists())
+
+    def test_search_workspace_rebuilds_index_and_returns_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            (root / "Notes" / "Live.md").write_text(
+                "# Searchable\n\nLocal first knowledge base content\n",
+                encoding="utf-8",
+            )
+
+            result = service.search_workspace("knowledge")
+
+            self.assertEqual(result.schema_version, "v1")
+            self.assertEqual(result.query, "knowledge")
+            self.assertEqual(result.total_count, 1)
+            self.assertEqual(result.results[0].file_id, "file-live")
+            self.assertEqual(result.results[0].path, "Notes/Live.md")
+
+    def test_search_workspace_skips_binary_or_missing_notes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            (root / "Notes" / "Live.md").write_bytes(b"\xff\xfe\xfd")
+
+            result = service.search_workspace("anything")
+
+            self.assertEqual(result.total_count, 0)
+
+    def test_load_workspace_note_links_resolves_outgoing_and_backlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            (root / "Notes" / "Target.md").write_text("# Target\n\n[[Live]]\n", encoding="utf-8")
+            (root / "Notes" / "Live.md").write_text("# Live\n\n[[Target]] and [[Missing]]\n", encoding="utf-8")
+            snapshot = service.load_snapshot()
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                snapshot.document.replace_files(
+                    [
+                        snapshot.document.files[0],
+                        FileRecord(
+                            file_id="file-target",
+                            path="Notes/Target.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000030200,
+                        ),
+                    ],
+                    updated_at=1770000030200,
+                ),
+            )
+
+            links = service.load_workspace_note_links("file-live")
+
+            self.assertEqual(links.file_id, "file-live")
+            self.assertEqual(links.outgoing_count, 2)
+            self.assertEqual(links.outgoing[0].link_text, "Target")
+            self.assertEqual(links.outgoing[0].target_file_id, "file-target")
+            self.assertEqual(links.outgoing[1].target_file_id, None)
+            self.assertEqual(links.backlink_count, 1)
+            self.assertEqual(links.backlinks[0].source_file_id, "file-target")
 
     def test_export_vault_package_excludes_runtime_state_and_optional_raw(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

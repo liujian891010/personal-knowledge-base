@@ -14,6 +14,7 @@ const syncBridgeUrl = (
   import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
 ).replace(/\/+$/, '');
 const fallbackSnapshot = parseWorkspaceFilesSnapshot(bundledExampleSnapshot);
+let cachedLoadResult: WorkspaceFilesLoadResult | null = null;
 
 type WorkspaceFilesSource = 'bridge' | 'live-fixture' | 'example';
 
@@ -23,6 +24,10 @@ interface WorkspaceFilesLoadResult {
   error: string | null;
 }
 
+export function invalidateWorkspaceFilesCache(): void {
+  cachedLoadResult = null;
+}
+
 export interface WorkspaceFilesController {
   summary: WorkspaceFilesSummary;
   files: WorkspaceFileEntry[];
@@ -30,6 +35,9 @@ export interface WorkspaceFilesController {
   lastError: string | null;
   isRefreshing: boolean;
   refresh: () => Promise<void>;
+  createNote: (path: string, text?: string) => Promise<WorkspaceFileEntry>;
+  renameNote: (fileId: string, path: string) => Promise<WorkspaceFileEntry>;
+  deleteNote: (fileId: string) => Promise<WorkspaceFileEntry>;
 }
 
 function errorMessage(error: unknown): string {
@@ -92,13 +100,57 @@ async function loadSnapshot(): Promise<WorkspaceFilesLoadResult> {
   };
 }
 
+function parseMutationPayload(payload: unknown): { file: WorkspaceFileEntry; files: WorkspaceFilesSnapshot } {
+  if (!isErrorPayload(payload) || !('file' in payload) || !('files' in payload)) {
+    throw new Error('workspace mutation response must include file and files');
+  }
+  const files = parseWorkspaceFilesSnapshot(payload.files);
+  if (!isErrorPayload(payload.file)) {
+    throw new Error('workspace mutation response file must be an object');
+  }
+  const file = files.files.find((item) => item.file_id === payload.file?.['file_id']);
+  if (!file) {
+    throw new Error('workspace mutation response file was not found in files snapshot');
+  }
+  return { file, files };
+}
+
+async function mutateWorkspace(
+  endpoint: string,
+  init: RequestInit,
+  source: string,
+  fallbackEndpoint?: string,
+): Promise<{ file: WorkspaceFileEntry; files: WorkspaceFilesSnapshot }> {
+  const response = await fetch(`${syncBridgeUrl}${endpoint}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init.headers ?? {}),
+    },
+  });
+  if (response.status === 404 && fallbackEndpoint) {
+    return mutateWorkspace(fallbackEndpoint, init, source);
+  }
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, source));
+  }
+  return parseMutationPayload(await response.json());
+}
+
 export function useWorkspaceFilesController(): WorkspaceFilesController {
-  const [snapshot, setSnapshot] = useState<WorkspaceFilesSnapshot>(fallbackSnapshot);
-  const [source, setSource] = useState<WorkspaceFilesSource>('example');
-  const [lastError, setLastError] = useState<string | null>(null);
+  const [snapshot, setSnapshot] = useState<WorkspaceFilesSnapshot>(
+    () => cachedLoadResult?.snapshot ?? fallbackSnapshot,
+  );
+  const [source, setSource] = useState<WorkspaceFilesSource>(
+    () => cachedLoadResult?.source ?? 'example',
+  );
+  const [lastError, setLastError] = useState<string | null>(() => cachedLoadResult?.error ?? null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
+    if (cachedLoadResult) {
+      return;
+    }
     let cancelled = false;
 
     setIsRefreshing(true);
@@ -107,6 +159,7 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
         if (cancelled) {
           return;
         }
+        cachedLoadResult = result;
         setSnapshot(result.snapshot);
         setSource(result.source);
         setLastError(result.error);
@@ -126,9 +179,96 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     setIsRefreshing(true);
     try {
       const result = await loadSnapshot();
+      cachedLoadResult = result;
       setSnapshot(result.snapshot);
       setSource(result.source);
       setLastError(result.error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  const createNote = async (path: string, text = '') => {
+    setIsRefreshing(true);
+    try {
+      const result = await mutateWorkspace(
+        '/api/workspace/notes',
+        {
+          method: 'POST',
+          body: JSON.stringify({ path, text }),
+        },
+        'workspace note create',
+        '/api/workspace/files',
+      );
+      setSnapshot(result.files);
+      cachedLoadResult = {
+        snapshot: result.files,
+        source: 'bridge',
+        error: null,
+      };
+      setSource('bridge');
+      setLastError(null);
+      return result.file;
+    } catch (error) {
+      setLastError(errorMessage(error));
+      throw error;
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  const renameNote = async (fileId: string, path: string) => {
+    setIsRefreshing(true);
+    try {
+      const result = await mutateWorkspace(
+        `/api/workspace/notes/${encodeURIComponent(fileId)}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ path }),
+        },
+        'workspace note rename',
+        `/api/workspace/files/${encodeURIComponent(fileId)}`,
+      );
+      setSnapshot(result.files);
+      cachedLoadResult = {
+        snapshot: result.files,
+        source: 'bridge',
+        error: null,
+      };
+      setSource('bridge');
+      setLastError(null);
+      return result.file;
+    } catch (error) {
+      setLastError(errorMessage(error));
+      throw error;
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  const deleteNote = async (fileId: string) => {
+    setIsRefreshing(true);
+    try {
+      const result = await mutateWorkspace(
+        `/api/workspace/notes/${encodeURIComponent(fileId)}`,
+        {
+          method: 'DELETE',
+        },
+        'workspace note delete',
+        `/api/workspace/files/${encodeURIComponent(fileId)}`,
+      );
+      setSnapshot(result.files);
+      cachedLoadResult = {
+        snapshot: result.files,
+        source: 'bridge',
+        error: null,
+      };
+      setSource('bridge');
+      setLastError(null);
+      return result.file;
+    } catch (error) {
+      setLastError(errorMessage(error));
+      throw error;
     } finally {
       setIsRefreshing(false);
     }
@@ -142,5 +282,8 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     lastError,
     isRefreshing,
     refresh,
+    createNote,
+    renameNote,
+    deleteNote,
   };
 }

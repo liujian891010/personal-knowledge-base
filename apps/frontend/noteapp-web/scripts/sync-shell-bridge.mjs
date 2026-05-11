@@ -29,6 +29,7 @@ const workspaceRootPath = process.env.NOTEAPP_WORKSPACE_ROOT_OUTPUT
   : defaultWorkspaceRootPath;
 const initialVaultRoot = process.env.NOTEAPP_VAULT_ROOT || '';
 let selectedVaultRoot = readPersistedWorkspaceRoot() || initialVaultRoot;
+const maxRequestBodyBytes = 1_200_000;
 
 const args = new Set(process.argv.slice(2));
 
@@ -57,6 +58,20 @@ It forwards to:
   POST /api/settings/snapshot    npm run settings:write equivalent
   GET  /api/settings/live        Read current settings snapshot without running CLI
   GET  /api/workspace/files      npm run workspace:files equivalent
+  POST /api/workspace/files      Create a local Markdown note
+  PATCH /api/workspace/files/:id Rename a local Markdown note
+  DELETE /api/workspace/files/:id
+                                  Delete a local Markdown note
+  GET  /api/workspace/search?q=term
+                                  Rebuild and query local workspace search index
+  GET  /api/workspace/files/:id/links
+                                  Read outgoing links and backlinks for one workspace file
+  GET  /api/workspace/files/:id/draft
+                                  Read unsaved draft for one workspace file
+  PUT  /api/workspace/files/:id/draft
+                                  Atomically write unsaved draft text
+  DELETE /api/workspace/files/:id/draft
+                                  Clear unsaved draft
   GET  /api/workspace/live       Read current workspace files without running CLI
   GET  /api/workspace/root       Read selected workspace root
   POST /api/workspace/root       Validate and switch selected workspace root
@@ -84,7 +99,7 @@ function corsOrigin(origin) {
 function jsonResponse(request, response, statusCode, payload) {
   response.writeHead(statusCode, {
     'access-control-allow-origin': corsOrigin(request.headers.origin),
-    'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
     'access-control-allow-headers': 'content-type',
     'cache-control': 'no-store',
     'content-type': 'application/json; charset=utf-8',
@@ -98,7 +113,7 @@ function readRequestBody(request) {
     let size = 0;
     request.on('data', (chunk) => {
       size += chunk.length;
-      if (size > 65536) {
+      if (size > maxRequestBodyBytes) {
         rejectBody(new Error('request body is too large'));
         request.destroy();
         return;
@@ -223,6 +238,7 @@ function runDesktopCli(commandArgs) {
         .join('\n'),
     );
   }
+  return result.stdout;
 }
 
 function requireBridgeEnv(name) {
@@ -399,6 +415,69 @@ function workspaceContentFileIdFromPath(pathname) {
   return decodeURIComponent(encoded);
 }
 
+function workspaceDraftFileIdFromPath(pathname) {
+  const prefix = '/api/workspace/files/';
+  const suffix = '/draft';
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+    return null;
+  }
+  const encoded = pathname.slice(prefix.length, -suffix.length);
+  if (!encoded) {
+    return null;
+  }
+  return decodeURIComponent(encoded);
+}
+
+function workspaceLinksFileIdFromPath(pathname) {
+  const prefix = '/api/workspace/files/';
+  const suffix = '/links';
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+    return null;
+  }
+  const encoded = pathname.slice(prefix.length, -suffix.length);
+  if (!encoded) {
+    return null;
+  }
+  return decodeURIComponent(encoded);
+}
+
+function workspaceFileIdFromPath(pathname) {
+  const prefix = '/api/workspace/files/';
+  if (!pathname.startsWith(prefix)) {
+    return null;
+  }
+  const encoded = pathname.slice(prefix.length);
+  if (!encoded || encoded.includes('/')) {
+    return null;
+  }
+  return decodeURIComponent(encoded);
+}
+
+function workspaceNoteFileIdFromPath(pathname) {
+  const prefix = '/api/workspace/notes/';
+  if (!pathname.startsWith(prefix)) {
+    return null;
+  }
+  const encoded = pathname.slice(prefix.length);
+  if (!encoded || encoded.includes('/')) {
+    return null;
+  }
+  return decodeURIComponent(encoded);
+}
+
+function workspaceNoteLinksFileIdFromPath(pathname) {
+  const prefix = '/api/workspace/notes/';
+  const suffix = '/links';
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+    return null;
+  }
+  const encoded = pathname.slice(prefix.length, -suffix.length);
+  if (!encoded) {
+    return null;
+  }
+  return decodeURIComponent(encoded);
+}
+
 function errorPayload(error) {
   const message = error instanceof Error ? error.message : String(error);
   if (
@@ -479,6 +558,7 @@ const server = createServer(async (request, response) => {
   }
 
   const url = new URL(request.url || '/', `http://${host}:${port}`);
+  const routePathname = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
 
   try {
     if (request.method === 'GET' && url.pathname === '/health') {
@@ -572,6 +652,69 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === 'GET' && routePathname === '/api/workspace/trash') {
+      const stdout = runDesktopCli(['workspace-trash']);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    if (request.method === 'POST' && routePathname === '/api/workspace/trash/empty') {
+      const stdout = runDesktopCli(['empty-workspace-trash']);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    if (
+      request.method === 'POST'
+      && (url.pathname === '/api/workspace/files' || url.pathname === '/api/workspace/notes')
+    ) {
+      const rawBody = await readRequestBody(request);
+      const payload = JSON.parse(rawBody);
+      if (!payload || typeof payload.path !== 'string') {
+        throw new Error('workspace note create request must include path');
+      }
+      const tempRoot = mkdtempSync(resolve(tmpdir(), 'noteapp-workspace-create-'));
+      try {
+        const inputPath = resolve(tempRoot, 'content.txt');
+        writeFileSync(inputPath, typeof payload.text === 'string' ? payload.text : '', 'utf8');
+        const stdout = runDesktopCli([
+          'create-workspace-note',
+          '--path',
+          payload.path,
+          '--input-text-file',
+          inputPath,
+        ]);
+        runScript('write-workspace-files.mjs', {
+          NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+        });
+        runScript('write-live-sync-shell.mjs', {
+          NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
+        });
+        jsonResponse(request, response, 200, JSON.parse(stdout));
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
+      }
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/workspace/search') {
+      const query = url.searchParams.get('q') || '';
+      const limit = url.searchParams.get('limit') || '20';
+      const stdout = runDesktopCli(['search-workspace', '--query', query, '--limit', limit]);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    const workspaceLinksFileId = (
+      workspaceLinksFileIdFromPath(url.pathname)
+      || workspaceNoteLinksFileIdFromPath(url.pathname)
+    );
+    if (request.method === 'GET' && workspaceLinksFileId) {
+      const stdout = runDesktopCli(['workspace-links', '--file-id', workspaceLinksFileId]);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
     const workspaceContentFileId = workspaceContentFileIdFromPath(url.pathname);
     if (request.method === 'GET' && workspaceContentFileId) {
       const tempRoot = mkdtempSync(resolve(tmpdir(), 'noteapp-workspace-content-'));
@@ -614,6 +757,98 @@ const server = createServer(async (request, response) => {
       } finally {
         rmSync(tempRoot, { recursive: true, force: true });
       }
+      return;
+    }
+
+    const workspaceFileId = workspaceFileIdFromPath(url.pathname) || workspaceNoteFileIdFromPath(url.pathname);
+    if (request.method === 'PATCH' && workspaceFileId) {
+      const rawBody = await readRequestBody(request);
+      const payload = JSON.parse(rawBody);
+      if (!payload || typeof payload.path !== 'string') {
+        throw new Error('workspace note rename request must include path');
+      }
+      const stdout = runDesktopCli([
+        'rename-workspace-note',
+        '--file-id',
+        workspaceFileId,
+        '--path',
+        payload.path,
+      ]);
+      runScript('write-workspace-files.mjs', {
+        NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+      });
+      runScript('write-live-sync-shell.mjs', {
+        NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
+      });
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    if (request.method === 'DELETE' && workspaceFileId) {
+      const stdout = runDesktopCli(['delete-workspace-note', '--file-id', workspaceFileId]);
+      runScript('write-workspace-files.mjs', {
+        NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+      });
+      runScript('write-live-sync-shell.mjs', {
+        NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
+      });
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    const trashItemPrefix = '/api/workspace/trash/';
+    if (routePathname.startsWith(trashItemPrefix)) {
+      const tail = routePathname.slice(trashItemPrefix.length);
+      const parts = tail.split('/').filter(Boolean);
+      if (parts.length === 2 && parts[1] === 'restore' && request.method === 'POST') {
+        const stdout = runDesktopCli(['restore-workspace-trash', '--file-id', decodeURIComponent(parts[0])]);
+        runScript('write-workspace-files.mjs', {
+          NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+        });
+        jsonResponse(request, response, 200, JSON.parse(stdout));
+        return;
+      }
+      if (parts.length === 1 && request.method === 'DELETE') {
+        const stdout = runDesktopCli(['purge-workspace-trash', '--file-id', decodeURIComponent(parts[0])]);
+        jsonResponse(request, response, 200, JSON.parse(stdout));
+        return;
+      }
+    }
+
+    const workspaceDraftFileId = workspaceDraftFileIdFromPath(url.pathname);
+    if (request.method === 'GET' && workspaceDraftFileId) {
+      const stdout = runDesktopCli(['workspace-file-draft', '--file-id', workspaceDraftFileId]);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    if (request.method === 'PUT' && workspaceDraftFileId) {
+      const rawBody = await readRequestBody(request);
+      const payload = JSON.parse(rawBody);
+      if (!payload || typeof payload.text !== 'string') {
+        throw new Error('workspace file draft request must include text');
+      }
+      const tempRoot = mkdtempSync(resolve(tmpdir(), 'noteapp-workspace-draft-'));
+      try {
+        const inputPath = resolve(tempRoot, 'draft.txt');
+        writeFileSync(inputPath, payload.text, 'utf8');
+        const stdout = runDesktopCli([
+          'write-workspace-file-draft',
+          '--file-id',
+          workspaceDraftFileId,
+          '--input-text-file',
+          inputPath,
+        ]);
+        jsonResponse(request, response, 200, JSON.parse(stdout));
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
+      }
+      return;
+    }
+
+    if (request.method === 'DELETE' && workspaceDraftFileId) {
+      const stdout = runDesktopCli(['clear-workspace-file-draft', '--file-id', workspaceDraftFileId]);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
       return;
     }
 

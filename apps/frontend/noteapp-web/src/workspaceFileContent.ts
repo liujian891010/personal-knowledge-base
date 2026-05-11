@@ -15,6 +15,20 @@ export interface WorkspaceFileContent {
   encoding: string;
 }
 
+export interface WorkspaceFileDraft {
+  schema_version: string;
+  vault_id: string;
+  device_id: string;
+  vault_root: string;
+  file_id: string;
+  path: string;
+  has_draft: boolean;
+  draft_path: string;
+  updated_at: number | null;
+  size_bytes: number | null;
+  text: string | null;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -27,12 +41,25 @@ function requireString(payload: Record<string, unknown>, key: string): string {
   return value;
 }
 
+function requirePossiblyEmptyString(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  if (typeof value !== 'string') {
+    throw new Error(`workspace file content is missing string field: ${key}`);
+  }
+  return value;
+}
+
 function requireNumber(payload: Record<string, unknown>, key: string): number {
   const value = payload[key];
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new Error(`workspace file content is missing numeric field: ${key}`);
   }
   return value;
+}
+
+function optionalNumber(payload: Record<string, unknown>, key: string): number | null {
+  const value = payload[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 export function parseWorkspaceFileContent(payload: unknown): WorkspaceFileContent {
@@ -57,7 +84,26 @@ export function parseWorkspaceFileContent(payload: unknown): WorkspaceFileConten
     content_hash: typeof payload.content_hash === 'string' ? payload.content_hash : null,
     tracked_content_hash:
       typeof payload.tracked_content_hash === 'string' ? payload.tracked_content_hash : null,
-    text: requireString(payload, 'text'),
+    text: requirePossiblyEmptyString(payload, 'text'),
     encoding,
+  };
+}
+
+export function parseWorkspaceFileDraft(payload: unknown): WorkspaceFileDraft {
+  if (!isObject(payload)) {
+    throw new Error('workspace file draft must be an object');
+  }
+  return {
+    schema_version: requireString(payload, 'schema_version'),
+    vault_id: requireString(payload, 'vault_id'),
+    device_id: requireString(payload, 'device_id'),
+    vault_root: requireString(payload, 'vault_root'),
+    file_id: requireString(payload, 'file_id'),
+    path: requireString(payload, 'path'),
+    has_draft: Boolean(payload.has_draft),
+    draft_path: requireString(payload, 'draft_path'),
+    updated_at: optionalNumber(payload, 'updated_at'),
+    size_bytes: optionalNumber(payload, 'size_bytes'),
+    text: typeof payload.text === 'string' ? payload.text : null,
   };
 }
