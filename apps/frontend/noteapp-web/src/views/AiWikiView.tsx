@@ -1,7 +1,9 @@
-import React, { useMemo, useState } from 'react';
-import { Bot, ExternalLink, FileText, RefreshCw, Sparkles } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Bot, Clock, ExternalLink, FileText, Fingerprint, RefreshCw, Sparkles } from 'lucide-react';
 
 import { invalidateWorkspaceFilesCache, useWorkspaceFilesController } from '../useWorkspaceFiles';
+import { parseWorkspaceFileContent } from '../workspaceFileContent';
+import type { WorkspaceFileEntry } from '../workspaceFiles';
 
 const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
 const syncBridgeUrl = (
@@ -14,12 +16,35 @@ interface AiWikiArtifact {
   source_path: string;
 }
 
+interface AiWikiSkippedPage {
+  path: string;
+  reason: string;
+  source_path: string | null;
+}
+
 interface AiWikiCompileResult {
   generated_at: string;
   source_count: number;
   artifact_count: number;
+  written_count: number;
+  skipped_count: number;
   index_path: string;
   artifacts: AiWikiArtifact[];
+  skipped: AiWikiSkippedPage[];
+}
+
+interface AiWikiPageSummary {
+  fileId: string;
+  path: string;
+  type: string;
+  title: string;
+  pageType: string;
+  sourcePath: string | null;
+  sourceFileId: string | null;
+  sourceContentHash: string | null;
+  lastCompiledAt: string | null;
+  sourcesHash: string | null;
+  bodyPreview: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -34,6 +59,8 @@ function parseCompileResult(payload: unknown): AiWikiCompileResult {
     generated_at: String(payload.generated_at ?? ''),
     source_count: Number(payload.source_count ?? 0),
     artifact_count: Number(payload.artifact_count ?? 0),
+    written_count: Number(payload.written_count ?? 0),
+    skipped_count: Number(payload.skipped_count ?? 0),
     index_path: String(payload.index_path ?? '.ai/index.md'),
     artifacts: payload.artifacts.map((item) => {
       if (!isObject(item)) {
@@ -45,6 +72,18 @@ function parseCompileResult(payload: unknown): AiWikiCompileResult {
         source_path: String(item.source_path ?? ''),
       };
     }),
+    skipped: Array.isArray(payload.skipped)
+      ? payload.skipped.map((item) => {
+        if (!isObject(item)) {
+          throw new Error('AI wiki skipped item must be an object');
+        }
+        return {
+          path: String(item.path ?? ''),
+          reason: String(item.reason ?? ''),
+          source_path: typeof item.source_path === 'string' ? item.source_path : null,
+        };
+      })
+      : [],
   };
 }
 
@@ -60,6 +99,75 @@ async function responseError(response: Response): Promise<string> {
   return `request failed: ${response.status}`;
 }
 
+function parseFrontmatter(text: string): { fields: Record<string, string>; body: string } {
+  if (!text.startsWith('---\n')) {
+    return { fields: {}, body: text };
+  }
+  const endIndex = text.indexOf('\n---', 4);
+  if (endIndex === -1) {
+    return { fields: {}, body: text };
+  }
+  const fields: Record<string, string> = {};
+  const frontmatter = text.slice(4, endIndex).split(/\r?\n/);
+  for (const line of frontmatter) {
+    const separatorIndex = line.indexOf(':');
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    const key = line.slice(0, separatorIndex).trim();
+    const value = line.slice(separatorIndex + 1).trim();
+    if (key) {
+      fields[key] = value;
+    }
+  }
+  return { fields, body: text.slice(endIndex + 4).trim() };
+}
+
+function firstMeaningfulLine(text: string): string {
+  for (const line of text.split(/\r?\n/)) {
+    const normalized = line.trim();
+    if (!normalized || normalized.startsWith('#') || normalized.startsWith('-') || normalized.startsWith('```')) {
+      continue;
+    }
+    return normalized.slice(0, 180);
+  }
+  return 'No preview available.';
+}
+
+function fallbackTitle(path: string): string {
+  const name = path.split('/').pop() || path;
+  return name.replace(/\.(md|markdown)$/i, '');
+}
+
+async function fetchWorkspaceContent(fileId: string) {
+  const response = await fetch(
+    `${syncBridgeUrl}/api/workspace/files/${encodeURIComponent(fileId)}/content`,
+    { cache: 'no-store' },
+  );
+  if (!response.ok) {
+    throw new Error(await responseError(response));
+  }
+  return parseWorkspaceFileContent(await response.json());
+}
+
+async function loadAiWikiPageSummary(file: WorkspaceFileEntry): Promise<AiWikiPageSummary> {
+  const content = await fetchWorkspaceContent(file.file_id);
+  const { fields, body } = parseFrontmatter(content.text);
+  return {
+    fileId: file.file_id,
+    path: file.path,
+    type: file.type,
+    title: fields.title || fallbackTitle(file.path),
+    pageType: fields.page_type || file.type,
+    sourcePath: fields.source_path ?? null,
+    sourceFileId: fields.source_file_id ?? null,
+    sourceContentHash: fields.source_content_hash ?? null,
+    lastCompiledAt: fields.last_ai_compiled_at ?? null,
+    sourcesHash: fields.last_compiled_from_sources_hash ?? null,
+    bodyPreview: firstMeaningfulLine(body),
+  };
+}
+
 export default function AiWikiView({
   onOpenWorkspacePath,
 }: {
@@ -68,6 +176,10 @@ export default function AiWikiView({
   const [result, setResult] = useState<AiWikiCompileResult | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [isCompiling, setIsCompiling] = useState(false);
+  const [pageSummaries, setPageSummaries] = useState<AiWikiPageSummary[]>([]);
+  const [selectedPage, setSelectedPage] = useState<AiWikiPageSummary | null>(null);
+  const [isLoadingPages, setIsLoadingPages] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
   const {
     files,
     refresh: refreshWorkspaceFiles,
@@ -80,6 +192,43 @@ export default function AiWikiView({
       .sort((left, right) => left.path.localeCompare(right.path)),
     [files],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (aiFiles.length === 0) {
+      setPageSummaries([]);
+      setPageError(null);
+      return;
+    }
+    setIsLoadingPages(true);
+    Promise.all(aiFiles.map(loadAiWikiPageSummary))
+      .then((summaries) => {
+        if (cancelled) {
+          return;
+        }
+        setPageSummaries(summaries);
+        setSelectedPage((current) => {
+          if (current && summaries.some((summary) => summary.fileId === current.fileId)) {
+            return current;
+          }
+          return summaries[0] ?? null;
+        });
+        setPageError(null);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setPageError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingPages(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [aiFiles]);
 
   async function compileWiki() {
     setIsCompiling(true);
@@ -154,26 +303,34 @@ export default function AiWikiView({
             </div>
           )}
 
+          {pageError && (
+            <div className="rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782]">
+              {pageError}
+            </div>
+          )}
+
           {result && (
             <section className="overflow-hidden rounded-xl border border-[#0f3460] bg-[#16213e] shadow-lg shadow-black/20">
               <div className="border-b border-[#0f3460] p-4">
                 <h2 className="text-lg font-bold text-[#e3e2e6]">最近一次编译</h2>
                 <p className="mt-1 font-mono text-[11px] text-slate-500">
                   {result.generated_at} / sources {result.source_count} / pages {result.artifact_count}
+                  {' '} / written {result.written_count} / skipped {result.skipped_count}
                 </p>
-                <button
-                  onClick={() => onOpenWorkspacePath(result.index_path)}
-                  className="mt-2 inline-flex items-center gap-2 font-mono text-[12px] text-[#a9c8fc] transition-colors hover:text-white"
-                >
+                <span className="mt-2 inline-flex items-center gap-2 font-mono text-[12px] text-[#a9c8fc]">
                   {result.index_path}
-                  <ExternalLink size={13} />
-                </button>
+                </span>
               </div>
               <div className="divide-y divide-[#0f3460]">
                 {result.artifacts.map((artifact) => (
                   <button
                     key={artifact.path}
-                    onClick={() => onOpenWorkspacePath(artifact.path)}
+                    onClick={() => {
+                      const target = pageSummaries.find((page) => page.path === artifact.path);
+                      if (target) {
+                        setSelectedPage(target);
+                      }
+                    }}
                     className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-[#1f2b4a]"
                   >
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#0f3460] bg-[#121316]">
@@ -189,6 +346,22 @@ export default function AiWikiView({
                   </button>
                 ))}
               </div>
+              {result.skipped.length > 0 && (
+                <div className="border-t border-[#0f3460] bg-[#121316]/40 p-4">
+                  <p className="text-[12px] font-semibold text-[#ffb782]">跳过页面</p>
+                  <div className="mt-2 grid gap-2">
+                    {result.skipped.map((item) => (
+                      <div key={`${item.path}:${item.reason}`} className="rounded border border-[#0f3460] bg-[#121316] px-3 py-2">
+                        <p className="truncate font-mono text-[11px] text-slate-300">{item.path}</p>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          {item.reason}
+                          {item.source_path ? ` / ${item.source_path}` : ''}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </section>
           )}
 
@@ -198,6 +371,7 @@ export default function AiWikiView({
                 <h2 className="text-lg font-bold text-[#e3e2e6]">已生成页面</h2>
                 <p className="mt-1 text-[12px] text-slate-500">
                   当前 filemap 中的 AI Index / AI Wiki 文件，共 {aiFiles.length} 个。
+                  {isLoadingPages ? ' 正在解析页面元数据...' : ''}
                 </p>
               </div>
               <button
@@ -210,32 +384,85 @@ export default function AiWikiView({
               </button>
             </div>
             <div className="divide-y divide-[#0f3460]">
-              {aiFiles.length === 0 ? (
+              {pageSummaries.length === 0 ? (
                 <div className="p-8 text-center text-[13px] text-slate-500">
                   还没有生成 AI Wiki 页面。先点击上方“编译 AI Wiki”。
                 </div>
               ) : (
-                aiFiles.map((file) => (
+                pageSummaries.map((page) => (
                   <button
-                    key={file.file_id}
-                    onClick={() => onOpenWorkspacePath(file.path)}
-                    className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-[#1f2b4a]"
+                    key={page.fileId}
+                    onClick={() => setSelectedPage(page)}
+                    className="grid w-full grid-cols-1 gap-3 p-4 text-left transition-colors hover:bg-[#1f2b4a] md:grid-cols-12"
                   >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#0f3460] bg-[#121316]">
-                      <FileText size={18} className={file.type === 'ai_index' ? 'text-[#a9c8fc]' : 'text-slate-400'} />
+                    <div className="flex items-start gap-3 md:col-span-5">
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-[#0f3460] bg-[#121316]">
+                        <FileText size={18} className={page.type === 'ai_index' ? 'text-[#a9c8fc]' : 'text-slate-400'} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-[14px] font-medium text-[#e3e2e6]">{page.title}</p>
+                        <p className="mt-1 truncate font-mono text-[11px] text-slate-500">{page.path}</p>
+                        <p className="mt-2 line-clamp-2 text-[12px] leading-relaxed text-slate-400">{page.bodyPreview}</p>
+                      </div>
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[14px] font-medium text-[#e3e2e6]">
-                        {file.type === 'ai_index' ? 'AI Knowledge Index' : file.path.split('/').pop()}
-                      </p>
-                      <p className="mt-1 truncate font-mono text-[11px] text-slate-500">{file.path}</p>
+                    <div className="flex min-w-0 flex-col gap-2 text-[12px] text-slate-400 md:col-span-5">
+                      <span className="inline-flex w-fit items-center rounded border border-[#0f3460] bg-[#121316] px-2 py-1 font-mono text-[11px] text-[#a9c8fc]">
+                        {page.pageType}
+                      </span>
+                      {page.sourcePath && <span className="truncate">来源：{page.sourcePath}</span>}
+                      {page.lastCompiledAt && (
+                        <span className="inline-flex items-center gap-1 truncate">
+                          <Clock size={13} />
+                          {page.lastCompiledAt}
+                        </span>
+                      )}
+                      {(page.sourceContentHash || page.sourcesHash) && (
+                        <span className="inline-flex items-center gap-1 truncate font-mono text-[11px]">
+                          <Fingerprint size={13} />
+                          {page.sourceContentHash || page.sourcesHash}
+                        </span>
+                      )}
                     </div>
-                    <ExternalLink size={15} className="text-slate-500" />
+                    <div className="flex items-center justify-end md:col-span-2">
+                      <ExternalLink size={15} className="text-slate-500" />
+                    </div>
                   </button>
                 ))
               )}
             </div>
           </section>
+
+          {selectedPage && (
+            <section className="rounded-xl border border-[#0f3460] bg-[#16213e] p-6 shadow-lg shadow-black/20">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div className="min-w-0">
+                  <p className="font-mono text-[11px] uppercase tracking-wider text-[#a9c8fc]">{selectedPage.pageType}</p>
+                  <h2 className="mt-1 truncate text-2xl font-bold text-[#e3e2e6]">{selectedPage.title}</h2>
+                  <p className="mt-2 truncate font-mono text-[12px] text-slate-500">{selectedPage.path}</p>
+                </div>
+                <button
+                  onClick={() => onOpenWorkspacePath(selectedPage.path)}
+                  className="inline-flex w-fit items-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:text-white"
+                >
+                  打开源码
+                  <ExternalLink size={14} />
+                </button>
+              </div>
+              <div className="mt-5 grid gap-3 text-[13px] text-slate-400 md:grid-cols-2">
+                {selectedPage.sourcePath && <div>来源：{selectedPage.sourcePath}</div>}
+                {selectedPage.lastCompiledAt && <div>编译时间：{selectedPage.lastCompiledAt}</div>}
+                {selectedPage.sourceContentHash && (
+                  <div className="truncate font-mono md:col-span-2">source hash：{selectedPage.sourceContentHash}</div>
+                )}
+                {selectedPage.sourcesHash && (
+                  <div className="truncate font-mono md:col-span-2">sources hash：{selectedPage.sourcesHash}</div>
+                )}
+              </div>
+              <div className="mt-5 rounded-lg border border-[#0f3460] bg-[#121316] p-4 text-[13px] leading-relaxed text-slate-300">
+                {selectedPage.bodyPreview}
+              </div>
+            </section>
+          )}
         </div>
       </div>
     </div>

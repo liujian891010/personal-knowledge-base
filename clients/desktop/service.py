@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
 import re
 from contextlib import closing, suppress
 from dataclasses import asdict, dataclass, replace
@@ -206,10 +207,10 @@ _LOCAL_SETTINGS_EMBEDDING_STATUSES = {
     "error",
 }
 _WORKSPACE_FILE_CONTENT_MAX_BYTES = 1_000_000
-_WORKSPACE_IMPORTABLE_SUFFIXES = {".md", ".markdown", ".txt"}
 _WORKSPACE_TRASH_DIRNAME = "trash"
 _WORKSPACE_TRASH_PURGED_META_KEY = "trash_purged_at"
 _WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]\n]+)\]\]")
+_MARKDOWN_FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---", re.DOTALL)
 
 
 def _require_local_settings_object(payload: Mapping[str, Any], key: str) -> dict[str, Any]:
@@ -286,6 +287,8 @@ def _workspace_posix_relative_path(vault_root: Path, path: Path) -> str:
 
 def _is_existing_workspace_import_path(relative_path: str) -> bool:
     normalized = PurePosixPath(relative_path)
+    if not normalized.parts:
+        return False
     if normalized.parts[:1] == (NOTEAPP_DIRNAME,):
         return False
     if normalized.parts == (VAULTINFO_FILENAME,):
@@ -294,7 +297,19 @@ def _is_existing_workspace_import_path(relative_path: str) -> bool:
         return False
     if len(normalized.parts) == 2 and normalized.parts[0] == ".ai" and normalized.parts[1].lower() == "log.md":
         return False
-    return normalized.suffix.lower() in _WORKSPACE_IMPORTABLE_SUFFIXES
+    if normalized.parts[:1] == (".ai",):
+        return (
+            normalized == PurePosixPath(".ai/index.md")
+            or (
+                normalized.parts[:2] == (".ai", "wiki")
+                and normalized.suffix.lower() in {".md", ".markdown"}
+            )
+            or (
+                len(normalized.parts) == 2
+                and normalized.parts[1].lower() == "agents.md"
+            )
+        )
+    return True
 
 
 def _infer_imported_workspace_file_type(relative_path: str) -> str:
@@ -317,7 +332,7 @@ def _infer_imported_workspace_mime_type(relative_path: str) -> Optional[str]:
         return "text/markdown"
     if suffix == ".txt":
         return "text/plain"
-    return None
+    return mimetypes.guess_type(relative_path)[0]
 
 
 def _search_result_title(path: str) -> str:
@@ -338,6 +353,18 @@ def _note_title_from_path(path: str) -> str:
 
 def _normalize_wiki_link_target(value: str) -> str:
     return value.split("|", 1)[0].split("#", 1)[0].strip()
+
+
+def _parse_markdown_frontmatter(text: str) -> dict[str, str]:
+    match = _MARKDOWN_FRONTMATTER_PATTERN.match(text)
+    if not match:
+        return {}
+    fields: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        key, separator, value = line.partition(":")
+        if separator and key.strip():
+            fields[key.strip()] = value.strip()
+    return fields
 
 
 def _normalize_workspace_note_path(value: str) -> str:
@@ -872,6 +899,13 @@ class DesktopAiWikiArtifact:
 
 
 @dataclass(frozen=True)
+class DesktopAiWikiSkippedPage:
+    path: str
+    reason: str
+    source_path: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class DesktopAiWikiCompileResult:
     schema_version: str
     vault_id: str
@@ -880,8 +914,11 @@ class DesktopAiWikiCompileResult:
     generated_at: str
     source_count: int
     artifact_count: int
+    written_count: int
+    skipped_count: int
     index_path: str
     artifacts: list[DesktopAiWikiArtifact]
+    skipped: list[DesktopAiWikiSkippedPage]
     files: DesktopWorkspaceFilesSnapshot
 
 
@@ -1256,13 +1293,19 @@ class DesktopSyncService:
         *,
         document: FileMapDocument,
         generated_paths: Iterable[str],
+        written_paths: Iterable[str],
         updated_at: int,
     ) -> FileMapDocument:
         generated_path_set = set(generated_paths)
+        written_path_set = set(written_paths)
         records: list[FileRecord] = []
         seen_paths: set[str] = set()
         for record in document.files:
             if record.path not in generated_path_set:
+                records.append(record)
+                continue
+            seen_paths.add(record.path)
+            if record.path not in written_path_set:
                 records.append(record)
                 continue
             disk_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
@@ -1284,7 +1327,6 @@ class DesktopSyncService:
                     },
                 )
             )
-            seen_paths.add(record.path)
 
         existing_file_ids = {record.file_id for record in records}
         for path in sorted(generated_path_set - seen_paths):
@@ -1340,19 +1382,75 @@ class DesktopSyncService:
 
         compiled = compile_ai_wiki(source_notes, generated_at=generated_at)
         generated_paths = [compiled.index_path, *(artifact.path for artifact in compiled.artifacts)]
+        written_paths: list[str] = []
+        skipped_pages: list[DesktopAiWikiSkippedPage] = []
         _write_bytes_atomic(
             _resolve_workspace_file_path(self.workspace.vault_root, compiled.index_path),
             compiled.index_text.encode("utf-8"),
         )
+        written_paths.append(compiled.index_path)
         for artifact in compiled.artifacts:
-            _write_bytes_atomic(
-                _resolve_workspace_file_path(self.workspace.vault_root, artifact.path),
-                artifact.text.encode("utf-8"),
+            artifact_path = _resolve_workspace_file_path(self.workspace.vault_root, artifact.path)
+            existing_fields = (
+                _parse_markdown_frontmatter(artifact_path.read_text(encoding="utf-8"))
+                if artifact_path.exists() and artifact_path.is_file()
+                else {}
             )
+            if existing_fields.get("locked", "").lower() == "true":
+                skipped_pages.append(
+                    DesktopAiWikiSkippedPage(
+                        path=artifact.path,
+                        reason="locked",
+                        source_path=artifact.source_path,
+                    )
+                )
+                continue
+            if existing_fields.get("user_edited", "").lower() == "true":
+                skipped_pages.append(
+                    DesktopAiWikiSkippedPage(
+                        path=artifact.path,
+                        reason="user_edited",
+                        source_path=artifact.source_path,
+                    )
+                )
+                continue
+            if existing_fields.get("source_content_hash") == artifact.source_content_hash:
+                skipped_pages.append(
+                    DesktopAiWikiSkippedPage(
+                        path=artifact.path,
+                        reason="unchanged",
+                        source_path=artifact.source_path,
+                    )
+                )
+                continue
+            _write_bytes_atomic(artifact_path, artifact.text.encode("utf-8"))
+            written_paths.append(artifact.path)
+
+        log_path = _resolve_workspace_file_path(self.workspace.vault_root, ".ai/log.md")
+        log_lines = [
+            f"## {generated_at}",
+            "",
+            f"- Sources: {compiled.source_count}",
+            f"- Pages: {compiled.artifact_count}",
+            f"- Written: {len(written_paths)}",
+            f"- Skipped: {len(skipped_pages)}",
+            "",
+        ]
+        if skipped_pages:
+            log_lines.append("### Skipped")
+            log_lines.append("")
+            log_lines.extend(
+                f"- `{item.path}`: {item.reason}{'' if item.source_path is None else f' ({item.source_path})'}"
+                for item in skipped_pages
+            )
+            log_lines.append("")
+        existing_log = log_path.read_text(encoding="utf-8") if log_path.exists() and log_path.is_file() else "# AI Compile Log\n\n"
+        _write_bytes_atomic(log_path, (existing_log.rstrip() + "\n\n" + "\n".join(log_lines)).encode("utf-8"))
 
         document = self._upsert_generated_ai_file_records(
             document=snapshot.document,
             generated_paths=generated_paths,
+            written_paths=written_paths,
             updated_at=compiled_at,
         )
         write_filemap_atomic(self.workspace.paths.filemap_path, document)
@@ -1365,6 +1463,8 @@ class DesktopSyncService:
             generated_at=generated_at,
             source_count=compiled.source_count,
             artifact_count=compiled.artifact_count,
+            written_count=len(written_paths),
+            skipped_count=len(skipped_pages),
             index_path=compiled.index_path,
             artifacts=[
                 DesktopAiWikiArtifact(
@@ -1376,6 +1476,7 @@ class DesktopSyncService:
                 )
                 for artifact in compiled.artifacts
             ],
+            skipped=skipped_pages,
             files=files_snapshot,
         )
 

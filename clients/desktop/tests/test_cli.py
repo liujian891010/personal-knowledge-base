@@ -386,6 +386,8 @@ class FakeService:
             "generated_at": "2026-05-11T00:00:00Z",
             "source_count": 1,
             "artifact_count": 1,
+            "written_count": 2,
+            "skipped_count": 0,
             "index_path": ".ai/index.md",
             "artifacts": [
                 {
@@ -396,6 +398,7 @@ class FakeService:
                     "source_content_hash": "sha256:aaa",
                 }
             ],
+            "skipped": [],
             "files": {
                 "schema_version": "v1",
                 "vault_id": "vault-001",

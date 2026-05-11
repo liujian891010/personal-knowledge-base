@@ -462,6 +462,41 @@ class DesktopSyncServiceTests(unittest.TestCase):
             document = load_filemap(service.workspace.paths.filemap_path)
             self.assertEqual(document.files[0].path, "二级目录/中文路径.md")
 
+    def test_import_existing_workspace_files_if_empty_includes_attachments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service = build_desktop_sync_service(
+                DesktopSyncHttpConfig(
+                    base_url="https://sync.example.com",
+                    vault_id="vault-001",
+                    device_id="desktop-shanghai",
+                ),
+                root,
+                file_id_builder=lambda path: "file-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            service.ensure_initialized(now_ms=1770000030000)
+            image_path = root / "Assets" / "photo.png"
+            image_path.parent.mkdir(parents=True)
+            image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+            pdf_path = root / "Docs" / "manual.pdf"
+            pdf_path.parent.mkdir(parents=True)
+            pdf_path.write_bytes(b"%PDF-1.7\n")
+            (root / ".noteapp" / "ignored.pdf").write_bytes(b"ignored")
+            (root / ".ai" / "raw").mkdir(parents=True, exist_ok=True)
+            (root / ".ai" / "raw" / "capture.txt").write_text("raw", encoding="utf-8")
+            (root / ".ai" / "log.md").write_text("log", encoding="utf-8")
+
+            snapshot = service.import_existing_workspace_files_if_empty()
+
+            self.assertEqual(snapshot.total_count, 2)
+            self.assertEqual([item.path for item in snapshot.files], ["Assets/photo.png", "Docs/manual.pdf"])
+            self.assertEqual([item.type for item in snapshot.files], ["attachment", "attachment"])
+            self.assertTrue(all(item.exists_on_disk for item in snapshot.files))
+            document = load_filemap(service.workspace.paths.filemap_path)
+            meta_by_path = {record.path: record.meta for record in document.files}
+            self.assertEqual(meta_by_path["Assets/photo.png"]["mime_type"], "image/png")
+            self.assertEqual(meta_by_path["Docs/manual.pdf"]["mime_type"], "application/pdf")
+
     def test_import_existing_workspace_files_repairs_local_only_stale_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -765,6 +800,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(result.artifact_count, 1)
             self.assertEqual(result.index_path, ".ai/index.md")
             self.assertTrue((root / ".ai" / "index.md").exists())
+            self.assertTrue((root / ".ai" / "log.md").exists())
             artifact = result.artifacts[0]
             artifact_path = root.joinpath(*PurePosixPath(artifact.path).parts)
             self.assertTrue(artifact_path.exists())
@@ -776,6 +812,37 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(records_by_path[".ai/index.md"].type, "ai_index")
             self.assertEqual(records_by_path[artifact.path].type, "ai_wiki")
             self.assertTrue(records_by_path[artifact.path].meta["ai_generated"])
+
+            unchanged = service.compile_ai_wiki(now_ms=1770000046000)
+
+            self.assertEqual(unchanged.written_count, 1)
+            self.assertEqual(unchanged.skipped_count, 1)
+            self.assertEqual(unchanged.skipped[0].reason, "unchanged")
+            self.assertIn("Skipped", (root / ".ai" / "log.md").read_text(encoding="utf-8"))
+
+    def test_compile_ai_wiki_does_not_overwrite_locked_or_user_edited_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            (root / "Notes" / "Live.md").write_text("# Live Note\n\nSource body.\n", encoding="utf-8")
+            first = service.compile_ai_wiki(now_ms=1770000045000)
+            artifact = first.artifacts[0]
+            artifact_path = root.joinpath(*PurePosixPath(artifact.path).parts)
+            locked_text = artifact_path.read_text(encoding="utf-8").replace(
+                "locked: false",
+                "locked: true",
+            ) + "\nManual edit\n"
+            artifact_path.write_text(locked_text, encoding="utf-8")
+            (root / "Notes" / "Live.md").write_text("# Live Note\n\nChanged source.\n", encoding="utf-8")
+
+            second = service.compile_ai_wiki(now_ms=1770000047000)
+
+            self.assertEqual(second.skipped_count, 1)
+            self.assertEqual(second.skipped[0].reason, "locked")
+            self.assertIn("Manual edit", artifact_path.read_text(encoding="utf-8"))
 
     def test_load_workspace_note_links_resolves_outgoing_and_backlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
