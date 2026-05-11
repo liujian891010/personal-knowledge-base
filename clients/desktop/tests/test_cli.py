@@ -411,6 +411,28 @@ class FakeService:
             },
         }
 
+    def answer_ai_wiki(self, question, *, limit=5):
+        self.calls.append(("ask-ai-wiki", question, limit))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "question": question,
+            "answer": "Based on the local AI Wiki.",
+            "citation_count": 1,
+            "citations": [
+                {
+                    "file_id": "wiki-a",
+                    "path": ".ai/wiki/live-note.md",
+                    "title": "Live Note",
+                    "excerpt": "Local search result",
+                    "score": 3,
+                }
+            ],
+            "model_status": "local_deterministic",
+        }
+
     def load_workspace_file_draft(self, file_id):
         self.calls.append(("workspace-file-draft", file_id))
         return {
@@ -1507,6 +1529,28 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(payload["artifact_count"], 1)
         self.assertEqual(payload["index_path"], ".ai/index.md")
         self.assertEqual(self.service.calls, [("compile-ai-wiki", 1770000045555)])
+
+    def test_ask_ai_wiki_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "ask-ai-wiki",
+            "--question",
+            "What is local search?",
+            "--limit",
+            "3",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["citation_count"], 1)
+        self.assertEqual(payload["model_status"], "local_deterministic")
+        self.assertEqual(self.service.calls, [("ask-ai-wiki", "What is local search?", 3)])
 
     def test_workspace_file_draft_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(
