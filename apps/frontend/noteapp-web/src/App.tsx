@@ -143,7 +143,11 @@ export default function App() {
               className="flex h-full flex-col"
             >
               {currentView === 'explorer' && (
-                <ExplorerView setView={setCurrentView} initialSelectedPath={initialExplorerPath} />
+                <ExplorerView
+                  setView={setCurrentView}
+                  initialSelectedPath={initialExplorerPath}
+                  onInitialSelectedPathConsumed={() => setInitialExplorerPath(null)}
+                />
               )}
               {currentView === 'conflicts' && <ConflictsView />}
               {currentView === 'trash' && <TrashView />}

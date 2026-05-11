@@ -8,6 +8,7 @@ import {
   Code2,
   Edit3,
   Eye,
+  File,
   Folder,
   Info,
   PanelRightClose,
@@ -40,6 +41,17 @@ function workspaceRootName(path: string): string {
 function folderPathForFile(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts.slice(0, -1).join('/');
+}
+
+function isSystemAiPath(path: string): boolean {
+  return path === '.ai' || path.startsWith('.ai/');
+}
+
+function isEditableWorkspaceFile(file: WorkspaceFileEntry | null): boolean {
+  if (!file) {
+    return false;
+  }
+  return ['note', 'ai_index', 'ai_wiki', 'ai_agents'].includes(file.type);
 }
 
 function folderAncestors(folderPath: string): string[] {
@@ -517,9 +529,11 @@ function statusClasses(file: WorkspaceFileEntry): string {
 export default function ExplorerView({
   setView,
   initialSelectedPath,
+  onInitialSelectedPathConsumed,
 }: {
   setView: (v: string) => void;
   initialSelectedPath?: string | null;
+  onInitialSelectedPathConsumed?: () => void;
 }) {
   const {
     summary,
@@ -562,7 +576,7 @@ export default function ExplorerView({
     clearLinks,
   } = useWorkspaceLinksController();
   const visibleFiles = useMemo(
-    () => files.filter((file) => file.status !== 'deleted'),
+    () => files.filter((file) => file.status !== 'deleted' && !isSystemAiPath(file.path)),
     [files],
   );
   const rootName = useMemo(() => workspaceRootName(summary.vaultRoot), [summary.vaultRoot]);
@@ -595,9 +609,13 @@ export default function ExplorerView({
     if (targetFile && targetFile.file_id !== selectedFileId) {
       setSelectedFileId(targetFile.file_id);
     }
-  }, [initialSelectedPath, selectedFileId, visibleFiles]);
+    if (targetFile) {
+      onInitialSelectedPathConsumed?.();
+    }
+  }, [initialSelectedPath, onInitialSelectedPathConsumed, selectedFileId, visibleFiles]);
 
   const selectedFile = visibleFiles.find((file) => file.file_id === selectedFileId) ?? null;
+  const selectedFileIsEditable = isEditableWorkspaceFile(selectedFile);
   const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(false);
   const [draftText, setDraftText] = useState('');
   const [editorMode, setEditorMode] = useState<MarkdownEditorMode>('preview');
@@ -651,7 +669,7 @@ export default function ExplorerView({
   }, [folderStorageKey, loadedFolderStorageKey, selectedFile]);
 
   useEffect(() => {
-    if (!selectedFile || !selectedFile.exists_on_disk || selectedFile.status !== 'active') {
+    if (!selectedFile || !selectedFile.exists_on_disk || selectedFile.status !== 'active' || !selectedFileIsEditable) {
       clearContent();
       clearLinks();
       setPendingDraftRecovery(null);
@@ -673,11 +691,15 @@ export default function ExplorerView({
       .catch(() => {
         // Error state is exposed by the content controller.
       });
-  }, [clearContent, clearLinks, loadContent, loadDraft, loadLinks, selectedFile]);
+  }, [clearContent, clearLinks, loadContent, loadDraft, loadLinks, selectedFile, selectedFileIsEditable]);
 
   const isContentDirty = Boolean(selectedContent && draftText !== selectedContent.text);
   const canEditContent = Boolean(
-    selectedFile && selectedFile.exists_on_disk && selectedFile.status === 'active' && selectedContent,
+    selectedFile
+    && selectedFileIsEditable
+    && selectedFile.exists_on_disk
+    && selectedFile.status === 'active'
+    && selectedContent,
   );
 
   useEffect(() => {
@@ -938,7 +960,14 @@ export default function ExplorerView({
                       : 'text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a]'
                   }`}
                 >
-                  <MarkdownFileIcon size={14} tone={row.file.exists_on_disk ? 'normal' : 'danger'} />
+                  {isEditableWorkspaceFile(row.file) ? (
+                    <MarkdownFileIcon size={14} tone={row.file.exists_on_disk ? 'normal' : 'danger'} />
+                  ) : (
+                    <File
+                      size={14}
+                      className={`flex-shrink-0 ${row.file.exists_on_disk ? 'text-slate-400' : 'text-[#e94560]'}`}
+                    />
+                  )}
                   <span className="truncate">{fileName(row.file.path)}</span>
                 </button>
               )
@@ -1085,6 +1114,7 @@ export default function ExplorerView({
                     )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    {selectedFileIsEditable && (
                     <div className="flex items-center rounded border border-[#0f3460] bg-[#121316] p-0.5">
                       <button
                         onClick={() => setEditorMode('edit')}
@@ -1117,6 +1147,7 @@ export default function ExplorerView({
                         <span>分栏</span>
                       </button>
                     </div>
+                    )}
                     <button
                       onClick={() => setIsInfoPanelOpen((value) => !value)}
                       title={isInfoPanelOpen ? '收起详情' : '显示详情'}
@@ -1164,7 +1195,7 @@ export default function ExplorerView({
                     </button>
                   </div>
                 </div>
-                {pendingDraftRecovery && pendingDraftRecovery.fileId === selectedFile.file_id && (
+                {pendingDraftRecovery && pendingDraftRecovery.fileId === selectedFile.file_id && selectedFileIsEditable && (
                   <div className="border-b border-[#ffb782]/30 bg-[#ffb782]/10 px-5 py-3 text-[12px] text-[#ffd8a8]">
                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                       <span>
@@ -1190,7 +1221,34 @@ export default function ExplorerView({
                   </div>
                 )}
                 <div className="min-h-0 flex-1 overflow-hidden bg-[#121316]">
-                  {editorMode === 'edit' && (
+                  {!selectedFileIsEditable && (
+                    <div className="flex h-full items-center justify-center p-6">
+                      <div className="max-w-lg rounded-xl border border-[#0f3460] bg-[#16213e] p-6 text-center shadow-lg shadow-black/20">
+                        <File size={34} className="mx-auto mb-4 text-slate-400" />
+                        <h4 className="text-[16px] font-bold text-[#e3e2e6]">{fileName(selectedFile.path)}</h4>
+                        <p className="mt-3 text-[13px] leading-6 text-slate-400">
+                          This is a non-Markdown attachment. It is visible in the workspace file tree and tracked for sync,
+                          but the built-in editor will not preview or modify it.
+                        </p>
+                        <dl className="mt-5 grid grid-cols-1 gap-3 rounded-lg border border-[#0f3460] bg-[#121316] p-4 text-left text-[12px]">
+                          <div>
+                            <dt className="text-[10px] uppercase tracking-wider text-slate-500">Path</dt>
+                            <dd className="mt-1 break-words font-mono text-[#e3e2e6]">{selectedFile.path}</dd>
+                          </div>
+                          <div>
+                            <dt className="text-[10px] uppercase tracking-wider text-slate-500">Size</dt>
+                            <dd className="mt-1 font-mono text-[#e3e2e6]">{formatBytes(selectedFile.size_bytes)}</dd>
+                          </div>
+                          <div>
+                            <dt className="text-[10px] uppercase tracking-wider text-slate-500">Type</dt>
+                            <dd className="mt-1 font-mono text-[#e3e2e6]">{fileTypeLabel(selectedFile.type)}</dd>
+                          </div>
+                        </dl>
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedFileIsEditable && editorMode === 'edit' && (
                     <textarea
                       value={isContentLoading ? '正在加载文件内容...' : draftText}
                       onChange={(event) => setDraftText(event.target.value)}
@@ -1201,7 +1259,7 @@ export default function ExplorerView({
                     />
                   )}
 
-                  {editorMode === 'preview' && (
+                  {selectedFileIsEditable && editorMode === 'preview' && (
                     <div className="h-full overflow-auto">
                       <MarkdownPreview
                         markdown={isContentLoading ? '正在加载文件内容...' : draftText}
@@ -1211,7 +1269,7 @@ export default function ExplorerView({
                     </div>
                   )}
 
-                  {editorMode === 'split' && (
+                  {selectedFileIsEditable && editorMode === 'split' && (
                     <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-2">
                       <textarea
                         value={isContentLoading ? '正在加载文件内容...' : draftText}
