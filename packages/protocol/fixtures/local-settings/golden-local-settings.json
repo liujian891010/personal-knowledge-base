@@ -1,7 +1,10 @@
 {
   "ai": {
     "embedding_status": "ready",
-    "local_model_status": "available"
+    "local_model_status": "available",
+    "provider_api": "anthropic-messages",
+    "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_claude/",
+    "model_id": "MiniMax-M2.7-highspeed_codingplan"
   },
   "appearance": {
     "theme": "system"

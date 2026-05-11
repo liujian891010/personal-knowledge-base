@@ -36,7 +36,10 @@
       "additionalProperties": false,
       "required": [
         "local_model_status",
-        "embedding_status"
+        "embedding_status",
+        "provider_api",
+        "base_url",
+        "model_id"
       ],
       "properties": {
         "local_model_status": {
@@ -58,6 +61,26 @@
             "disabled",
             "error"
           ]
+        },
+        "provider_api": {
+          "type": "string",
+          "enum": [
+            "openai-completions",
+            "anthropic-messages",
+            "google-generative-ai"
+          ]
+        },
+        "base_url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "api_key": {
+          "type": "string",
+          "minLength": 1
         }
       }
     }

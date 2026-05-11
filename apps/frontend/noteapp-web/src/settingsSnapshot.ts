@@ -15,6 +15,11 @@ export interface LocalAppearanceSettings {
 export interface LocalAiSettings {
   local_model_status: string;
   embedding_status: string;
+  provider_api: string;
+  base_url: string;
+  model_id: string;
+  api_key_configured: boolean;
+  api_key?: string;
 }
 
 export interface LocalSettingsSnapshot {
@@ -32,7 +37,7 @@ export interface LocalSettingsSnapshot {
 export interface LocalSettingsWritePayload {
   schema_version: 'v1';
   appearance: LocalAppearanceSettings;
-  ai: LocalAiSettings;
+  ai: Omit<LocalAiSettings, 'api_key_configured'>;
 }
 
 export interface LocalSettingsSummary {
@@ -50,6 +55,10 @@ export interface LocalSettingsSummary {
   theme: string;
   localModelStatus: string;
   embeddingStatus: string;
+  aiProviderApi: string;
+  aiBaseUrl: string;
+  aiModelId: string;
+  aiKeyConfigured: boolean;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -116,6 +125,10 @@ export function parseLocalSettingsSnapshot(payload: unknown): LocalSettingsSnaps
     ai: {
       local_model_status: requireString(ai, 'local_model_status'),
       embedding_status: requireString(ai, 'embedding_status'),
+      provider_api: requireString(ai, 'provider_api'),
+      base_url: requireString(ai, 'base_url'),
+      model_id: requireString(ai, 'model_id'),
+      api_key_configured: Boolean(ai.api_key_configured),
     },
   };
 }
@@ -136,5 +149,9 @@ export function summarizeLocalSettingsSnapshot(snapshot: LocalSettingsSnapshot):
     theme: snapshot.appearance.theme,
     localModelStatus: snapshot.ai.local_model_status,
     embeddingStatus: snapshot.ai.embedding_status,
+    aiProviderApi: snapshot.ai.provider_api,
+    aiBaseUrl: snapshot.ai.base_url,
+    aiModelId: snapshot.ai.model_id,
+    aiKeyConfigured: snapshot.ai.api_key_configured,
   };
 }

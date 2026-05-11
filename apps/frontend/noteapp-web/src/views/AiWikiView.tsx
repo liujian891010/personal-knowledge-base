@@ -371,8 +371,9 @@ export default function AiWikiView({
                 <div>
                   <h2 className="text-lg font-bold text-[#e3e2e6]">Ask AI Wiki</h2>
                   <p className="mt-1 text-[12px] leading-relaxed text-slate-500">
-                    Local deterministic Q&A over `.ai/wiki`. It returns citations first; a real model provider can be
-                    attached later without changing this workflow.
+                    Ask over `.ai/wiki` with citations. If `NOTEAPP_AI_API_KEY` and `NOTEAPP_AI_MODEL` are configured,
+                    the desktop bridge uses an OpenAI-compatible model; otherwise it falls back to local deterministic
+                    answers.
                   </p>
                 </div>
               </div>

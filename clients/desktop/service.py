@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+import os
 import re
 import base64
 from contextlib import closing, suppress
@@ -10,6 +11,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping, Optional
+from urllib.request import Request, urlopen
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -193,7 +195,14 @@ def _resolve_activity_feed_level(feed: "DesktopSyncActivityFeed") -> str:
 _LOCAL_SETTINGS_SCHEMA_VERSION = "v1"
 _LOCAL_SETTINGS_TOP_LEVEL_KEYS = {"schema_version", "appearance", "ai"}
 _LOCAL_SETTINGS_APPEARANCE_KEYS = {"theme"}
-_LOCAL_SETTINGS_AI_KEYS = {"local_model_status", "embedding_status"}
+_LOCAL_SETTINGS_AI_KEYS = {
+    "local_model_status",
+    "embedding_status",
+    "provider_api",
+    "base_url",
+    "model_id",
+    "api_key",
+}
 _LOCAL_SETTINGS_THEMES = {"dark", "light", "system"}
 _LOCAL_SETTINGS_MODEL_STATUSES = {
     "not_configured",
@@ -209,12 +218,23 @@ _LOCAL_SETTINGS_EMBEDDING_STATUSES = {
     "disabled",
     "error",
 }
+_LOCAL_SETTINGS_AI_PROVIDER_APIS = {
+    "openai-completions",
+    "anthropic-messages",
+    "google-generative-ai",
+}
+_LOCAL_SETTINGS_DEFAULT_AI_PROVIDER_API = "anthropic-messages"
+_LOCAL_SETTINGS_DEFAULT_AI_BASE_URL = "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_claude/"
+_LOCAL_SETTINGS_DEFAULT_AI_MODEL_ID = "MiniMax-M2.7-highspeed_codingplan"
 _WORKSPACE_FILE_CONTENT_MAX_BYTES = 1_000_000
 _WORKSPACE_FILE_BLOB_MAX_BYTES = 10_000_000
 _WORKSPACE_TRASH_DIRNAME = "trash"
 _WORKSPACE_TRASH_PURGED_META_KEY = "trash_purged_at"
 _WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]\n]+)\]\]")
 _MARKDOWN_FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---", re.DOTALL)
+_AI_PROVIDER_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+_AI_PROVIDER_DEFAULT_API = "openai-completions"
+_AI_PROVIDER_DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
 def _require_local_settings_object(payload: Mapping[str, Any], key: str) -> dict[str, Any]:
@@ -245,6 +265,33 @@ def _normalize_local_settings_choice(
     return value
 
 
+def _normalize_local_settings_string(
+    payload: Mapping[str, Any],
+    key: str,
+    default: str,
+    label: str,
+) -> str:
+    value = payload.get(key, default)
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a string")
+    normalized = value.strip()
+    if not normalized:
+        return default
+    return normalized
+
+
+def _normalize_optional_local_settings_secret(payload: Mapping[str, Any], key: str, label: str) -> Optional[str]:
+    if key not in payload:
+        return None
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a string")
+    normalized = value.strip()
+    return normalized if normalized else None
+
+
 def _normalize_local_settings_payload(payload: Mapping[str, Any]) -> dict[str, object]:
     _require_allowed_keys(payload, _LOCAL_SETTINGS_TOP_LEVEL_KEYS, "local settings")
     schema_version = payload.get("schema_version", _LOCAL_SETTINGS_SCHEMA_VERSION)
@@ -255,7 +302,7 @@ def _normalize_local_settings_payload(payload: Mapping[str, Any]) -> dict[str, o
     _require_allowed_keys(appearance_payload, _LOCAL_SETTINGS_APPEARANCE_KEYS, "local settings appearance")
     _require_allowed_keys(ai_payload, _LOCAL_SETTINGS_AI_KEYS, "local settings ai")
 
-    return {
+    normalized = {
         "schema_version": _LOCAL_SETTINGS_SCHEMA_VERSION,
         "appearance": {
             "theme": _normalize_local_settings_choice(
@@ -281,8 +328,31 @@ def _normalize_local_settings_payload(payload: Mapping[str, Any]) -> dict[str, o
                 "not_configured",
                 "local settings ai.embedding_status",
             ),
+            "provider_api": _normalize_local_settings_choice(
+                ai_payload,
+                "provider_api",
+                _LOCAL_SETTINGS_AI_PROVIDER_APIS,
+                _LOCAL_SETTINGS_DEFAULT_AI_PROVIDER_API,
+                "local settings ai.provider_api",
+            ),
+            "base_url": _normalize_local_settings_string(
+                ai_payload,
+                "base_url",
+                _LOCAL_SETTINGS_DEFAULT_AI_BASE_URL,
+                "local settings ai.base_url",
+            ),
+            "model_id": _normalize_local_settings_string(
+                ai_payload,
+                "model_id",
+                _LOCAL_SETTINGS_DEFAULT_AI_MODEL_ID,
+                "local settings ai.model_id",
+            ),
         },
     }
+    api_key = _normalize_optional_local_settings_secret(ai_payload, "api_key", "local settings ai.api_key")
+    if api_key is not None:
+        normalized["ai"]["api_key"] = api_key
+    return normalized
 
 
 def _workspace_posix_relative_path(vault_root: Path, path: Path) -> str:
@@ -399,6 +469,66 @@ def _parse_markdown_frontmatter(text: str) -> dict[str, str]:
         if separator and key.strip():
             fields[key.strip()] = value.strip()
     return fields
+
+
+def _load_ai_provider_config(environ: Optional[Mapping[str, str]] = None) -> Optional[DesktopAiProviderConfig]:
+    env = os.environ if environ is None else environ
+    api_key = env.get("NOTEAPP_AI_API_KEY", "").strip()
+    model = env.get("NOTEAPP_AI_MODEL", "").strip()
+    if not api_key or not model:
+        return None
+
+    base_url = env.get("NOTEAPP_AI_BASE_URL", _AI_PROVIDER_DEFAULT_BASE_URL).strip().rstrip("/")
+    if not base_url:
+        base_url = _AI_PROVIDER_DEFAULT_BASE_URL
+    timeout_raw = env.get("NOTEAPP_AI_TIMEOUT_SECONDS", "").strip()
+    if timeout_raw:
+        try:
+            timeout_seconds = float(timeout_raw)
+        except ValueError:
+            timeout_seconds = _AI_PROVIDER_DEFAULT_TIMEOUT_SECONDS
+        if timeout_seconds <= 0:
+            timeout_seconds = _AI_PROVIDER_DEFAULT_TIMEOUT_SECONDS
+    else:
+        timeout_seconds = _AI_PROVIDER_DEFAULT_TIMEOUT_SECONDS
+
+    return DesktopAiProviderConfig(
+        provider_api=env.get("NOTEAPP_AI_PROVIDER_API", _AI_PROVIDER_DEFAULT_API).strip() or _AI_PROVIDER_DEFAULT_API,
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _load_ai_provider_config_from_settings(settings_path: Path) -> Optional[DesktopAiProviderConfig]:
+    if not settings_path.exists() or not settings_path.is_file():
+        return None
+    raw_payload = json.loads(settings_path.read_text(encoding="utf-8"))
+    if not isinstance(raw_payload, dict):
+        return None
+    ai_payload = raw_payload.get("ai")
+    if not isinstance(ai_payload, dict):
+        return None
+    api_key = ai_payload.get("api_key")
+    provider_api = ai_payload.get("provider_api", _LOCAL_SETTINGS_DEFAULT_AI_PROVIDER_API)
+    base_url = ai_payload.get("base_url", _LOCAL_SETTINGS_DEFAULT_AI_BASE_URL)
+    model = ai_payload.get("model_id", _LOCAL_SETTINGS_DEFAULT_AI_MODEL_ID)
+    if not all(isinstance(value, str) and value.strip() for value in (api_key, provider_api, base_url, model)):
+        return None
+    if provider_api not in _LOCAL_SETTINGS_AI_PROVIDER_APIS:
+        return None
+    return DesktopAiProviderConfig(
+        provider_api=provider_api.strip(),
+        base_url=base_url.strip(),
+        api_key=api_key.strip(),
+        model=model.strip(),
+        timeout_seconds=_AI_PROVIDER_DEFAULT_TIMEOUT_SECONDS,
+    )
+
+
+def _default_ai_urlopen(request: Request, timeout: float):
+    return urlopen(request, timeout=timeout)
 
 
 def _normalize_workspace_note_path(value: str) -> str:
@@ -907,6 +1037,10 @@ class DesktopLocalAppearanceSettings:
 class DesktopLocalAiSettings:
     local_model_status: str
     embedding_status: str
+    provider_api: str
+    base_url: str
+    model_id: str
+    api_key_configured: bool
 
 
 @dataclass(frozen=True)
@@ -1001,6 +1135,15 @@ class DesktopAiWikiAnswerResult:
     citation_count: int
     citations: list[DesktopAiWikiAnswerCitation]
     model_status: str
+
+
+@dataclass(frozen=True)
+class DesktopAiProviderConfig:
+    provider_api: str
+    base_url: str
+    api_key: str
+    model: str
+    timeout_seconds: float
 
 
 @dataclass(frozen=True)
@@ -1251,6 +1394,7 @@ class DesktopSyncService:
     blob_crypto_provider: DesktopBlobCryptoProvider
     file_id_builder: Callable[[str], str]
     detected_submit_plan_hook: Optional[Callable[[DesktopTrackedChangeCommitPlan], None]] = None
+    ai_opener: Optional[UrlopenLike] = None
 
     @property
     def config(self) -> DesktopSyncHttpConfig:
@@ -1693,13 +1837,38 @@ class DesktopSyncService:
             )
 
         answer = answer_ai_wiki(question, pages, limit=limit)
+        model_status = answer.model_status
+        answer_text = answer.answer
+        provider_config = (
+            _load_ai_provider_config_from_settings(self.workspace.paths.settings_path)
+            or _load_ai_provider_config()
+        )
+        if provider_config is not None and answer.citations:
+            try:
+                answer_text = self._answer_ai_wiki_with_provider(
+                    provider_config,
+                    question=answer.question,
+                    citations=[
+                        DesktopAiWikiAnswerCitation(
+                            file_id=citation.file_id,
+                            path=citation.path,
+                            title=citation.title,
+                            excerpt=citation.excerpt,
+                            score=citation.score,
+                        )
+                        for citation in answer.citations
+                    ],
+                )
+                model_status = f"{provider_config.provider_api}:{provider_config.model}"
+            except Exception:
+                model_status = "openai_compatible_error_fallback"
         return DesktopAiWikiAnswerResult(
             schema_version=answer.schema_version,
             vault_id=self.vault_id,
             device_id=self.config.device_id,
             vault_root=self.workspace.vault_root,
             question=answer.question,
-            answer=answer.answer,
+            answer=answer_text,
             citation_count=answer.citation_count,
             citations=[
                 DesktopAiWikiAnswerCitation(
@@ -1711,8 +1880,211 @@ class DesktopSyncService:
                 )
                 for citation in answer.citations
             ],
-            model_status=answer.model_status,
+            model_status=model_status,
         )
+
+    def _answer_ai_wiki_with_provider(
+        self,
+        config: DesktopAiProviderConfig,
+        *,
+        question: str,
+        citations: list[DesktopAiWikiAnswerCitation],
+    ) -> str:
+        if config.provider_api == "anthropic-messages":
+            return self._answer_ai_wiki_with_anthropic_provider(config, question=question, citations=citations)
+        if config.provider_api == "google-generative-ai":
+            return self._answer_ai_wiki_with_google_provider(config, question=question, citations=citations)
+        return self._answer_ai_wiki_with_openai_provider(config, question=question, citations=citations)
+
+    def _ai_wiki_provider_prompt(
+        self,
+        *,
+        question: str,
+        citations: list[DesktopAiWikiAnswerCitation],
+    ) -> str:
+        context = "\n\n".join(
+            f"[{index}] {citation.title}\nPath: {citation.path}\nExcerpt: {citation.excerpt}"
+            for index, citation in enumerate(citations, start=1)
+        )
+        return f"Question:\n{question}\n\nCitations:\n{context}"
+
+    def _answer_ai_wiki_with_openai_provider(
+        self,
+        config: DesktopAiProviderConfig,
+        *,
+        question: str,
+        citations: list[DesktopAiWikiAnswerCitation],
+    ) -> str:
+        payload = {
+            "model": config.model,
+            "temperature": 0.2,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You answer questions for a local-first personal knowledge base. "
+                        "Use only the provided citations. If the citations are insufficient, say so. "
+                        "Cite sources inline as [1], [2]."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": self._ai_wiki_provider_prompt(question=question, citations=citations),
+                },
+            ],
+        }
+        request = Request(
+            f"{config.base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {config.api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "pkb-desktop-ai/0.1",
+            },
+            method="POST",
+        )
+        opener = self.ai_opener if self.ai_opener is not None else _default_ai_urlopen
+        with closing(opener(request, config.timeout_seconds)) as response:
+            status_code = response.getcode()
+            body = response.read()
+        if status_code < 200 or status_code >= 300:
+            raise ValueError(f"AI provider returned unexpected status: {status_code}")
+        payload = json.loads(body.decode("utf-8")) if body else {}
+        if not isinstance(payload, dict):
+            raise ValueError("AI provider response must be an object")
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise ValueError("AI provider response missing choices")
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            raise ValueError("AI provider choice must be an object")
+        message = first_choice.get("message")
+        if not isinstance(message, dict):
+            raise ValueError("AI provider choice missing message")
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("AI provider returned an empty answer")
+        return content.strip()
+
+    def _answer_ai_wiki_with_anthropic_provider(
+        self,
+        config: DesktopAiProviderConfig,
+        *,
+        question: str,
+        citations: list[DesktopAiWikiAnswerCitation],
+    ) -> str:
+        payload = {
+            "model": config.model,
+            "max_tokens": 1200,
+            "temperature": 0.2,
+            "system": (
+                "You answer questions for a local-first personal knowledge base. "
+                "Use only the provided citations. If the citations are insufficient, say so. "
+                "Cite sources inline as [1], [2]."
+            ),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": self._ai_wiki_provider_prompt(question=question, citations=citations),
+                }
+            ],
+        }
+        request = Request(
+            f"{config.base_url.rstrip('/')}/v1/messages",
+            data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {config.api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "pkb-desktop-ai/0.1",
+                "anthropic-version": "2023-06-01",
+                "x-api-key": config.api_key,
+            },
+            method="POST",
+        )
+        payload = self._read_ai_json_response(request, config.timeout_seconds)
+        content = payload.get("content")
+        if not isinstance(content, list) or not content:
+            raise ValueError("AI provider response missing content")
+        text_parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                text_parts.append(item["text"])
+        answer = "\n".join(part.strip() for part in text_parts if part.strip()).strip()
+        if not answer:
+            raise ValueError("AI provider returned an empty answer")
+        return answer
+
+    def _answer_ai_wiki_with_google_provider(
+        self,
+        config: DesktopAiProviderConfig,
+        *,
+        question: str,
+        citations: list[DesktopAiWikiAnswerCitation],
+    ) -> str:
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": (
+                                "You answer questions for a local-first personal knowledge base. "
+                                "Use only the provided citations. If the citations are insufficient, say so. "
+                                "Cite sources inline as [1], [2].\n\n"
+                                + self._ai_wiki_provider_prompt(question=question, citations=citations)
+                            ),
+                        }
+                    ],
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.2,
+            },
+        }
+        request = Request(
+            f"{config.base_url.rstrip('/')}/v1beta/models/{config.model}:generateContent",
+            data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {config.api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "pkb-desktop-ai/0.1",
+                "x-goog-api-key": config.api_key,
+            },
+            method="POST",
+        )
+        payload = self._read_ai_json_response(request, config.timeout_seconds)
+        candidates = payload.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            raise ValueError("AI provider response missing candidates")
+        first = candidates[0]
+        if not isinstance(first, dict):
+            raise ValueError("AI provider candidate must be an object")
+        content = first.get("content")
+        if not isinstance(content, dict):
+            raise ValueError("AI provider candidate missing content")
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            raise ValueError("AI provider candidate missing parts")
+        text_parts = [item.get("text") for item in parts if isinstance(item, dict) and isinstance(item.get("text"), str)]
+        answer = "\n".join(part.strip() for part in text_parts if part and part.strip()).strip()
+        if not answer:
+            raise ValueError("AI provider returned an empty answer")
+        return answer
+
+    def _read_ai_json_response(self, request: Request, timeout_seconds: float) -> dict[str, object]:
+        opener = self.ai_opener if self.ai_opener is not None else _default_ai_urlopen
+        with closing(opener(request, timeout_seconds)) as response:
+            status_code = response.getcode()
+            body = response.read()
+        if status_code < 200 or status_code >= 300:
+            raise ValueError(f"AI provider returned unexpected status: {status_code}")
+        payload = json.loads(body.decode("utf-8")) if body else {}
+        if not isinstance(payload, dict):
+            raise ValueError("AI provider response must be an object")
+        return payload
 
     def _workspace_file_entry_for_id(
         self,
@@ -2334,6 +2706,10 @@ class DesktopSyncService:
         theme = appearance_payload.get("theme")
         local_model_status = ai_payload.get("local_model_status")
         embedding_status = ai_payload.get("embedding_status")
+        provider_api = ai_payload.get("provider_api")
+        base_url = ai_payload.get("base_url")
+        model_id = ai_payload.get("model_id")
+        api_key = ai_payload.get("api_key")
 
         return DesktopLocalSettingsSnapshot(
             schema_version="v1",
@@ -2363,11 +2739,27 @@ class DesktopSyncService:
                     if isinstance(embedding_status, str) and embedding_status
                     else "not_configured"
                 ),
+                provider_api=(
+                    provider_api
+                    if isinstance(provider_api, str) and provider_api in _LOCAL_SETTINGS_AI_PROVIDER_APIS
+                    else _LOCAL_SETTINGS_DEFAULT_AI_PROVIDER_API
+                ),
+                base_url=base_url if isinstance(base_url, str) and base_url else _LOCAL_SETTINGS_DEFAULT_AI_BASE_URL,
+                model_id=model_id if isinstance(model_id, str) and model_id else _LOCAL_SETTINGS_DEFAULT_AI_MODEL_ID,
+                api_key_configured=isinstance(api_key, str) and bool(api_key.strip()),
             ),
         )
 
     def write_local_settings(self, payload: Mapping[str, Any]) -> DesktopLocalSettingsSnapshot:
         normalized = _normalize_local_settings_payload(payload)
+        if "api_key" not in normalized["ai"] and self.workspace.paths.settings_path.exists():
+            existing_payload = json.loads(self.workspace.paths.settings_path.read_text(encoding="utf-8"))
+            if isinstance(existing_payload, dict):
+                existing_ai = existing_payload.get("ai")
+                if isinstance(existing_ai, dict):
+                    existing_api_key = existing_ai.get("api_key")
+                    if isinstance(existing_api_key, str) and existing_api_key.strip():
+                        normalized["ai"]["api_key"] = existing_api_key.strip()
         _write_json_atomic(self.workspace.paths.settings_path, normalized)
         return self.load_local_settings_snapshot()
 
@@ -4795,6 +5187,7 @@ def build_desktop_sync_service(
     db_path: Optional[Path] = None,
     api_opener: Optional[UrlopenLike] = None,
     blob_opener: Optional[UrlopenLike] = None,
+    ai_opener: Optional[UrlopenLike] = None,
     blob_crypto_provider: Optional[DesktopBlobCryptoProvider] = None,
     file_id_builder: Optional[Callable[[str], str]] = None,
 ) -> DesktopSyncService:
@@ -4814,4 +5207,5 @@ def build_desktop_sync_service(
             else blob_crypto_provider
         ),
         file_id_builder=build_generated_file_id if file_id_builder is None else file_id_builder,
+        ai_opener=ai_opener,
     )
