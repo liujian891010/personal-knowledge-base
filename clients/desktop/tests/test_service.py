@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from unittest import mock
@@ -31,6 +32,7 @@ from clients.desktop.crypto import (
     decrypt_placeholder_encrypted_blob_payload,
 )
 from clients.desktop.service import (
+    _LOCAL_SETTINGS_AI_PROVIDER_APIS,
     _LOCAL_SETTINGS_EMBEDDING_STATUSES,
     _LOCAL_SETTINGS_MODEL_STATUSES,
     _LOCAL_SETTINGS_THEMES,
@@ -191,6 +193,40 @@ class RecordingApiOpener:
         return FakeHttpResponse(
             status_code=status_code,
             body=json.dumps(payload).encode("utf-8"),
+        )
+
+
+class RecordingAiOpener:
+    def __init__(self, *, status_code: int = 200, answer: str = "Provider answer [1]") -> None:
+        self.status_code = status_code
+        self.answer = answer
+        self.calls: list[tuple[str, str, object | None, float, str | None]] = []
+
+    def __call__(self, request: Request, timeout: float) -> FakeHttpResponse:
+        body = None if request.data is None else json.loads(request.data.decode("utf-8"))
+        self.calls.append(
+            (
+                request.get_method(),
+                request.full_url,
+                body,
+                timeout,
+                request.headers.get("Authorization"),
+            )
+        )
+        return FakeHttpResponse(
+            self.status_code,
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": self.answer,
+                            },
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ).encode("utf-8"),
         )
 
 
@@ -935,6 +971,118 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(answer.citations[0].title, "Live Note")
             self.assertIn("Knowledge base", answer.answer)
 
+    def test_answer_ai_wiki_uses_openai_compatible_provider_when_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ai_opener = RecordingAiOpener(answer="Local search is covered in the wiki [1].")
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            service = replace(service, ai_opener=ai_opener)
+            (root / "Notes" / "Live.md").write_text(
+                "# Live Note\n\nKnowledge base notes explain local search.\n",
+                encoding="utf-8",
+            )
+            service.compile_ai_wiki(now_ms=1770000045000)
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "NOTEAPP_AI_BASE_URL": "https://llm.example.com/v1",
+                    "NOTEAPP_AI_API_KEY": "test-key",
+                    "NOTEAPP_AI_MODEL": "test-model",
+                    "NOTEAPP_AI_TIMEOUT_SECONDS": "12.5",
+                },
+                clear=False,
+            ):
+                answer = service.answer_ai_wiki("knowledge search")
+
+            self.assertEqual(answer.answer, "Local search is covered in the wiki [1].")
+            self.assertEqual(answer.model_status, "openai-completions:test-model")
+            self.assertEqual(len(ai_opener.calls), 1)
+            method, url, payload, timeout, authorization = ai_opener.calls[0]
+            self.assertEqual(method, "POST")
+            self.assertEqual(url, "https://llm.example.com/v1/chat/completions")
+            self.assertEqual(timeout, 12.5)
+            self.assertEqual(authorization, "Bearer test-key")
+            self.assertEqual(payload["model"], "test-model")
+            self.assertIn("Knowledge base", payload["messages"][1]["content"])
+
+    def test_answer_ai_wiki_uses_local_settings_provider_before_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ai_opener = RecordingAiOpener(answer="Settings provider answer [1].")
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            service = replace(service, ai_opener=ai_opener)
+            service.write_local_settings(
+                {
+                    "appearance": {"theme": "dark"},
+                    "ai": {
+                        "local_model_status": "available",
+                        "embedding_status": "not_configured",
+                        "provider_api": "openai-completions",
+                        "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/",
+                        "model_id": "glm-5_codingplan",
+                        "api_key": "settings-key",
+                    },
+                }
+            )
+            (root / "Notes" / "Live.md").write_text(
+                "# Live Note\n\nKnowledge base notes explain local search.\n",
+                encoding="utf-8",
+            )
+            service.compile_ai_wiki(now_ms=1770000045000)
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "NOTEAPP_AI_API_KEY": "env-key",
+                    "NOTEAPP_AI_MODEL": "env-model",
+                },
+                clear=False,
+            ):
+                answer = service.answer_ai_wiki("knowledge search")
+
+            self.assertEqual(answer.answer, "Settings provider answer [1].")
+            self.assertEqual(answer.model_status, "openai-completions:glm-5_codingplan")
+            self.assertEqual(len(ai_opener.calls), 1)
+            _, url, payload, _, authorization = ai_opener.calls[0]
+            self.assertEqual(url, "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/chat/completions")
+            self.assertEqual(authorization, "Bearer settings-key")
+            self.assertEqual(payload["model"], "glm-5_codingplan")
+
+    def test_answer_ai_wiki_falls_back_when_provider_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ai_opener = RecordingAiOpener(status_code=500)
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            service = replace(service, ai_opener=ai_opener)
+            (root / "Notes" / "Live.md").write_text(
+                "# Live Note\n\nKnowledge base notes explain local search.\n",
+                encoding="utf-8",
+            )
+            service.compile_ai_wiki(now_ms=1770000045000)
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "NOTEAPP_AI_API_KEY": "test-key",
+                    "NOTEAPP_AI_MODEL": "test-model",
+                },
+                clear=False,
+            ):
+                answer = service.answer_ai_wiki("knowledge search")
+
+            self.assertEqual(answer.model_status, "openai_compatible_error_fallback")
+            self.assertIn("deterministic local answer", answer.answer)
+
     def test_load_workspace_note_links_resolves_outgoing_and_backlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -1551,6 +1699,9 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(snapshot.appearance.theme, "dark")
             self.assertEqual(snapshot.ai.local_model_status, "not_configured")
             self.assertEqual(snapshot.ai.embedding_status, "not_configured")
+            self.assertEqual(snapshot.ai.provider_api, "anthropic-messages")
+            self.assertEqual(snapshot.ai.model_id, "MiniMax-M2.7-highspeed_codingplan")
+            self.assertFalse(snapshot.ai.api_key_configured)
 
     def test_load_local_settings_snapshot_reads_local_settings_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1576,6 +1727,8 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(snapshot.appearance.theme, "light")
             self.assertEqual(snapshot.ai.local_model_status, "available")
             self.assertEqual(snapshot.ai.embedding_status, "indexing")
+            self.assertEqual(snapshot.ai.provider_api, "anthropic-messages")
+            self.assertEqual(snapshot.ai.model_id, "MiniMax-M2.7-highspeed_codingplan")
 
     def test_write_local_settings_normalizes_and_returns_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1588,6 +1741,10 @@ class DesktopSyncServiceTests(unittest.TestCase):
                     "ai": {
                         "local_model_status": "disabled",
                         "embedding_status": "ready",
+                        "provider_api": "openai-completions",
+                        "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/",
+                        "model_id": "glm-5_codingplan",
+                        "api_key": "local-key",
                     },
                 }
             )
@@ -1596,6 +1753,9 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(snapshot.appearance.theme, "system")
             self.assertEqual(snapshot.ai.local_model_status, "disabled")
             self.assertEqual(snapshot.ai.embedding_status, "ready")
+            self.assertEqual(snapshot.ai.provider_api, "openai-completions")
+            self.assertEqual(snapshot.ai.model_id, "glm-5_codingplan")
+            self.assertTrue(snapshot.ai.api_key_configured)
             self.assertEqual(
                 json.loads((root / ".noteapp" / "settings.json").read_text(encoding="utf-8")),
                 {
@@ -1604,6 +1764,10 @@ class DesktopSyncServiceTests(unittest.TestCase):
                     "ai": {
                         "local_model_status": "disabled",
                         "embedding_status": "ready",
+                        "provider_api": "openai-completions",
+                        "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/",
+                        "model_id": "glm-5_codingplan",
+                        "api_key": "local-key",
                     },
                 },
             )
@@ -1661,6 +1825,10 @@ class DesktopSyncServiceTests(unittest.TestCase):
         self.assertEqual(
             set(schema["properties"]["ai"]["properties"]["embedding_status"]["enum"]),
             _LOCAL_SETTINGS_EMBEDDING_STATUSES,
+        )
+        self.assertEqual(
+            set(schema["properties"]["ai"]["properties"]["provider_api"]["enum"]),
+            _LOCAL_SETTINGS_AI_PROVIDER_APIS,
         )
 
     def test_prepare_commit_materializes_snapshot_and_blob_staging(self) -> None:

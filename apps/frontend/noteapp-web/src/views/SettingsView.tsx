@@ -54,6 +54,43 @@ const noticeClasses: Record<SyncShellLevel, string> = {
 const themeOptions = ['dark', 'light', 'system'];
 const localModelStatusOptions = ['not_configured', 'available', 'unavailable', 'disabled', 'error'];
 const embeddingStatusOptions = ['not_configured', 'ready', 'indexing', 'disabled', 'error'];
+const companyAiModelOptions = [
+  {
+    label: 'MiniMax M2.7 高速 CodingPlan',
+    providerApi: 'anthropic-messages',
+    baseUrl: 'https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_claude/',
+    modelId: 'MiniMax-M2.7-highspeed_codingplan',
+    environment: '生产',
+  },
+  {
+    label: 'GLM-5 CodingPlan',
+    providerApi: 'openai-completions',
+    baseUrl: 'https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/',
+    modelId: 'glm-5_codingplan',
+    environment: '生产',
+  },
+  {
+    label: 'Gemini 3 Flash Preview',
+    providerApi: 'google-generative-ai',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_genai/',
+    modelId: 'gemini-3-flash-preview',
+    environment: '开发',
+  },
+  {
+    label: 'Kimi K2.5',
+    providerApi: 'openai-completions',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_ai/',
+    modelId: 'kimi-k2.5',
+    environment: '开发',
+  },
+  {
+    label: 'Claude Sonnet 4.6',
+    providerApi: 'anthropic-messages',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_claude/',
+    modelId: 'claude-sonnet-4-6',
+    environment: '开发',
+  },
+];
 
 const valueLabels: Record<string, string> = {
   bridge: '本机桥接',
@@ -174,6 +211,18 @@ function localizeMessage(value: string): string {
     .replace(/Failed to fetch/g, '请求失败');
 }
 
+function aiModelOptionKey(option: (typeof companyAiModelOptions)[number]): string {
+  return `${option.providerApi}|${option.baseUrl}|${option.modelId}`;
+}
+
+function findAiModelOption(providerApi: string, baseUrl: string, modelId: string) {
+  return companyAiModelOptions.find(
+    (option) => option.providerApi === providerApi
+      && option.baseUrl === baseUrl
+      && option.modelId === modelId,
+  ) ?? companyAiModelOptions[0];
+}
+
 function SettingsSelect({
   label,
   value,
@@ -262,15 +311,26 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
   const [themeDraft, setThemeDraft] = useState(settingsSummary.theme);
   const [localModelStatusDraft, setLocalModelStatusDraft] = useState(settingsSummary.localModelStatus);
   const [embeddingStatusDraft, setEmbeddingStatusDraft] = useState(settingsSummary.embeddingStatus);
+  const [aiProviderApiDraft, setAiProviderApiDraft] = useState(settingsSummary.aiProviderApi);
+  const [aiBaseUrlDraft, setAiBaseUrlDraft] = useState(settingsSummary.aiBaseUrl);
+  const [aiModelIdDraft, setAiModelIdDraft] = useState(settingsSummary.aiModelId);
+  const [aiKeyDraft, setAiKeyDraft] = useState('');
 
   useEffect(() => {
     setThemeDraft(settingsSummary.theme);
     setLocalModelStatusDraft(settingsSummary.localModelStatus);
     setEmbeddingStatusDraft(settingsSummary.embeddingStatus);
+    setAiProviderApiDraft(settingsSummary.aiProviderApi);
+    setAiBaseUrlDraft(settingsSummary.aiBaseUrl);
+    setAiModelIdDraft(settingsSummary.aiModelId);
+    setAiKeyDraft('');
   }, [
     settingsSummary.theme,
     settingsSummary.localModelStatus,
     settingsSummary.embeddingStatus,
+    settingsSummary.aiProviderApi,
+    settingsSummary.aiBaseUrl,
+    settingsSummary.aiModelId,
   ]);
 
   const saveLocalSettings = async () => {
@@ -282,6 +342,10 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
       ai: {
         local_model_status: localModelStatusDraft,
         embedding_status: embeddingStatusDraft,
+        provider_api: aiProviderApiDraft,
+        base_url: aiBaseUrlDraft,
+        model_id: aiModelIdDraft,
+        ...(aiKeyDraft.trim() ? { api_key: aiKeyDraft.trim() } : {}),
       },
     });
   };
@@ -289,7 +353,12 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     themeDraft !== settingsSummary.theme
     || localModelStatusDraft !== settingsSummary.localModelStatus
     || embeddingStatusDraft !== settingsSummary.embeddingStatus
+    || aiProviderApiDraft !== settingsSummary.aiProviderApi
+    || aiBaseUrlDraft !== settingsSummary.aiBaseUrl
+    || aiModelIdDraft !== settingsSummary.aiModelId
+    || aiKeyDraft.trim().length > 0
   );
+  const selectedAiModelOption = findAiModelOption(aiProviderApiDraft, aiBaseUrlDraft, aiModelIdDraft);
   const saveWorkspaceFolder = async () => {
     await selectWorkspaceRoot();
     await Promise.all([refreshSync(), refreshSettings()]);
@@ -682,26 +751,49 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                   </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                  <SettingsSelect
-                    label="本地模型"
-                    value={localModelStatusDraft}
-                    options={localModelStatusOptions}
-                    disabled={isSettingsSaving || isSettingsRefreshing}
-                    onChange={setLocalModelStatusDraft}
-                  />
-                  <SettingsSelect
-                    label="向量索引"
-                    value={embeddingStatusDraft}
-                    options={embeddingStatusOptions}
-                    disabled={isSettingsSaving || isSettingsRefreshing}
-                    onChange={setEmbeddingStatusDraft}
-                  />
+                  <label className="flex flex-col gap-2 min-w-0 md:col-span-2">
+                    <span className="text-[11px] uppercase tracking-wider text-slate-500">模型名称</span>
+                    <select
+                      value={aiModelOptionKey(selectedAiModelOption)}
+                      disabled={isSettingsSaving || isSettingsRefreshing}
+                      onChange={(event) => {
+                        const option = companyAiModelOptions.find((item) => aiModelOptionKey(item) === event.target.value)
+                          ?? companyAiModelOptions[0];
+                        setAiProviderApiDraft(option.providerApi);
+                        setAiBaseUrlDraft(option.baseUrl);
+                        setAiModelIdDraft(option.modelId);
+                        setLocalModelStatusDraft('available');
+                      }}
+                      className="w-full rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[13px] text-[#e3e2e6] disabled:opacity-50 focus:outline-none focus:border-[#e94560]"
+                    >
+                      {companyAiModelOptions.map((option) => (
+                        <option key={aiModelOptionKey(option)} value={aiModelOptionKey(option)}>
+                          {option.label} / {option.environment}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-2 min-w-0 md:col-span-2">
+                    <span className="text-[11px] uppercase tracking-wider text-slate-500">AI Key</span>
+                    <input
+                      value={aiKeyDraft}
+                      type="password"
+                      autoComplete="off"
+                      placeholder={settingsSummary.aiKeyConfigured ? '已配置，留空则保留原 Key' : '请输入从“我的 AI Key”获取的 Key'}
+                      disabled={isSettingsSaving || isSettingsRefreshing}
+                      onChange={(event) => setAiKeyDraft(event.target.value)}
+                      className="w-full rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[13px] text-[#e3e2e6] placeholder:text-slate-600 disabled:opacity-50 focus:outline-none focus:border-[#e94560]"
+                    />
+                    <span className="text-[12px] text-slate-500">
+                      Key 只保存在本机 `.noteapp/settings.json`，不会写入同步数据；保存后 AI Wiki 问答会直接使用该模型。
+                    </span>
+                  </label>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 mt-5">
-                  <SettingsDetailRow label="已保存本地模型" value={settingsSummary.localModelStatus} />
-                  <SettingsDetailRow label="已保存向量索引" value={settingsSummary.embeddingStatus} />
-                  <SettingsDetailRow label="设置来源" value={settingsSummary.source} mono />
-                  <SettingsDetailRow label="快照来源" value={settingsSource} mono />
+                  <SettingsDetailRow label="模型 ID" value={settingsSummary.aiModelId} mono />
+                  <SettingsDetailRow label="协议" value={settingsSummary.aiProviderApi} mono />
+                  <SettingsDetailRow label="模型地址" value={settingsSummary.aiBaseUrl} mono />
+                  <SettingsDetailRow label="AI Key" value={settingsSummary.aiKeyConfigured ? 'configured' : 'not_configured'} />
                 </div>
                 {settingsError && (
                   <p className="text-[12px] text-[#ffb782] mt-4 line-clamp-3">{settingsError}</p>
