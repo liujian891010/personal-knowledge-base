@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   AlertTriangle,
+  Bot,
   Cloud,
   FolderOpen,
   Settings,
@@ -12,8 +13,9 @@ import ExplorerView from './views/ExplorerView';
 import ConflictsView from './views/ConflictsView';
 import SettingsView from './views/SettingsView';
 import TrashView from './views/TrashView';
+import AiWikiView from './views/AiWikiView';
 
-type AppView = 'explorer' | 'conflicts' | 'trash' | 'settings' | 'sync';
+type AppView = 'explorer' | 'conflicts' | 'trash' | 'ai-wiki' | 'settings' | 'sync';
 
 interface NavItem {
   id: AppView;
@@ -26,6 +28,7 @@ const navItems: NavItem[] = [
   { id: 'sync', icon: Cloud, label: '同步状态' },
   { id: 'conflicts', icon: AlertTriangle, label: '冲突解决' },
   { id: 'trash', icon: Trash2, label: '回收站' },
+  { id: 'ai-wiki', icon: Bot, label: 'AI 知识库' },
   { id: 'settings', icon: Settings, label: '设置' },
 ];
 
@@ -80,7 +83,7 @@ function Sidebar({ currentView, setView }: { currentView: AppView, setView: (vie
 
 function MobileNav({ currentView, setView }: { currentView: AppView, setView: (view: AppView) => void }) {
   return (
-    <nav className="grid h-16 flex-shrink-0 grid-cols-5 border-t border-[#0f3460] bg-[#16213e] md:hidden">
+    <nav className="grid h-16 flex-shrink-0 grid-cols-6 border-t border-[#0f3460] bg-[#16213e] md:hidden">
       {navItems.map((item) => (
         <button
           key={item.id}
@@ -115,6 +118,12 @@ function TopBar({ currentView }: { currentView: AppView }) {
 
 export default function App() {
   const [currentView, setCurrentView] = useState<AppView>('explorer');
+  const [initialExplorerPath, setInitialExplorerPath] = useState<string | null>(null);
+
+  function openWorkspacePath(path: string) {
+    setInitialExplorerPath(path);
+    setCurrentView('explorer');
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#1a1a2e] font-sans text-[#e3e2e6]">
@@ -133,9 +142,12 @@ export default function App() {
               transition={{ duration: 0.2 }}
               className="flex h-full flex-col"
             >
-              {currentView === 'explorer' && <ExplorerView setView={setCurrentView} />}
+              {currentView === 'explorer' && (
+                <ExplorerView setView={setCurrentView} initialSelectedPath={initialExplorerPath} />
+              )}
               {currentView === 'conflicts' && <ConflictsView />}
               {currentView === 'trash' && <TrashView />}
+              {currentView === 'ai-wiki' && <AiWikiView onOpenWorkspacePath={openWorkspacePath} />}
               {currentView === 'settings' && <SettingsView initialTab="general" />}
               {currentView === 'sync' && <SettingsView initialTab="sync" />}
             </motion.div>

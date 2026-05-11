@@ -298,6 +298,13 @@ def _is_existing_workspace_import_path(relative_path: str) -> bool:
 
 
 def _infer_imported_workspace_file_type(relative_path: str) -> str:
+    normalized = PurePosixPath(relative_path)
+    if normalized == PurePosixPath(".ai/index.md"):
+        return "ai_index"
+    if normalized.parts[:2] == (".ai", "wiki") and normalized.suffix.lower() in {".md", ".markdown"}:
+        return "ai_wiki"
+    if len(normalized.parts) == 2 and normalized.parts[0] == ".ai" and normalized.parts[1].lower() == "agents.md":
+        return "ai_agents"
     suffix = PurePosixPath(relative_path).suffix.lower()
     if suffix in {".md", ".markdown"}:
         return "note"
@@ -856,6 +863,29 @@ class DesktopWorkspaceFilesSnapshot:
 
 
 @dataclass(frozen=True)
+class DesktopAiWikiArtifact:
+    title: str
+    path: str
+    source_file_id: str
+    source_path: str
+    source_content_hash: str
+
+
+@dataclass(frozen=True)
+class DesktopAiWikiCompileResult:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    generated_at: str
+    source_count: int
+    artifact_count: int
+    index_path: str
+    artifacts: list[DesktopAiWikiArtifact]
+    files: DesktopWorkspaceFilesSnapshot
+
+
+@dataclass(frozen=True)
 class DesktopWorkspaceTrashItem:
     file_id: str
     path: str
@@ -1220,6 +1250,134 @@ class DesktopSyncService:
         _write_bytes_atomic(content_path, text.encode(encoding))
         self.clear_workspace_file_draft(file_id)
         return self.load_workspace_file_content(file_id)
+
+    def _upsert_generated_ai_file_records(
+        self,
+        *,
+        document: FileMapDocument,
+        generated_paths: Iterable[str],
+        updated_at: int,
+    ) -> FileMapDocument:
+        generated_path_set = set(generated_paths)
+        records: list[FileRecord] = []
+        seen_paths: set[str] = set()
+        for record in document.files:
+            if record.path not in generated_path_set:
+                records.append(record)
+                continue
+            disk_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            payload_size = disk_path.stat().st_size if disk_path.exists() and disk_path.is_file() else 0
+            records.append(
+                FileRecord(
+                    file_id=record.file_id,
+                    path=record.path,
+                    type=_infer_imported_workspace_file_type(record.path),
+                    status="active",
+                    updated_at=updated_at,
+                    content_hash=None,
+                    last_known_revision=record.last_known_revision,
+                    meta={
+                        "ai_generated": True,
+                        "size": payload_size,
+                        "mtime": updated_at,
+                        "mime_type": "text/markdown",
+                    },
+                )
+            )
+            seen_paths.add(record.path)
+
+        existing_file_ids = {record.file_id for record in records}
+        for path in sorted(generated_path_set - seen_paths):
+            file_id = self.file_id_builder(path)
+            while file_id in existing_file_ids:
+                file_id = str(uuid4())
+            disk_path = _resolve_workspace_file_path(self.workspace.vault_root, path)
+            payload_size = disk_path.stat().st_size if disk_path.exists() and disk_path.is_file() else 0
+            records.append(
+                FileRecord(
+                    file_id=file_id,
+                    path=path,
+                    type=_infer_imported_workspace_file_type(path),
+                    status="active",
+                    updated_at=updated_at,
+                    meta={
+                        "ai_generated": True,
+                        "size": payload_size,
+                        "mtime": updated_at,
+                        "mime_type": "text/markdown",
+                    },
+                )
+            )
+            existing_file_ids.add(file_id)
+
+        return document.replace_files(records, updated_at=updated_at)
+
+    def compile_ai_wiki(self, *, now_ms: Optional[int] = None) -> DesktopAiWikiCompileResult:
+        from ai_core import SourceNote, compile_ai_wiki
+
+        compiled_at = now_ms if now_ms is not None else _current_time_ms()
+        generated_at = datetime.fromtimestamp(compiled_at / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        snapshot = self.load_snapshot()
+        source_notes: list[SourceNote] = []
+        for record in snapshot.document.sorted_files():
+            if record.status != "active" or record.type != "note":
+                continue
+            content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            if not content_path.exists() or not content_path.is_file():
+                continue
+            payload = content_path.read_bytes()
+            if len(payload) > _WORKSPACE_FILE_CONTENT_MAX_BYTES:
+                continue
+            text, _ = _decode_workspace_text(payload, file_id=record.file_id)
+            source_notes.append(
+                SourceNote(
+                    file_id=record.file_id,
+                    path=record.path,
+                    text=text,
+                    content_hash=_compute_content_hash(payload),
+                )
+            )
+
+        compiled = compile_ai_wiki(source_notes, generated_at=generated_at)
+        generated_paths = [compiled.index_path, *(artifact.path for artifact in compiled.artifacts)]
+        _write_bytes_atomic(
+            _resolve_workspace_file_path(self.workspace.vault_root, compiled.index_path),
+            compiled.index_text.encode("utf-8"),
+        )
+        for artifact in compiled.artifacts:
+            _write_bytes_atomic(
+                _resolve_workspace_file_path(self.workspace.vault_root, artifact.path),
+                artifact.text.encode("utf-8"),
+            )
+
+        document = self._upsert_generated_ai_file_records(
+            document=snapshot.document,
+            generated_paths=generated_paths,
+            updated_at=compiled_at,
+        )
+        write_filemap_atomic(self.workspace.paths.filemap_path, document)
+        files_snapshot = self.list_workspace_files()
+        return DesktopAiWikiCompileResult(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            generated_at=generated_at,
+            source_count=compiled.source_count,
+            artifact_count=compiled.artifact_count,
+            index_path=compiled.index_path,
+            artifacts=[
+                DesktopAiWikiArtifact(
+                    title=artifact.title,
+                    path=artifact.path,
+                    source_file_id=artifact.source_file_id,
+                    source_path=artifact.source_path,
+                    source_content_hash=artifact.source_content_hash,
+                )
+                for artifact in compiled.artifacts
+            ],
+            files=files_snapshot,
+        )
 
     def _workspace_file_entry_for_id(
         self,
