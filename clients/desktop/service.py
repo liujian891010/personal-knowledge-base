@@ -57,6 +57,8 @@ from vault_core import (
     recover_sync_apply_finalizing_state,
     replace_note_links,
     replace_search_index_entries,
+    upsert_search_index_entry,
+    delete_search_index_entry,
     rename_file,
     upsert_vault_state,
     upsert_sync_apply_journal,
@@ -351,6 +353,10 @@ def _note_title_from_path(path: str) -> str:
         if name.lower().endswith(suffix):
             return name[: -len(suffix)]
     return name
+
+
+def _is_search_indexable_type(file_type: str) -> bool:
+    return file_type in {"note", "ai_index", "ai_wiki", "ai_agents"}
 
 
 def _normalize_wiki_link_target(value: str) -> str:
@@ -1272,6 +1278,7 @@ class DesktopSyncService:
             self.workspace.paths.filemap_path,
             snapshot.document.replace_files(records, updated_at=updated_at),
         )
+        self.rebuild_workspace_search_index()
         return self.list_workspace_files()
 
     def list_workspace_files(self) -> DesktopWorkspaceFilesSnapshot:
@@ -1368,6 +1375,36 @@ class DesktopSyncService:
             mime_type=mime_type or _infer_imported_workspace_mime_type(record.path),
         )
 
+    def _upsert_workspace_search_index_for_record(self, record: FileRecord) -> None:
+        if record.status != "active" or not _is_search_indexable_type(record.type):
+            self._delete_workspace_search_index_for_file(record.file_id)
+            return
+        content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+        if not content_path.exists() or not content_path.is_file():
+            self._delete_workspace_search_index_for_file(record.file_id)
+            return
+        try:
+            payload = content_path.read_bytes()
+            if len(payload) > _WORKSPACE_FILE_CONTENT_MAX_BYTES:
+                self._delete_workspace_search_index_for_file(record.file_id)
+                return
+            text, _ = _decode_workspace_text(payload, file_id=record.file_id)
+        except (OSError, ValueError):
+            self._delete_workspace_search_index_for_file(record.file_id)
+            return
+        with closing(self.workspace._open_connection()) as connection:
+            upsert_search_index_entry(
+                connection,
+                self.vault_id,
+                file_id=record.file_id,
+                path=record.path,
+                content=text,
+            )
+
+    def _delete_workspace_search_index_for_file(self, file_id: str) -> None:
+        with closing(self.workspace._open_connection()) as connection:
+            delete_search_index_entry(connection, self.vault_id, file_id=file_id)
+
     def write_workspace_file_content(self, file_id: str, text: str) -> DesktopWorkspaceFileContent:
         snapshot = self.load_snapshot()
         record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
@@ -1381,6 +1418,7 @@ class DesktopSyncService:
         _, encoding = _decode_workspace_text(content_path.read_bytes(), file_id=file_id)
         _write_bytes_atomic(content_path, text.encode(encoding))
         self.clear_workspace_file_draft(file_id)
+        self._upsert_workspace_search_index_for_record(record)
         return self.load_workspace_file_content(file_id)
 
     def _upsert_generated_ai_file_records(
@@ -1549,6 +1587,7 @@ class DesktopSyncService:
             updated_at=compiled_at,
         )
         write_filemap_atomic(self.workspace.paths.filemap_path, document)
+        self.rebuild_workspace_search_index()
         files_snapshot = self.list_workspace_files()
         return DesktopAiWikiCompileResult(
             schema_version="v1",
@@ -1721,6 +1760,8 @@ class DesktopSyncService:
             self.workspace.paths.filemap_path,
             snapshot.document.replace_files(restored_files, updated_at=restored_at),
         )
+        restored_record = next(item for item in restored_files if item.file_id == file_id)
+        self._upsert_workspace_search_index_for_record(restored_record)
         tombstones = [item for item in load_tombstone_ledger(self.workspace.paths.ledger_path) if item.file_id != file_id]
         rewrite_tombstone_ledger(self.workspace.paths.ledger_path, tombstones)
         files_snapshot = self.list_workspace_files()
@@ -1803,6 +1844,15 @@ class DesktopSyncService:
             last_known_revision=None,
         )
         write_filemap_atomic(self.workspace.paths.filemap_path, document)
+        self._upsert_workspace_search_index_for_record(
+            FileRecord(
+                file_id=file_id,
+                path=normalized_path,
+                type="note",
+                status="active",
+                updated_at=created_at,
+            )
+        )
         files_snapshot = self.list_workspace_files()
         return DesktopWorkspaceFileMutationResult(
             schema_version="v1",
@@ -1903,6 +1953,15 @@ class DesktopSyncService:
         if not target_path.exists() or not target_path.is_file():
             raise RuntimeError(f"workspace rename did not create target file: {normalized_path}")
         write_filemap_atomic(self.workspace.paths.filemap_path, document)
+        self._upsert_workspace_search_index_for_record(
+            FileRecord(
+                file_id=file_id,
+                path=normalized_path,
+                type=record.type,
+                status=record.status,
+                updated_at=updated_at,
+            )
+        )
         files_snapshot = self.list_workspace_files()
         return DesktopWorkspaceFileMutationResult(
             schema_version="v1",
@@ -1950,6 +2009,7 @@ class DesktopSyncService:
             content_path.replace(trash_path)
         self.clear_workspace_file_draft(file_id)
         write_filemap_atomic(self.workspace.paths.filemap_path, document)
+        self._delete_workspace_search_index_for_file(file_id)
         append_tombstone(self.workspace.paths.ledger_path, tombstone)
         with closing(self.workspace._open_connection()) as connection:
             upsert_vault_state(
@@ -2082,7 +2142,6 @@ class DesktopSyncService:
                 total_count=0,
                 results=[],
             )
-        self.rebuild_workspace_search_index()
         with closing(self.workspace._open_connection()) as connection:
             rows = search_index(connection, self.vault_id, normalized_query, limit=limit)
         results = [

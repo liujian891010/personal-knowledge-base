@@ -777,7 +777,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             self.assertTrue((root / "Notes" / "Live.md").exists())
 
-    def test_search_workspace_rebuilds_index_and_returns_matches(self) -> None:
+    def test_search_workspace_queries_existing_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             service, _, _, _, _ = self._seed_workspace(root)
@@ -785,6 +785,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 "# Searchable\n\nLocal first knowledge base content\n",
                 encoding="utf-8",
             )
+            service.rebuild_workspace_search_index()
 
             result = service.search_workspace("knowledge")
 
@@ -793,6 +794,17 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(result.total_count, 1)
             self.assertEqual(result.results[0].file_id, "file-live")
             self.assertEqual(result.results[0].path, "Notes/Live.md")
+
+    def test_write_workspace_file_content_updates_search_index_incrementally(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            service.write_workspace_file_content("file-live", "# Searchable\n\nIncremental index content\n")
+
+            result = service.search_workspace("incremental")
+
+            self.assertEqual(result.total_count, 1)
+            self.assertEqual(result.results[0].file_id, "file-live")
 
     def test_search_workspace_skips_binary_or_missing_notes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

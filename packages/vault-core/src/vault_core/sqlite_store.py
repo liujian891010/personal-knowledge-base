@@ -363,6 +363,41 @@ def replace_search_index_entries(
         )
 
 
+def upsert_search_index_entry(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    *,
+    file_id: str,
+    path: str,
+    content: str,
+) -> None:
+    with connection:
+        connection.execute(
+            "DELETE FROM search_index WHERE vault_id = ? AND file_id = ?",
+            (vault_id, file_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO search_index (vault_id, file_id, path, content)
+            VALUES (?, ?, ?, ?)
+            """,
+            (vault_id, file_id, path, content),
+        )
+
+
+def delete_search_index_entry(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    *,
+    file_id: str,
+) -> None:
+    with connection:
+        connection.execute(
+            "DELETE FROM search_index WHERE vault_id = ? AND file_id = ?",
+            (vault_id, file_id),
+        )
+
+
 def _build_fts_query(query: str) -> str:
     terms = [term.strip().replace('"', '""') for term in query.split() if term.strip()]
     if not terms:
