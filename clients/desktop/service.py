@@ -923,6 +923,28 @@ class DesktopAiWikiCompileResult:
 
 
 @dataclass(frozen=True)
+class DesktopAiWikiAnswerCitation:
+    file_id: str
+    path: str
+    title: str
+    excerpt: str
+    score: int
+
+
+@dataclass(frozen=True)
+class DesktopAiWikiAnswerResult:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    question: str
+    answer: str
+    citation_count: int
+    citations: list[DesktopAiWikiAnswerCitation]
+    model_status: str
+
+
+@dataclass(frozen=True)
 class DesktopWorkspaceTrashItem:
     file_id: str
     path: str
@@ -1478,6 +1500,53 @@ class DesktopSyncService:
             ],
             skipped=skipped_pages,
             files=files_snapshot,
+        )
+
+    def answer_ai_wiki(self, question: str, *, limit: int = 5) -> DesktopAiWikiAnswerResult:
+        from ai_core import AiWikiPage, answer_ai_wiki
+
+        snapshot = self.load_snapshot()
+        pages: list[AiWikiPage] = []
+        for record in snapshot.document.sorted_files():
+            if record.status != "active" or record.type != "ai_wiki":
+                continue
+            content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            if not content_path.exists() or not content_path.is_file():
+                continue
+            payload = content_path.read_bytes()
+            if len(payload) > _WORKSPACE_FILE_CONTENT_MAX_BYTES:
+                continue
+            text, _ = _decode_workspace_text(payload, file_id=record.file_id)
+            frontmatter = _parse_markdown_frontmatter(text)
+            pages.append(
+                AiWikiPage(
+                    file_id=record.file_id,
+                    path=record.path,
+                    title=frontmatter.get("title") or _note_title_from_path(record.path),
+                    text=text,
+                )
+            )
+
+        answer = answer_ai_wiki(question, pages, limit=limit)
+        return DesktopAiWikiAnswerResult(
+            schema_version=answer.schema_version,
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            question=answer.question,
+            answer=answer.answer,
+            citation_count=answer.citation_count,
+            citations=[
+                DesktopAiWikiAnswerCitation(
+                    file_id=citation.file_id,
+                    path=citation.path,
+                    title=citation.title,
+                    excerpt=citation.excerpt,
+                    score=citation.score,
+                )
+                for citation in answer.citations
+            ],
+            model_status=answer.model_status,
         )
 
     def _workspace_file_entry_for_id(

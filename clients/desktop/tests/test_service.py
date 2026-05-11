@@ -844,6 +844,26 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(second.skipped[0].reason, "locked")
             self.assertIn("Manual edit", artifact_path.read_text(encoding="utf-8"))
 
+    def test_answer_ai_wiki_returns_local_citations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            (root / "Notes" / "Live.md").write_text(
+                "# Live Note\n\nKnowledge base notes explain local search.\n",
+                encoding="utf-8",
+            )
+            service.compile_ai_wiki(now_ms=1770000045000)
+
+            answer = service.answer_ai_wiki("knowledge search")
+
+            self.assertEqual(answer.schema_version, "v1")
+            self.assertEqual(answer.citation_count, 1)
+            self.assertEqual(answer.citations[0].title, "Live Note")
+            self.assertIn("Knowledge base", answer.answer)
+
     def test_load_workspace_note_links_resolves_outgoing_and_backlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

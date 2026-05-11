@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Bot, Clock, ExternalLink, FileText, Fingerprint, RefreshCw, Sparkles } from 'lucide-react';
+import { Bot, Clock, ExternalLink, FileText, Fingerprint, MessageSquare, RefreshCw, Send, Sparkles } from 'lucide-react';
 
 import { invalidateWorkspaceFilesCache, useWorkspaceFilesController } from '../useWorkspaceFiles';
 import { parseWorkspaceFileContent } from '../workspaceFileContent';
@@ -47,6 +47,22 @@ interface AiWikiPageSummary {
   bodyPreview: string;
 }
 
+interface AiAskCitation {
+  file_id: string;
+  path: string;
+  title: string;
+  excerpt: string;
+  score: number;
+}
+
+interface AiAskResult {
+  question: string;
+  answer: string;
+  citation_count: number;
+  citations: AiAskCitation[];
+  model_status: string;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -84,6 +100,30 @@ function parseCompileResult(payload: unknown): AiWikiCompileResult {
         };
       })
       : [],
+  };
+}
+
+function parseAskResult(payload: unknown): AiAskResult {
+  if (!isObject(payload) || !Array.isArray(payload.citations)) {
+    throw new Error('AI ask response must include citations');
+  }
+  return {
+    question: String(payload.question ?? ''),
+    answer: String(payload.answer ?? ''),
+    citation_count: Number(payload.citation_count ?? 0),
+    model_status: String(payload.model_status ?? 'unknown'),
+    citations: payload.citations.map((item) => {
+      if (!isObject(item)) {
+        throw new Error('AI ask citation must be an object');
+      }
+      return {
+        file_id: String(item.file_id ?? ''),
+        path: String(item.path ?? ''),
+        title: String(item.title ?? ''),
+        excerpt: String(item.excerpt ?? ''),
+        score: Number(item.score ?? 0),
+      };
+    }),
   };
 }
 
@@ -180,6 +220,10 @@ export default function AiWikiView({
   const [selectedPage, setSelectedPage] = useState<AiWikiPageSummary | null>(null);
   const [isLoadingPages, setIsLoadingPages] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
+  const [question, setQuestion] = useState('');
+  const [askResult, setAskResult] = useState<AiAskResult | null>(null);
+  const [askError, setAskError] = useState<string | null>(null);
+  const [isAsking, setIsAsking] = useState(false);
   const {
     files,
     refresh: refreshWorkspaceFiles,
@@ -249,6 +293,33 @@ export default function AiWikiView({
     }
   }
 
+  async function askAiWiki() {
+    const normalizedQuestion = question.trim();
+    if (!normalizedQuestion) {
+      setAskError('Question is required.');
+      return;
+    }
+    setIsAsking(true);
+    try {
+      const response = await fetch(`${syncBridgeUrl}/api/ai/ask`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ question: normalizedQuestion, limit: 5 }),
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      setAskResult(parseAskResult(await response.json()));
+      setAskError(null);
+    } catch (error) {
+      setAskError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsAsking(false);
+    }
+  }
+
   return (
     <div className="flex h-full flex-col overflow-hidden bg-[#1a1a2e]">
       <div className="flex-shrink-0 border-b border-[#0f3460] bg-[#16213e] px-6 py-6 shadow-lg shadow-black/20 md:px-8">
@@ -288,6 +359,90 @@ export default function AiWikiView({
                   可以被搜索、双链和后续同步流程识别。
                 </p>
               </div>
+            </div>
+          </section>
+
+          <section className="overflow-hidden rounded-xl border border-[#0f3460] bg-[#16213e] shadow-lg shadow-black/20">
+            <div className="border-b border-[#0f3460] p-4">
+              <div className="flex items-start gap-3">
+                <div className="rounded-lg border border-[#0f3460] bg-[#121316] p-3 text-[#a9c8fc]">
+                  <MessageSquare size={20} />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-[#e3e2e6]">Ask AI Wiki</h2>
+                  <p className="mt-1 text-[12px] leading-relaxed text-slate-500">
+                    Local deterministic Q&A over `.ai/wiki`. It returns citations first; a real model provider can be
+                    attached later without changing this workflow.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="grid gap-4 p-4">
+              <div className="flex flex-col gap-3 md:flex-row">
+                <input
+                  value={question}
+                  onChange={(event) => setQuestion(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault();
+                      void askAiWiki();
+                    }
+                  }}
+                  placeholder="Ask about your compiled AI Wiki..."
+                  className="min-w-0 flex-1 rounded-lg border border-[#0f3460] bg-[#121316] px-4 py-2 text-[13px] text-[#e3e2e6] outline-none placeholder:text-slate-600 focus:border-[#a9c8fc]/50"
+                />
+                <button
+                  onClick={() => void askAiWiki()}
+                  disabled={isAsking}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#0f3460] bg-[#0f3460]/30 px-4 py-2 text-[13px] font-semibold text-[#a9c8fc] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Send size={15} />
+                  {isAsking ? 'Asking' : 'Ask'}
+                </button>
+              </div>
+
+              {askError && (
+                <div className="rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782]">
+                  {askError}
+                </div>
+              )}
+
+              {askResult && (
+                <div className="grid gap-4">
+                  <div className="rounded-lg border border-[#0f3460] bg-[#121316] p-4">
+                    <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px]">
+                      <span className="rounded border border-[#0f3460] px-2 py-1 font-mono text-[#a9c8fc]">
+                        {askResult.model_status}
+                      </span>
+                      <span className="font-mono text-slate-500">citations {askResult.citation_count}</span>
+                    </div>
+                    <pre className="whitespace-pre-wrap text-[13px] leading-6 text-slate-300">{askResult.answer}</pre>
+                  </div>
+                  {askResult.citations.length > 0 && (
+                    <div className="grid gap-2">
+                      {askResult.citations.map((citation) => (
+                        <button
+                          key={citation.file_id}
+                          onClick={() => {
+                            const target = pageSummaries.find((page) => page.fileId === citation.file_id);
+                            if (target) {
+                              setSelectedPage(target);
+                            }
+                          }}
+                          className="rounded-lg border border-[#0f3460] bg-[#121316] p-3 text-left transition-colors hover:bg-[#1f2b4a]"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="font-semibold text-[#e3e2e6]">{citation.title}</p>
+                            <span className="font-mono text-[10px] text-slate-500">score {citation.score}</span>
+                          </div>
+                          <p className="mt-1 truncate font-mono text-[11px] text-slate-500">{citation.path}</p>
+                          <p className="mt-2 line-clamp-2 text-[12px] leading-5 text-slate-400">{citation.excerpt}</p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </section>
 

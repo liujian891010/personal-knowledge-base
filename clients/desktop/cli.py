@@ -239,6 +239,9 @@ def create_parser() -> argparse.ArgumentParser:
     workspace_links_parser.add_argument("--file-id", required=True)
     compile_ai_wiki_parser = subparsers.add_parser("compile-ai-wiki")
     compile_ai_wiki_parser.add_argument("--now-ms", type=int)
+    ask_ai_wiki_parser = subparsers.add_parser("ask-ai-wiki")
+    ask_ai_wiki_parser.add_argument("--question", required=True)
+    ask_ai_wiki_parser.add_argument("--limit", type=int, default=5)
     subparsers.add_parser("local-settings-snapshot")
     write_settings_parser = subparsers.add_parser("write-local-settings")
     write_settings_parser.add_argument("--input-json", required=True)
@@ -496,6 +499,8 @@ def run_cli(
         result = service.load_workspace_note_links(args.file_id)
     elif args.command == "compile-ai-wiki":
         result = service.compile_ai_wiki(now_ms=args.now_ms)
+    elif args.command == "ask-ai-wiki":
+        result = service.answer_ai_wiki(args.question, limit=args.limit)
     elif args.command == "local-settings-snapshot":
         result = service.load_local_settings_snapshot()
     elif args.command == "write-local-settings":

@@ -77,6 +77,8 @@ It forwards to:
   POST /api/workspace/root       Validate and switch selected workspace root
   POST /api/workspace/select-folder
                                   Open a native folder picker and switch selected workspace root
+  POST /api/ai/wiki/compile      Compile deterministic local AI Wiki pages
+  POST /api/ai/ask               Answer from local AI Wiki citations
   GET  /health                   Health check
 `);
 }
@@ -714,6 +716,18 @@ const server = createServer(async (request, response) => {
       runScript('write-live-sync-shell.mjs', {
         NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
       });
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    if (request.method === 'POST' && routePathname === '/api/ai/ask') {
+      const rawBody = await readRequestBody(request);
+      const payload = JSON.parse(rawBody);
+      if (!payload || typeof payload.question !== 'string') {
+        throw new Error('AI ask request must include question');
+      }
+      const limit = Number.isFinite(Number(payload.limit)) ? String(Number(payload.limit)) : '5';
+      const stdout = runDesktopCli(['ask-ai-wiki', '--question', payload.question, '--limit', limit]);
       jsonResponse(request, response, 200, JSON.parse(stdout));
       return;
     }
