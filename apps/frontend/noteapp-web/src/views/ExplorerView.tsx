@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ChevronDown,
@@ -15,11 +15,16 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Search,
+  Trash2,
 } from 'lucide-react';
 
 import { useWorkspaceFilesController } from '../useWorkspaceFiles';
 import { useWorkspaceFileContentController } from '../useWorkspaceFileContent';
+import { useWorkspaceLinksController } from '../useWorkspaceLinks';
+import { useWorkspaceSearchController } from '../useWorkspaceSearch';
 import type { WorkspaceFileEntry } from '../workspaceFiles';
+import type { WorkspaceNoteLink } from '../workspaceLinks';
 
 const explorerCollapsedFoldersStoragePrefix = 'noteapp.explorer.collapsedFolders.v1';
 
@@ -77,6 +82,10 @@ type ExplorerRow =
   };
 
 type MarkdownEditorMode = 'edit' | 'preview' | 'split';
+type FileDialogState =
+  | { kind: 'create'; path: string }
+  | { kind: 'rename'; path: string }
+  | { kind: 'delete'; path: string };
 
 function isRowVisible(row: ExplorerRow, collapsedFolders: Set<string>): boolean {
   if (row.kind === 'folder') {
@@ -145,9 +154,13 @@ function isMarkdownBoundary(line: string): boolean {
   );
 }
 
-function renderInlineMarkdown(text: string): React.ReactNode[] {
+function renderInlineMarkdown(
+  text: string,
+  wikiLinkByText: Map<string, WorkspaceNoteLink> = new Map(),
+  onOpenWikiLink?: (fileId: string) => void,
+): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*|\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))/g;
+  const pattern = /(`[^`]+`|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*|\[\[[^\]\n]+\]\]|\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -159,6 +172,7 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
     const token = match[0];
     const key = `${match.index}-${token}`;
     const linkMatch = /^\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)$/.exec(token);
+    const wikiLinkMatch = /^\[\[([^\]\n]+)\]\]$/.exec(token);
 
     if (token.startsWith('`') && token.endsWith('`')) {
       nodes.push(
@@ -182,6 +196,30 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
           {linkMatch[1]}
         </a>,
       );
+    } else if (wikiLinkMatch) {
+      const linkText = wikiLinkMatch[1].trim();
+      const link = wikiLinkByText.get(linkText);
+      const targetFileId = link?.target_file_id ?? null;
+      nodes.push(
+        <button
+          key={key}
+          type="button"
+          disabled={!targetFileId}
+          onClick={() => {
+            if (targetFileId) {
+              onOpenWikiLink?.(targetFileId);
+            }
+          }}
+          title={link?.target_path ?? `Unresolved link: ${linkText}`}
+          className={`rounded px-1.5 py-0.5 font-semibold ${
+            targetFileId
+              ? 'bg-[#0f3460]/50 text-[#a9c8fc] hover:bg-[#0f3460] hover:text-white'
+              : 'bg-[#3b2330] text-[#ffb782] cursor-help'
+          }`}
+        >
+          [[{linkText}]]
+        </button>,
+      );
     } else {
       nodes.push(token);
     }
@@ -195,7 +233,11 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
   return nodes;
 }
 
-function renderMarkdownBlocks(markdown: string): React.ReactNode[] {
+function renderMarkdownBlocks(
+  markdown: string,
+  wikiLinkByText: Map<string, WorkspaceNoteLink> = new Map(),
+  onOpenWikiLink?: (fileId: string) => void,
+): React.ReactNode[] {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n');
   const nodes: React.ReactNode[] = [];
   let index = 0;
@@ -247,7 +289,7 @@ function renderMarkdownBlocks(markdown: string): React.ReactNode[] {
             key: `heading-${index}`,
             className: `${headingClass} font-bold leading-tight text-[#f3f4f6]`,
           },
-          renderInlineMarkdown(headingMatch[2]),
+          renderInlineMarkdown(headingMatch[2], wikiLinkByText, onOpenWikiLink),
         ),
       );
       index += 1;
@@ -270,7 +312,7 @@ function renderMarkdownBlocks(markdown: string): React.ReactNode[] {
         <blockquote key={`quote-${index}`} className="border-l-4 border-[#a9c8fc] bg-[#0f3460]/20 py-2 pl-4 text-slate-300">
           {quoteLines.map((quoteLine, quoteIndex) => (
             <p key={quoteIndex} className="my-1 leading-relaxed">
-              {renderInlineMarkdown(quoteLine)}
+              {renderInlineMarkdown(quoteLine, wikiLinkByText, onOpenWikiLink)}
             </p>
           ))}
         </blockquote>,
@@ -287,7 +329,7 @@ function renderMarkdownBlocks(markdown: string): React.ReactNode[] {
       nodes.push(
         <ul key={`ul-${index}`} className="list-disc space-y-1 pl-6 text-slate-300">
           {items.map((item, itemIndex) => (
-            <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
+            <li key={itemIndex}>{renderInlineMarkdown(item, wikiLinkByText, onOpenWikiLink)}</li>
           ))}
         </ul>,
       );
@@ -303,7 +345,7 @@ function renderMarkdownBlocks(markdown: string): React.ReactNode[] {
       nodes.push(
         <ol key={`ol-${index}`} className="list-decimal space-y-1 pl-6 text-slate-300">
           {items.map((item, itemIndex) => (
-            <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
+            <li key={itemIndex}>{renderInlineMarkdown(item, wikiLinkByText, onOpenWikiLink)}</li>
           ))}
         </ol>,
       );
@@ -317,7 +359,7 @@ function renderMarkdownBlocks(markdown: string): React.ReactNode[] {
     }
     nodes.push(
       <p key={`p-${index}`} className="leading-7 text-slate-300">
-        {renderInlineMarkdown(paragraphLines.join(' '))}
+        {renderInlineMarkdown(paragraphLines.join(' '), wikiLinkByText, onOpenWikiLink)}
       </p>,
     );
   }
@@ -325,8 +367,19 @@ function renderMarkdownBlocks(markdown: string): React.ReactNode[] {
   return nodes;
 }
 
-function MarkdownPreview({ markdown }: { markdown: string }) {
-  const blocks = useMemo(() => renderMarkdownBlocks(markdown), [markdown]);
+function MarkdownPreview({
+  markdown,
+  wikiLinkByText,
+  onOpenWikiLink,
+}: {
+  markdown: string;
+  wikiLinkByText?: Map<string, WorkspaceNoteLink>;
+  onOpenWikiLink?: (fileId: string) => void;
+}) {
+  const blocks = useMemo(
+    () => renderMarkdownBlocks(markdown, wikiLinkByText, onOpenWikiLink),
+    [markdown, onOpenWikiLink, wikiLinkByText],
+  );
 
   if (!markdown.trim()) {
     return (
@@ -469,17 +522,39 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
     lastError,
     isRefreshing,
     refresh,
+    createNote,
+    renameNote,
+    deleteNote,
   } = useWorkspaceFilesController();
   const {
     content: selectedContent,
     lastError: contentError,
     isLoading: isContentLoading,
     isSaving: isContentSaving,
+    isDraftSaving,
     savedAtMs,
     loadContent,
     saveContent,
+    loadDraft,
+    saveDraft,
+    clearDraft,
     clearContent,
   } = useWorkspaceFileContentController();
+  const {
+    query: searchQuery,
+    setQuery: setSearchQuery,
+    results: searchResults,
+    totalCount: searchResultCount,
+    lastError: searchError,
+    isSearching,
+  } = useWorkspaceSearchController();
+  const {
+    links: selectedLinks,
+    lastError: linksError,
+    isLoading: isLinksLoading,
+    loadLinks,
+    clearLinks,
+  } = useWorkspaceLinksController();
   const visibleFiles = useMemo(
     () => files.filter((file) => file.status !== 'deleted'),
     [files],
@@ -510,6 +585,25 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
   const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(false);
   const [draftText, setDraftText] = useState('');
   const [editorMode, setEditorMode] = useState<MarkdownEditorMode>('preview');
+  const [pendingDraftRecovery, setPendingDraftRecovery] = useState<{
+    fileId: string;
+    text: string;
+    updatedAt: number | null;
+  } | null>(null);
+  const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'draft' | 'saving' | 'saved' | 'error'>('idle');
+  const [fileMutationError, setFileMutationError] = useState<string | null>(null);
+  const [fileDialog, setFileDialog] = useState<FileDialogState | null>(null);
+  const wikiLinkByText = useMemo(() => {
+    const result = new Map<string, WorkspaceNoteLink>();
+    for (const link of selectedLinks?.outgoing ?? []) {
+      result.set(link.link_text, link);
+    }
+    return result;
+  }, [selectedLinks]);
+
+  const openWorkspaceFile = useCallback((fileId: string) => {
+    setSelectedFileId(fileId);
+  }, []);
 
   useEffect(() => {
     setCollapsedFolders(readCollapsedFolders(folderStorageKey));
@@ -543,10 +637,27 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
   useEffect(() => {
     if (!selectedFile || !selectedFile.exists_on_disk || selectedFile.status !== 'active') {
       clearContent();
+      clearLinks();
+      setPendingDraftRecovery(null);
       return;
     }
+    setPendingDraftRecovery(null);
     void loadContent(selectedFile.file_id);
-  }, [clearContent, loadContent, selectedFile]);
+    void loadLinks(selectedFile.file_id);
+    void loadDraft(selectedFile.file_id)
+      .then((loadedDraft) => {
+        if (loadedDraft.has_draft && loadedDraft.text !== null) {
+          setPendingDraftRecovery({
+            fileId: selectedFile.file_id,
+            text: loadedDraft.text,
+            updatedAt: loadedDraft.updated_at,
+          });
+        }
+      })
+      .catch(() => {
+        // Error state is exposed by the content controller.
+      });
+  }, [clearContent, clearLinks, loadContent, loadDraft, loadLinks, selectedFile]);
 
   const isContentDirty = Boolean(selectedContent && draftText !== selectedContent.text);
   const canEditContent = Boolean(
@@ -559,7 +670,59 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
 
   useEffect(() => {
     setDraftText(selectedContent?.text ?? '');
+    setAutoSaveStatus('idle');
   }, [selectedContent]);
+
+  useEffect(() => {
+    if (
+      !selectedFile
+      || !selectedContent
+      || !canEditContent
+      || !isContentDirty
+      || isContentLoading
+      || isContentSaving
+    ) {
+      return;
+    }
+
+    const fileId = selectedFile.file_id;
+    const nextText = draftText;
+    const draftTimer = window.setTimeout(() => {
+      setAutoSaveStatus('draft');
+      void saveDraft(fileId, nextText).catch(() => {
+        setAutoSaveStatus('error');
+      });
+    }, 250);
+    const saveTimer = window.setTimeout(() => {
+      setAutoSaveStatus('saving');
+      void saveContent(fileId, nextText)
+        .then(refresh)
+        .then(() => loadLinks(fileId))
+        .then(() => {
+          setAutoSaveStatus('saved');
+        })
+        .catch(() => {
+          setAutoSaveStatus('error');
+        });
+    }, 1000);
+
+    return () => {
+      window.clearTimeout(draftTimer);
+      window.clearTimeout(saveTimer);
+    };
+  }, [
+    canEditContent,
+    draftText,
+    isContentDirty,
+    isContentLoading,
+    isContentSaving,
+    loadLinks,
+    refresh,
+    saveContent,
+    saveDraft,
+    selectedContent,
+    selectedFile,
+  ]);
 
   async function handleSaveContent() {
     if (!selectedFile || !selectedContent || !isContentDirty || isContentSaving) {
@@ -568,9 +731,82 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
     try {
       await saveContent(selectedFile.file_id, draftText);
       await refresh();
+      await loadLinks(selectedFile.file_id);
+      setAutoSaveStatus('saved');
     } catch {
       // 错误信息由 hook 写入页面状态。
+      setAutoSaveStatus('error');
     }
+  }
+
+  function handleCreateNote() {
+    setFileDialog({ kind: 'create', path: 'Notes/Untitled.md' });
+  }
+
+  function handleRenameNote() {
+    if (selectedFile) {
+      setFileDialog({ kind: 'rename', path: fileName(selectedFile.path) });
+    }
+  }
+
+  function handleDeleteNote() {
+    if (selectedFile) {
+      setFileDialog({ kind: 'delete', path: selectedFile.path });
+    }
+  }
+
+  async function handleConfirmFileDialog() {
+    if (!fileDialog) {
+      return;
+    }
+    const path = fileDialog.path.trim();
+    if (fileDialog.kind !== 'delete' && !path) {
+      setFileMutationError('文档路径不能为空。');
+      return;
+    }
+    try {
+      if (fileDialog.kind === 'create') {
+        const created = await createNote(path, `# ${fileName(path).replace(/\.(md|markdown)$/i, '')}\n`);
+        openWorkspaceFile(created.file_id);
+        setEditorMode('edit');
+      } else if (fileDialog.kind === 'rename') {
+        if (!selectedFile || path === selectedFile.path) {
+          setFileDialog(null);
+          return;
+        }
+        const renamed = await renameNote(selectedFile.file_id, path);
+        openWorkspaceFile(renamed.file_id);
+      } else if (selectedFile) {
+        await deleteNote(selectedFile.file_id);
+        clearContent();
+        clearLinks();
+        setSelectedFileId(null);
+      }
+      setFileMutationError(null);
+      setFileDialog(null);
+    } catch (error) {
+      setFileMutationError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function handleRecoverDraft() {
+    if (!pendingDraftRecovery || pendingDraftRecovery.fileId !== selectedFileId) {
+      return;
+    }
+    setDraftText(pendingDraftRecovery.text);
+    setEditorMode('edit');
+    setPendingDraftRecovery(null);
+  }
+
+  function handleDiscardDraft() {
+    if (!pendingDraftRecovery) {
+      return;
+    }
+    const fileId = pendingDraftRecovery.fileId;
+    setPendingDraftRecovery(null);
+    void clearDraft(fileId).catch(() => {
+      setAutoSaveStatus('error');
+    });
   }
 
   function toggleFolder(folderPath: string) {
@@ -606,10 +842,50 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
             >
               <RefreshCw size={15} className={isRefreshing ? 'animate-spin' : ''} />
             </button>
-            <button className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white transition-colors">
+            <button
+              onClick={handleCreateNote}
+              title="新建文档"
+              className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white transition-colors"
+            >
               <Plus size={15} />
             </button>
           </div>
+        </div>
+        <div className="border-b border-[#0f3460] bg-[#121316]/50 p-3">
+          <label className="flex items-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-slate-400 focus-within:border-[#a9c8fc]">
+            <Search size={14} />
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              className="min-w-0 flex-1 bg-transparent text-[12px] text-[#e3e2e6] outline-none placeholder:text-slate-600"
+              placeholder="Search local notes"
+            />
+          </label>
+          {searchQuery.trim() && (
+            <div className="mt-2 rounded border border-[#0f3460] bg-[#16213e]">
+              <div className="border-b border-[#0f3460] px-3 py-2 font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                {isSearching ? 'Searching' : `${searchResultCount} results`}
+              </div>
+              {searchError && (
+                <div className="px-3 py-2 text-[11px] text-[#ffb782]">{searchError}</div>
+              )}
+              {!searchError && searchResults.length === 0 && !isSearching && (
+                <div className="px-3 py-2 text-[11px] text-slate-500">No local matches.</div>
+              )}
+              {searchResults.map((result) => (
+                <button
+                  key={result.file_id}
+                  onClick={() => openWorkspaceFile(result.file_id)}
+                  className="block w-full border-b border-[#0f3460]/60 px-3 py-2 text-left last:border-b-0 hover:bg-[#1f2b4a]"
+                  title={result.path}
+                >
+                  <div className="truncate text-[12px] font-semibold text-[#e3e2e6]">{result.title}</div>
+                  <div className="mt-1 truncate font-mono text-[10px] text-slate-500">{result.path}</div>
+                  <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-400">{result.snippet}</div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto py-2">
           {explorerRows.length === 0 ? (
@@ -637,7 +913,7 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
               ) : (
                 <button
                   key={row.id}
-                  onClick={() => setSelectedFileId(row.file.file_id)}
+                  onClick={() => openWorkspaceFile(row.file.file_id)}
                   title={row.file.path}
                   style={{ paddingLeft: `${24 + row.depth * 14}px` }}
                   className={`flex w-full items-center gap-2 py-2 pr-4 text-[13px] font-sans truncate text-left transition-colors ${
@@ -685,6 +961,16 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
               {contentError}
             </div>
           )}
+          {fileMutationError && (
+            <div className="mb-4 rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782] line-clamp-3">
+              {fileMutationError}
+            </div>
+          )}
+          {linksError && (
+            <div className="mb-4 rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782] line-clamp-3">
+              {linksError}
+            </div>
+          )}
 
           {selectedFile ? (
             <div className="relative flex h-full min-h-0 w-full gap-4">
@@ -699,6 +985,14 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                     </div>
                     <h2 className="text-2xl font-bold text-[#e3e2e6] truncate">{fileName(selectedFile.path)}</h2>
                     <p className="font-mono text-[12px] text-slate-500 mt-2 break-words">{selectedFile.path}</p>
+                    {isContentDirty && autoSaveStatus !== 'idle' && (
+                      <span className="hidden sm:inline font-mono text-[11px] text-slate-400">
+                        {autoSaveStatus === 'draft' && (isDraftSaving ? 'æ­£åœ¨å†™å…¥è‰ç¨¿' : 'è‰ç¨¿å·²å†™å…¥')}
+                        {autoSaveStatus === 'saving' && 'æ­£åœ¨è‡ªåŠ¨ä¿å­˜'}
+                        {autoSaveStatus === 'saved' && 'å·²è‡ªåŠ¨ä¿å­˜'}
+                        {autoSaveStatus === 'error' && 'è‡ªåŠ¨ä¿å­˜å¤±è´¥'}
+                      </span>
+                    )}
                   </div>
                   {!selectedFile.exists_on_disk && (
                     <div className="flex items-center gap-2 text-[#e94560] text-[12px]">
@@ -760,6 +1054,14 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                   <div className="flex items-center gap-3 min-w-0">
                     <Code2 size={16} className="flex-shrink-0 text-[#a9c8fc]" />
                     <h3 className="text-[15px] font-bold text-[#e3e2e6]">Markdown 编辑器</h3>
+                    {isContentDirty && autoSaveStatus !== 'idle' && (
+                      <span className="hidden sm:inline font-mono text-[11px] text-slate-400">
+                        {autoSaveStatus === 'draft' && (isDraftSaving ? 'Writing draft' : 'Draft written')}
+                        {autoSaveStatus === 'saving' && 'Autosaving'}
+                        {autoSaveStatus === 'saved' && 'Autosaved'}
+                        {autoSaveStatus === 'error' && 'Autosave failed'}
+                      </span>
+                    )}
                     {savedAtMs && !isContentDirty && (
                       <span className="hidden sm:inline font-mono text-[11px] text-emerald-300">
                         已保存到本地 {formatFileTime(savedAtMs)}
@@ -807,6 +1109,24 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                       {isInfoPanelOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
                       <span>详情</span>
                     </button>
+                    <button
+                      onClick={handleRenameNote}
+                      disabled={!selectedFile || selectedFile.type !== 'note' || selectedFile.status !== 'active'}
+                      title="重命名文档"
+                      className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                    >
+                      <Edit3 size={14} />
+                      <span>重命名</span>
+                    </button>
+                    <button
+                      onClick={handleDeleteNote}
+                      disabled={!selectedFile || selectedFile.type !== 'note' || selectedFile.status !== 'active'}
+                      title="删除文档"
+                      className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#e94560]/40 bg-[#e94560]/10 px-3 text-[12px] font-semibold text-[#ffb3c0] hover:text-white disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                    >
+                      <Trash2 size={14} />
+                      <span>删除</span>
+                    </button>
                     {savedAtMs && !isContentDirty && (
                       <button
                         onClick={() => setView('sync')}
@@ -828,6 +1148,31 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                     </button>
                   </div>
                 </div>
+                {pendingDraftRecovery && pendingDraftRecovery.fileId === selectedFile.file_id && (
+                  <div className="border-b border-[#ffb782]/30 bg-[#ffb782]/10 px-5 py-3 text-[12px] text-[#ffd8a8]">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <span>
+                        Unsaved draft found
+                        {pendingDraftRecovery.updatedAt ? ` (${formatFileTime(pendingDraftRecovery.updatedAt)})` : ''}
+                        . Restore it into the editor?
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleRecoverDraft}
+                          className="rounded border border-[#ffb782]/40 bg-[#ffb782]/20 px-3 py-1 font-semibold text-[#fff3df] hover:bg-[#ffb782]/30"
+                        >
+                          Restore
+                        </button>
+                        <button
+                          onClick={handleDiscardDraft}
+                          className="rounded border border-[#0f3460] bg-[#121316] px-3 py-1 font-semibold text-slate-300 hover:text-white"
+                        >
+                          Discard
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <div className="min-h-0 flex-1 overflow-hidden bg-[#121316]">
                   {editorMode === 'edit' && (
                     <textarea
@@ -842,7 +1187,11 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
 
                   {editorMode === 'preview' && (
                     <div className="h-full overflow-auto">
-                      <MarkdownPreview markdown={isContentLoading ? '正在加载文件内容...' : draftText} />
+                      <MarkdownPreview
+                        markdown={isContentLoading ? '正在加载文件内容...' : draftText}
+                        wikiLinkByText={wikiLinkByText}
+                        onOpenWikiLink={openWorkspaceFile}
+                      />
                     </div>
                   )}
 
@@ -857,7 +1206,11 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                         placeholder="此文件内容不可用。"
                       />
                       <div className="h-full min-h-0 overflow-auto bg-[#101827]">
-                        <MarkdownPreview markdown={isContentLoading ? '正在加载文件内容...' : draftText} />
+                        <MarkdownPreview
+                          markdown={isContentLoading ? '正在加载文件内容...' : draftText}
+                          wikiLinkByText={wikiLinkByText}
+                          onOpenWikiLink={openWorkspaceFile}
+                        />
                       </div>
                     </div>
                   )}
@@ -925,6 +1278,74 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
                     </dl>
                   </div>
 
+                  <div className="mb-4">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <h4 className="text-[12px] font-bold text-slate-300">双链与反链</h4>
+                      {isLinksLoading && <span className="font-mono text-[10px] text-slate-500">Loading</span>}
+                    </div>
+                    <div className="space-y-3 text-[12px]">
+                      <div>
+                        <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                          Outgoing {selectedLinks?.outgoing_count ?? 0}
+                        </div>
+                        {(selectedLinks?.outgoing ?? []).length === 0 ? (
+                          <p className="text-slate-500">暂无出链。</p>
+                        ) : (
+                          <div className="space-y-1">
+                            {selectedLinks?.outgoing.map((link) => (
+                              <button
+                                key={`${link.ordinal}-${link.link_text}`}
+                                type="button"
+                                disabled={!link.target_file_id}
+                                onClick={() => {
+                                  if (link.target_file_id) {
+                                    openWorkspaceFile(link.target_file_id);
+                                  }
+                                }}
+                                className={`block w-full rounded border px-2 py-1.5 text-left ${
+                                  link.target_file_id
+                                    ? 'border-[#0f3460] bg-[#121316] text-[#a9c8fc] hover:text-white'
+                                    : 'border-[#ffb782]/30 bg-[#ffb782]/10 text-[#ffb782]'
+                                }`}
+                                title={link.target_path ?? 'Unresolved link'}
+                              >
+                                <span className="block truncate font-semibold">[[{link.link_text}]]</span>
+                                <span className="block truncate font-mono text-[10px] text-slate-500">
+                                  {link.target_path ?? 'unresolved'}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                          Backlinks {selectedLinks?.backlink_count ?? 0}
+                        </div>
+                        {(selectedLinks?.backlinks ?? []).length === 0 ? (
+                          <p className="text-slate-500">暂无反链。</p>
+                        ) : (
+                          <div className="space-y-1">
+                            {selectedLinks?.backlinks.map((link) => (
+                              <button
+                                key={`${link.source_file_id}-${link.ordinal}`}
+                                type="button"
+                                onClick={() => openWorkspaceFile(link.source_file_id)}
+                                className="block w-full rounded border border-[#0f3460] bg-[#121316] px-2 py-1.5 text-left text-slate-300 hover:text-white"
+                                title={link.source_path}
+                              >
+                                <span className="block truncate font-semibold">{fileName(link.source_path)}</span>
+                                <span className="block truncate font-mono text-[10px] text-slate-500">
+                                  {link.source_path}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                   <div>
                     <h4 className="mb-2 text-[12px] font-bold text-slate-300">工作区</h4>
                     <dl className="grid grid-cols-1 gap-3 text-[12px]">
@@ -956,6 +1377,68 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
           )}
         </div>
       </div>
+      {fileDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleConfirmFileDialog();
+            }}
+            className="w-full max-w-md rounded-2xl border border-[#0f3460] bg-[#16213e] p-5 shadow-2xl shadow-black/40"
+          >
+            <div className="mb-4">
+              <h3 className="text-[16px] font-bold text-[#e3e2e6]">
+                {fileDialog.kind === 'create' && '新建文档'}
+                {fileDialog.kind === 'rename' && '重命名文档'}
+                {fileDialog.kind === 'delete' && '移入回收站'}
+              </h3>
+              <p className="mt-2 text-[12px] leading-relaxed text-slate-400">
+                {fileDialog.kind === 'create' && '输入相对工作区路径；未带扩展名时会自动使用 .md。'}
+                {fileDialog.kind === 'rename' && '只修改当前目录下的文件名，不会移动到其他文件夹。'}
+                {fileDialog.kind === 'delete' && `将移出工作区并保留到 .noteapp/trash：${fileName(fileDialog.path)}`}
+              </p>
+            </div>
+            {fileDialog.kind !== 'delete' && (
+              <label className="mb-4 block">
+                <span className="mb-2 block text-[12px] font-semibold text-slate-300">
+                  {fileDialog.kind === 'rename' ? '文件名' : '文档路径'}
+                </span>
+                <input
+                  autoFocus
+                  value={fileDialog.path}
+                  onChange={(event) => setFileDialog({ ...fileDialog, path: event.target.value })}
+                  className="w-full rounded border border-[#0f3460] bg-[#121316] px-3 py-2 font-mono text-[13px] text-[#e3e2e6] outline-none focus:border-[#a9c8fc]"
+                  placeholder={fileDialog.kind === 'rename' ? 'Untitled.md' : 'Notes/Untitled.md'}
+                />
+              </label>
+            )}
+            {fileMutationError && (
+              <div className="mb-4 rounded border border-[#ffb782]/30 bg-[#ffb782]/10 px-3 py-2 text-[12px] text-[#ffb782]">
+                {fileMutationError}
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setFileDialog(null)}
+                className="rounded border border-[#0f3460] bg-[#121316] px-4 py-2 text-[12px] font-semibold text-slate-300 hover:text-white"
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                className={`rounded px-4 py-2 text-[12px] font-semibold text-white ${
+                  fileDialog.kind === 'delete'
+                    ? 'bg-[#e94560] hover:bg-[#ff5d76]'
+                    : 'bg-[#0f3460] hover:bg-[#15508f]'
+                }`}
+              >
+                {fileDialog.kind === 'delete' ? '移入回收站' : '确认'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

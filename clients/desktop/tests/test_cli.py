@@ -214,6 +214,268 @@ class FakeService:
             "text": text,
         }
 
+    def create_workspace_note(self, path, *, text="", now_ms=None):
+        self.calls.append(("create-workspace-note", path, text, now_ms))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "operation": "create",
+            "file": {
+                "file_id": "file-created",
+                "path": path,
+                "type": "note",
+                "status": "active",
+                "updated_at": now_ms or 1770000040001,
+                "exists_on_disk": True,
+                "size_bytes": len(text.encode("utf-8")),
+            },
+            "files": {
+                "schema_version": "v1",
+                "vault_id": "vault-001",
+                "device_id": "desktop-shanghai",
+                "vault_root": "C:/vault",
+                "files": [],
+                "total_count": 0,
+                "active_count": 0,
+                "missing_count": 0,
+            },
+        }
+
+    def rename_workspace_note(self, file_id, path, *, now_ms=None):
+        self.calls.append(("rename-workspace-note", file_id, path, now_ms))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "operation": "rename",
+            "file": {
+                "file_id": file_id,
+                "path": path,
+                "type": "note",
+                "status": "active",
+                "updated_at": now_ms or 1770000040001,
+                "exists_on_disk": True,
+                "size_bytes": 123,
+            },
+            "files": {
+                "schema_version": "v1",
+                "vault_id": "vault-001",
+                "device_id": "desktop-shanghai",
+                "vault_root": "C:/vault",
+                "files": [],
+                "total_count": 0,
+                "active_count": 0,
+                "missing_count": 0,
+            },
+        }
+
+    def delete_workspace_note(self, file_id, *, now_ms=None):
+        self.calls.append(("delete-workspace-note", file_id, now_ms))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "operation": "delete",
+            "file": {
+                "file_id": file_id,
+                "path": "Notes/A.md",
+                "type": "note",
+                "status": "deleted",
+                "updated_at": now_ms or 1770000040001,
+                "exists_on_disk": False,
+                "size_bytes": None,
+            },
+            "files": {
+                "schema_version": "v1",
+                "vault_id": "vault-001",
+                "device_id": "desktop-shanghai",
+                "vault_root": "C:/vault",
+                "files": [],
+                "total_count": 0,
+                "active_count": 0,
+                "missing_count": 0,
+            },
+        }
+
+    def list_workspace_trash(self):
+        self.calls.append(("workspace-trash",))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "trash_root": "C:/vault/.noteapp/trash",
+            "items": [
+                {
+                    "file_id": "file-a",
+                    "path": "Notes/A.md",
+                    "type": "note",
+                    "deleted_at": 1770000040001,
+                    "trash_path": "C:/vault/.noteapp/trash/1770000040001-file-a.md",
+                    "exists_in_trash": True,
+                    "size_bytes": 8,
+                }
+            ],
+            "total_count": 1,
+        }
+
+    def restore_workspace_trash_item(self, file_id, *, now_ms=None):
+        self.calls.append(("restore-workspace-trash", file_id, now_ms))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "operation": "restore",
+            "file": {
+                "file_id": file_id,
+                "path": "Notes/A.md",
+                "type": "note",
+                "status": "active",
+                "updated_at": now_ms or 1770000040002,
+                "exists_on_disk": True,
+                "size_bytes": 8,
+            },
+            "files": {
+                "schema_version": "v1",
+                "vault_id": "vault-001",
+                "device_id": "desktop-shanghai",
+                "vault_root": "C:/vault",
+                "files": [],
+                "total_count": 0,
+                "active_count": 0,
+                "missing_count": 0,
+            },
+        }
+
+    def purge_workspace_trash_item(self, file_id, *, now_ms=None):
+        self.calls.append(("purge-workspace-trash", file_id, now_ms))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "trash_root": "C:/vault/.noteapp/trash",
+            "items": [],
+            "total_count": 0,
+        }
+
+    def empty_workspace_trash(self, *, now_ms=None):
+        self.calls.append(("empty-workspace-trash", now_ms))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "trash_root": "C:/vault/.noteapp/trash",
+            "items": [],
+            "total_count": 0,
+        }
+
+    def load_workspace_file_draft(self, file_id):
+        self.calls.append(("workspace-file-draft", file_id))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "file_id": file_id,
+            "path": "Notes/A.md",
+            "has_draft": True,
+            "draft_path": "C:/vault/.noteapp/drafts/file-a.draft",
+            "updated_at": 1770000040002,
+            "size_bytes": 10,
+            "text": "# Draft\n",
+        }
+
+    def write_workspace_file_draft(self, file_id, text):
+        self.calls.append(("write-workspace-file-draft", file_id, text))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "file_id": file_id,
+            "path": "Notes/A.md",
+            "has_draft": True,
+            "draft_path": "C:/vault/.noteapp/drafts/file-a.draft",
+            "updated_at": 1770000040002,
+            "size_bytes": len(text.encode("utf-8")),
+            "text": text,
+        }
+
+    def clear_workspace_file_draft(self, file_id):
+        self.calls.append(("clear-workspace-file-draft", file_id))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "file_id": file_id,
+            "path": "Notes/A.md",
+            "has_draft": False,
+            "draft_path": "C:/vault/.noteapp/drafts/file-a.draft",
+        }
+
+    def rebuild_workspace_search_index(self):
+        self.calls.append(("rebuild-search-index", None))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "query": "",
+            "total_count": 0,
+            "results": [],
+        }
+
+    def search_workspace(self, query, *, limit=20):
+        self.calls.append(("search-workspace", query, limit))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "query": query,
+            "total_count": 1,
+            "results": [
+                {
+                    "file_id": "file-a",
+                    "path": "Notes/A.md",
+                    "title": "A",
+                    "snippet": "Local search result",
+                }
+            ],
+        }
+
+    def load_workspace_note_links(self, file_id):
+        self.calls.append(("workspace-links", file_id))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "file_id": file_id,
+            "path": "Notes/A.md",
+            "outgoing": [
+                {
+                    "source_file_id": file_id,
+                    "source_path": "Notes/A.md",
+                    "link_text": "B",
+                    "target_file_id": "file-b",
+                    "target_path": "Notes/B.md",
+                    "ordinal": 0,
+                }
+            ],
+            "backlinks": [],
+            "outgoing_count": 1,
+            "backlink_count": 0,
+        }
+
     def load_local_settings_snapshot(self):
         self.calls.append(("local-settings-snapshot", None))
         return {
@@ -1044,6 +1306,275 @@ class DesktopCliTests(unittest.TestCase):
             self.service.calls,
             [("write-workspace-file-content", "file-a", "# File Input\n")],
         )
+
+    def test_create_workspace_note_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "create-workspace-note",
+            "--path",
+            "Notes/New.md",
+            "--input-text",
+            "# New\n",
+            "--now-ms",
+            "1770000041111",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["operation"], "create")
+        self.assertEqual(payload["file"]["path"], "Notes/New.md")
+        self.assertEqual(
+            self.service.calls,
+            [("create-workspace-note", "Notes/New.md", "# New\n", 1770000041111)],
+        )
+
+    def test_rename_workspace_note_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "rename-workspace-note",
+            "--file-id",
+            "file-a",
+            "--path",
+            "Notes/Renamed.md",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["operation"], "rename")
+        self.assertEqual(self.service.calls, [("rename-workspace-note", "file-a", "Notes/Renamed.md", None)])
+
+    def test_delete_workspace_note_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "delete-workspace-note",
+            "--file-id",
+            "file-a",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["operation"], "delete")
+        self.assertEqual(self.service.calls, [("delete-workspace-note", "file-a", None)])
+
+    def test_workspace_trash_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "workspace-trash",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["total_count"], 1)
+        self.assertEqual(payload["items"][0]["file_id"], "file-a")
+        self.assertEqual(self.service.calls, [("workspace-trash",)])
+
+    def test_restore_workspace_trash_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "restore-workspace-trash",
+            "--file-id",
+            "file-a",
+            "--now-ms",
+            "1770000042222",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["operation"], "restore")
+        self.assertEqual(self.service.calls, [("restore-workspace-trash", "file-a", 1770000042222)])
+
+    def test_purge_workspace_trash_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "purge-workspace-trash",
+            "--file-id",
+            "file-a",
+            "--now-ms",
+            "1770000043333",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["total_count"], 0)
+        self.assertEqual(self.service.calls, [("purge-workspace-trash", "file-a", 1770000043333)])
+
+    def test_empty_workspace_trash_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "empty-workspace-trash",
+            "--now-ms",
+            "1770000044444",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["total_count"], 0)
+        self.assertEqual(self.service.calls, [("empty-workspace-trash", 1770000044444)])
+
+    def test_workspace_file_draft_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "workspace-file-draft",
+            "--file-id",
+            "file-a",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["has_draft"])
+        self.assertEqual(payload["text"], "# Draft\n")
+        self.assertEqual(self.service.calls, [("workspace-file-draft", "file-a")])
+
+    def test_write_workspace_file_draft_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "write-workspace-file-draft",
+            "--file-id",
+            "file-a",
+            "--input-text",
+            "# Draft edit\n",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["has_draft"])
+        self.assertEqual(payload["text"], "# Draft edit\n")
+        self.assertEqual(
+            self.service.calls,
+            [("write-workspace-file-draft", "file-a", "# Draft edit\n")],
+        )
+
+    def test_clear_workspace_file_draft_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "clear-workspace-file-draft",
+            "--file-id",
+            "file-a",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(payload["has_draft"])
+        self.assertEqual(self.service.calls, [("clear-workspace-file-draft", "file-a")])
+
+    def test_rebuild_search_index_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "rebuild-search-index",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["schema_version"], "v1")
+        self.assertEqual(self.service.calls, [("rebuild-search-index", None)])
+
+    def test_search_workspace_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "search-workspace",
+            "--query",
+            "local",
+            "--limit",
+            "7",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["query"], "local")
+        self.assertEqual(payload["results"][0]["file_id"], "file-a")
+        self.assertEqual(self.service.calls, [("search-workspace", "local", 7)])
+
+    def test_workspace_links_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "workspace-links",
+            "--file-id",
+            "file-a",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["file_id"], "file-a")
+        self.assertEqual(payload["outgoing"][0]["target_file_id"], "file-b")
+        self.assertEqual(self.service.calls, [("workspace-links", "file-a")])
 
     def test_write_local_settings_command_routes_to_service(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -195,11 +195,48 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("workspace-files")
     workspace_file_content_parser = subparsers.add_parser("workspace-file-content")
     workspace_file_content_parser.add_argument("--file-id", required=True)
+    create_workspace_note_parser = subparsers.add_parser("create-workspace-note")
+    create_workspace_note_parser.add_argument("--path", required=True)
+    create_workspace_note_input = create_workspace_note_parser.add_mutually_exclusive_group(required=False)
+    create_workspace_note_input.add_argument("--input-text")
+    create_workspace_note_input.add_argument("--input-text-file")
+    create_workspace_note_parser.add_argument("--now-ms", type=int)
+    rename_workspace_note_parser = subparsers.add_parser("rename-workspace-note")
+    rename_workspace_note_parser.add_argument("--file-id", required=True)
+    rename_workspace_note_parser.add_argument("--path", required=True)
+    rename_workspace_note_parser.add_argument("--now-ms", type=int)
+    delete_workspace_note_parser = subparsers.add_parser("delete-workspace-note")
+    delete_workspace_note_parser.add_argument("--file-id", required=True)
+    delete_workspace_note_parser.add_argument("--now-ms", type=int)
+    subparsers.add_parser("workspace-trash")
+    restore_workspace_trash_parser = subparsers.add_parser("restore-workspace-trash")
+    restore_workspace_trash_parser.add_argument("--file-id", required=True)
+    restore_workspace_trash_parser.add_argument("--now-ms", type=int)
+    purge_workspace_trash_parser = subparsers.add_parser("purge-workspace-trash")
+    purge_workspace_trash_parser.add_argument("--file-id", required=True)
+    purge_workspace_trash_parser.add_argument("--now-ms", type=int)
+    empty_workspace_trash_parser = subparsers.add_parser("empty-workspace-trash")
+    empty_workspace_trash_parser.add_argument("--now-ms", type=int)
     write_workspace_file_content_parser = subparsers.add_parser("write-workspace-file-content")
     write_workspace_file_content_parser.add_argument("--file-id", required=True)
     write_workspace_file_content_input = write_workspace_file_content_parser.add_mutually_exclusive_group(required=True)
     write_workspace_file_content_input.add_argument("--input-text")
     write_workspace_file_content_input.add_argument("--input-text-file")
+    workspace_file_draft_parser = subparsers.add_parser("workspace-file-draft")
+    workspace_file_draft_parser.add_argument("--file-id", required=True)
+    write_workspace_file_draft_parser = subparsers.add_parser("write-workspace-file-draft")
+    write_workspace_file_draft_parser.add_argument("--file-id", required=True)
+    write_workspace_file_draft_input = write_workspace_file_draft_parser.add_mutually_exclusive_group(required=True)
+    write_workspace_file_draft_input.add_argument("--input-text")
+    write_workspace_file_draft_input.add_argument("--input-text-file")
+    clear_workspace_file_draft_parser = subparsers.add_parser("clear-workspace-file-draft")
+    clear_workspace_file_draft_parser.add_argument("--file-id", required=True)
+    subparsers.add_parser("rebuild-search-index")
+    search_workspace_parser = subparsers.add_parser("search-workspace")
+    search_workspace_parser.add_argument("--query", required=True)
+    search_workspace_parser.add_argument("--limit", type=int, default=20)
+    workspace_links_parser = subparsers.add_parser("workspace-links")
+    workspace_links_parser.add_argument("--file-id", required=True)
     subparsers.add_parser("local-settings-snapshot")
     write_settings_parser = subparsers.add_parser("write-local-settings")
     write_settings_parser.add_argument("--input-json", required=True)
@@ -391,6 +428,44 @@ def run_cli(
         result = service.list_workspace_files()
     elif args.command == "workspace-file-content":
         result = service.load_workspace_file_content(args.file_id)
+    elif args.command == "create-workspace-note":
+        result = service.create_workspace_note(
+            args.path,
+            text=(
+                ""
+                if args.input_text is None and args.input_text_file is None
+                else _load_text_input(
+                    input_text=args.input_text,
+                    input_text_file=args.input_text_file,
+                )
+            ),
+            now_ms=args.now_ms,
+        )
+    elif args.command == "rename-workspace-note":
+        result = service.rename_workspace_note(
+            args.file_id,
+            args.path,
+            now_ms=args.now_ms,
+        )
+    elif args.command == "delete-workspace-note":
+        result = service.delete_workspace_note(
+            args.file_id,
+            now_ms=args.now_ms,
+        )
+    elif args.command == "workspace-trash":
+        result = service.list_workspace_trash()
+    elif args.command == "restore-workspace-trash":
+        result = service.restore_workspace_trash_item(
+            args.file_id,
+            now_ms=args.now_ms,
+        )
+    elif args.command == "purge-workspace-trash":
+        result = service.purge_workspace_trash_item(
+            args.file_id,
+            now_ms=args.now_ms,
+        )
+    elif args.command == "empty-workspace-trash":
+        result = service.empty_workspace_trash(now_ms=args.now_ms)
     elif args.command == "write-workspace-file-content":
         result = service.write_workspace_file_content(
             args.file_id,
@@ -399,6 +474,24 @@ def run_cli(
                 input_text_file=args.input_text_file,
             ),
         )
+    elif args.command == "workspace-file-draft":
+        result = service.load_workspace_file_draft(args.file_id)
+    elif args.command == "write-workspace-file-draft":
+        result = service.write_workspace_file_draft(
+            args.file_id,
+            _load_text_input(
+                input_text=args.input_text,
+                input_text_file=args.input_text_file,
+            ),
+        )
+    elif args.command == "clear-workspace-file-draft":
+        result = service.clear_workspace_file_draft(args.file_id)
+    elif args.command == "rebuild-search-index":
+        result = service.rebuild_workspace_search_index()
+    elif args.command == "search-workspace":
+        result = service.search_workspace(args.query, limit=args.limit)
+    elif args.command == "workspace-links":
+        result = service.load_workspace_note_links(args.file_id)
     elif args.command == "local-settings-snapshot":
         result = service.load_local_settings_snapshot()
     elif args.command == "write-local-settings":

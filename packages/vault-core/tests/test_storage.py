@@ -84,6 +84,8 @@ from vault_core import (
     initialize_vault,
     initialize_vault_state,
     isolate_staging_orphans,
+    list_note_backlinks_for_file,
+    list_note_links_for_file,
     load_commit_intent_journal,
     list_file_index,
     load_filemap,
@@ -122,6 +124,8 @@ from vault_core import (
     recover_orphaned_commit_lock,
     recover_orphaned_commit_session,
     replace_active_wiki_task,
+    replace_note_links,
+    replace_search_index_entries,
     register_conflict_copy,
     remove_conflict_copy,
     rename_file,
@@ -130,6 +134,7 @@ from vault_core import (
     sanitize_device_name,
     serialize_manifest_canonical,
     should_block_new_commit,
+    search_index,
     submit_prepared_commit,
     SyncApplyJournalRecord,
     upsert_commit_intent_journal,
@@ -3183,6 +3188,69 @@ class VaultCoreStorageTests(unittest.TestCase):
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]["path"], "Notes/A.md")
                 self.assertEqual(rows[0]["size"], 1024)
+
+    def test_search_index_rebuild_and_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                replace_search_index_entries(
+                    connection,
+                    "vault_pkb_001",
+                    [
+                        {
+                            "file_id": "file_a",
+                            "path": "Notes/A.md",
+                            "content": "Local first markdown search content",
+                        },
+                        {
+                            "file_id": "file_b",
+                            "path": "Notes/B.md",
+                            "content": "Unrelated note",
+                        },
+                    ],
+                )
+
+                rows = search_index(connection, "vault_pkb_001", "markdown")
+
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["file_id"], "file_a")
+                self.assertEqual(rows[0]["path"], "Notes/A.md")
+
+    def test_note_links_round_trip_outgoing_and_backlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            with closing(open_database(db_path)) as connection:
+                bootstrap_database(connection)
+                replace_note_links(
+                    connection,
+                    "vault_pkb_001",
+                    [
+                        {
+                            "source_file_id": "file_a",
+                            "source_path": "Notes/A.md",
+                            "link_text": "B",
+                            "target_file_id": "file_b",
+                            "target_path": "Notes/B.md",
+                            "ordinal": 0,
+                        },
+                        {
+                            "source_file_id": "file_a",
+                            "source_path": "Notes/A.md",
+                            "link_text": "Missing",
+                            "target_file_id": None,
+                            "target_path": None,
+                            "ordinal": 1,
+                        },
+                    ],
+                )
+
+                outgoing = list_note_links_for_file(connection, "vault_pkb_001", "file_a")
+                backlinks = list_note_backlinks_for_file(connection, "vault_pkb_001", "file_b")
+
+                self.assertEqual([row["link_text"] for row in outgoing], ["B", "Missing"])
+                self.assertEqual(len(backlinks), 1)
+                self.assertEqual(backlinks[0]["source_file_id"], "file_a")
 
     def test_replace_active_wiki_task_supersedes_previous_active_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

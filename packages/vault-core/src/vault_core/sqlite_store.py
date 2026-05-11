@@ -110,6 +110,20 @@ def bootstrap_database(connection: sqlite3.Connection) -> None:
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS note_links (
+          vault_id TEXT NOT NULL,
+          source_file_id TEXT NOT NULL,
+          source_path TEXT NOT NULL,
+          link_text TEXT NOT NULL,
+          target_file_id TEXT,
+          target_path TEXT,
+          ordinal INTEGER NOT NULL,
+          PRIMARY KEY (vault_id, source_file_id, ordinal)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_note_links_target_file
+          ON note_links (vault_id, target_file_id);
         """
     )
     try:
@@ -314,6 +328,161 @@ def list_file_index(connection: sqlite3.Connection, vault_id: str) -> List[sqlit
         connection.execute(
             "SELECT * FROM file_index WHERE vault_id = ? ORDER BY path, file_id",
             (vault_id,),
+        ).fetchall()
+    )
+
+
+def _search_index_is_fts(connection: sqlite3.Connection) -> bool:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'search_index'"
+    ).fetchone()
+    return row is not None and "VIRTUAL TABLE" in (row["sql"] or "").upper()
+
+
+def replace_search_index_entries(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    entries: List[Dict[str, str]],
+) -> None:
+    with connection:
+        connection.execute("DELETE FROM search_index WHERE vault_id = ?", (vault_id,))
+        connection.executemany(
+            """
+            INSERT INTO search_index (vault_id, file_id, path, content)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (
+                    vault_id,
+                    entry["file_id"],
+                    entry["path"],
+                    entry["content"],
+                )
+                for entry in entries
+            ],
+        )
+
+
+def _build_fts_query(query: str) -> str:
+    terms = [term.strip().replace('"', '""') for term in query.split() if term.strip()]
+    if not terms:
+        raise ValueError("search query must contain at least one term")
+    return " ".join(f'"{term}"' for term in terms)
+
+
+def search_index(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    query: str,
+    *,
+    limit: int = 20,
+) -> List[sqlite3.Row]:
+    normalized_query = query.strip()
+    if not normalized_query:
+        raise ValueError("search query must be non-empty")
+    resolved_limit = max(1, min(limit, 100))
+    if _search_index_is_fts(connection):
+        return list(
+            connection.execute(
+                """
+                SELECT
+                  file_id,
+                  path,
+                  snippet(search_index, 3, '[', ']', '...', 12) AS snippet
+                FROM search_index
+                WHERE vault_id = ?
+                  AND search_index MATCH ?
+                ORDER BY bm25(search_index)
+                LIMIT ?
+                """,
+                (vault_id, _build_fts_query(normalized_query), resolved_limit),
+            ).fetchall()
+        )
+
+    pattern = f"%{normalized_query}%"
+    return list(
+        connection.execute(
+            """
+            SELECT file_id, path, substr(content, 1, 240) AS snippet
+            FROM search_index
+            WHERE vault_id = ?
+              AND (path LIKE ? OR content LIKE ?)
+            ORDER BY path, file_id
+            LIMIT ?
+            """,
+            (vault_id, pattern, pattern, resolved_limit),
+        ).fetchall()
+    )
+
+
+def replace_note_links(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    entries: List[Dict[str, Any]],
+) -> None:
+    with connection:
+        connection.execute("DELETE FROM note_links WHERE vault_id = ?", (vault_id,))
+        connection.executemany(
+            """
+            INSERT INTO note_links (
+              vault_id,
+              source_file_id,
+              source_path,
+              link_text,
+              target_file_id,
+              target_path,
+              ordinal
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    vault_id,
+                    entry["source_file_id"],
+                    entry["source_path"],
+                    entry["link_text"],
+                    entry.get("target_file_id"),
+                    entry.get("target_path"),
+                    entry["ordinal"],
+                )
+                for entry in entries
+            ],
+        )
+
+
+def list_note_links_for_file(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    file_id: str,
+) -> List[sqlite3.Row]:
+    return list(
+        connection.execute(
+            """
+            SELECT *
+            FROM note_links
+            WHERE vault_id = ?
+              AND source_file_id = ?
+            ORDER BY ordinal
+            """,
+            (vault_id, file_id),
+        ).fetchall()
+    )
+
+
+def list_note_backlinks_for_file(
+    connection: sqlite3.Connection,
+    vault_id: str,
+    file_id: str,
+) -> List[sqlite3.Row]:
+    return list(
+        connection.execute(
+            """
+            SELECT *
+            FROM note_links
+            WHERE vault_id = ?
+              AND target_file_id = ?
+            ORDER BY source_path, ordinal
+            """,
+            (vault_id, file_id),
         ).fetchall()
     )
 

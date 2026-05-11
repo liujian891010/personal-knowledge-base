@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from contextlib import closing, suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
@@ -25,7 +26,9 @@ from vault_core import (
     SyncApplyJournalRecord,
     TombstoneRecord,
     VaultStateRecord,
+    add_file,
     apply_manifest_summary_stale,
+    append_tombstone,
     build_commit_snapshot_table,
     clear_sync_apply_journal,
     cleanup_commit_staging_artifacts,
@@ -36,19 +39,26 @@ from vault_core import (
     isolate_staging_orphans,
     load_commit_intent_journal,
     load_filemap,
+    list_note_backlinks_for_file,
+    list_note_links_for_file,
     load_sync_apply_journal,
     load_tombstone_ledger,
     load_vault_state,
     materialize_blob_staging_plan,
     move_staging_orphan,
     materialize_content_snapshot_plan,
+    mark_deleted,
     prepare_commit_submission,
     register_conflict_copy,
     rebuild_filemap_from_manifest,
     remove_conflict_copy,
     recover_sync_apply_finalizing_state,
+    replace_note_links,
+    replace_search_index_entries,
+    rename_file,
     upsert_vault_state,
     upsert_sync_apply_journal,
+    search_index,
     write_filemap_atomic,
 )
 from vault_core.constants import (
@@ -60,6 +70,7 @@ from vault_core.constants import (
     TOMBSTONE_LEDGER_FILENAME,
     VAULTINFO_FILENAME,
 )
+from vault_core.ledger import rewrite_tombstone_ledger
 from vault_core.sync_http import UrlopenLike
 
 from .change_detection import (
@@ -99,6 +110,10 @@ def _compute_content_hash(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def _current_time_ms() -> int:
+    return int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+
+
 def _decode_workspace_text(payload: bytes, *, file_id: str) -> tuple[str, str]:
     encodings = ("utf-8-sig",) if payload.startswith(b"\xef\xbb\xbf") else ("utf-8", "gb18030")
     for encoding in encodings:
@@ -119,6 +134,21 @@ def _append_jsonl_record(path: Path, payload: dict[str, object]) -> None:
 def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
     _write_bytes_atomic(path, (rendered + "\n").encode("utf-8"))
+
+
+def _safe_draft_file_name(file_id: str) -> str:
+    if not file_id or "/" in file_id or "\\" in file_id or ".." in Path(file_id).parts:
+        raise ValueError(f"workspace draft file_id is not safe: {file_id!r}")
+    return f"{file_id}.draft"
+
+
+def _safe_deleted_file_name(file_id: str, deleted_at: int, original_path: str) -> str:
+    if not file_id or "/" in file_id or "\\" in file_id or ".." in Path(file_id).parts:
+        raise ValueError(f"workspace deleted file_id is not safe: {file_id!r}")
+    suffix = PurePosixPath(original_path).suffix
+    if suffix.lower() not in {".md", ".markdown", ".txt"}:
+        suffix = ".md"
+    return f"{deleted_at}-{file_id}{suffix}"
 
 
 def _load_jsonl_records(path: Path) -> list[dict[str, object]]:
@@ -177,6 +207,9 @@ _LOCAL_SETTINGS_EMBEDDING_STATUSES = {
 }
 _WORKSPACE_FILE_CONTENT_MAX_BYTES = 1_000_000
 _WORKSPACE_IMPORTABLE_SUFFIXES = {".md", ".markdown", ".txt"}
+_WORKSPACE_TRASH_DIRNAME = "trash"
+_WORKSPACE_TRASH_PURGED_META_KEY = "trash_purged_at"
+_WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]\n]+)\]\]")
 
 
 def _require_local_settings_object(payload: Mapping[str, Any], key: str) -> dict[str, Any]:
@@ -278,6 +311,63 @@ def _infer_imported_workspace_mime_type(relative_path: str) -> Optional[str]:
     if suffix == ".txt":
         return "text/plain"
     return None
+
+
+def _search_result_title(path: str) -> str:
+    name = PurePosixPath(path).name
+    for suffix in (".markdown", ".md", ".txt"):
+        if name.lower().endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def _note_title_from_path(path: str) -> str:
+    name = PurePosixPath(path).name
+    for suffix in (".markdown", ".md", ".txt"):
+        if name.lower().endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def _normalize_wiki_link_target(value: str) -> str:
+    return value.split("|", 1)[0].split("#", 1)[0].strip()
+
+
+def _normalize_workspace_note_path(value: str) -> str:
+    raw_value = value.strip().replace("\\", "/")
+    if not raw_value:
+        raise ValueError("workspace note path must be non-empty")
+    path = PurePosixPath(raw_value)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"workspace note path is not safe: {value!r}")
+    if path.parts[:1] in ((NOTEAPP_DIRNAME,), (".ai",)):
+        raise ValueError(f"workspace note path is reserved: {value!r}")
+    if path.suffix.lower() not in {".md", ".markdown"}:
+        path = path.with_suffix(".md")
+    if len(path.parts) == 1:
+        path = PurePosixPath("Notes") / path
+    normalized = path.as_posix()
+    if not _is_existing_workspace_import_path(normalized):
+        raise ValueError(f"workspace note path is not importable: {value!r}")
+    return normalized
+
+
+def _normalize_workspace_note_rename_path(current_path: str, new_name: str) -> str:
+    raw_value = new_name.strip().replace("\\", "/")
+    if not raw_value:
+        raise ValueError("workspace note name must be non-empty")
+    path = PurePosixPath(raw_value)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"workspace note name is not safe: {new_name!r}")
+    if len(path.parts) > 1:
+        raise ValueError("workspace note rename only supports changing the file name, not moving folders")
+    if path.suffix.lower() not in {".md", ".markdown"}:
+        path = path.with_suffix(".md")
+    parent = PurePosixPath(current_path).parent
+    normalized = (parent / path.name).as_posix()
+    if not _is_existing_workspace_import_path(normalized):
+        raise ValueError(f"workspace note path is not importable: {new_name!r}")
+    return normalized
 
 
 def _iter_existing_workspace_import_files(vault_root: Path) -> Iterable[tuple[str, Path]]:
@@ -766,6 +856,28 @@ class DesktopWorkspaceFilesSnapshot:
 
 
 @dataclass(frozen=True)
+class DesktopWorkspaceTrashItem:
+    file_id: str
+    path: str
+    type: str
+    deleted_at: int
+    trash_path: Path
+    exists_in_trash: bool
+    size_bytes: Optional[int]
+
+
+@dataclass(frozen=True)
+class DesktopWorkspaceTrashSnapshot:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    trash_root: Path
+    items: list[DesktopWorkspaceTrashItem]
+    total_count: int
+
+
+@dataclass(frozen=True)
 class DesktopWorkspaceFileContent:
     schema_version: str
     vault_id: str
@@ -781,6 +893,75 @@ class DesktopWorkspaceFileContent:
     tracked_content_hash: Optional[str]
     text: str
     encoding: str = "utf-8"
+
+
+@dataclass(frozen=True)
+class DesktopWorkspaceFileDraft:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    file_id: str
+    path: str
+    has_draft: bool
+    draft_path: Path
+    updated_at: Optional[int] = None
+    size_bytes: Optional[int] = None
+    text: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class DesktopWorkspaceSearchResult:
+    file_id: str
+    path: str
+    title: str
+    snippet: str
+
+
+@dataclass(frozen=True)
+class DesktopWorkspaceSearchSnapshot:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    query: str
+    total_count: int
+    results: list[DesktopWorkspaceSearchResult]
+
+
+@dataclass(frozen=True)
+class DesktopWorkspaceNoteLink:
+    source_file_id: str
+    source_path: str
+    link_text: str
+    target_file_id: Optional[str]
+    target_path: Optional[str]
+    ordinal: int
+
+
+@dataclass(frozen=True)
+class DesktopWorkspaceNoteLinksSnapshot:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    file_id: str
+    path: str
+    outgoing: list[DesktopWorkspaceNoteLink]
+    backlinks: list[DesktopWorkspaceNoteLink]
+    outgoing_count: int
+    backlink_count: int
+
+
+@dataclass(frozen=True)
+class DesktopWorkspaceFileMutationResult:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    operation: str
+    file: DesktopWorkspaceFileEntry
+    files: DesktopWorkspaceFilesSnapshot
 
 
 @dataclass(frozen=True)
@@ -1037,7 +1218,526 @@ class DesktopSyncService:
             raise FileNotFoundError(f"workspace file content not found: {file_id}")
         _, encoding = _decode_workspace_text(content_path.read_bytes(), file_id=file_id)
         _write_bytes_atomic(content_path, text.encode(encoding))
+        self.clear_workspace_file_draft(file_id)
         return self.load_workspace_file_content(file_id)
+
+    def _workspace_file_entry_for_id(
+        self,
+        files_snapshot: DesktopWorkspaceFilesSnapshot,
+        file_id: str,
+    ) -> DesktopWorkspaceFileEntry:
+        entry = next((item for item in files_snapshot.files if item.file_id == file_id), None)
+        if entry is None:
+            raise KeyError(f"file_id not found in workspace files snapshot: {file_id}")
+        return entry
+
+    def _workspace_trash_path_for_record(self, record: FileRecord) -> Path:
+        return (
+            self.workspace.paths.root
+            / NOTEAPP_DIRNAME
+            / _WORKSPACE_TRASH_DIRNAME
+            / _safe_deleted_file_name(record.file_id, record.updated_at, record.path)
+        )
+
+    def _is_workspace_trash_purged(self, record: FileRecord) -> bool:
+        return isinstance(record.meta, dict) and _WORKSPACE_TRASH_PURGED_META_KEY in record.meta
+
+    def _mark_workspace_trash_purged(self, record: FileRecord, purged_at: int) -> FileRecord:
+        meta = dict(record.meta or {})
+        meta[_WORKSPACE_TRASH_PURGED_META_KEY] = purged_at
+        return replace(record, meta=meta)
+
+    def list_workspace_trash(self) -> DesktopWorkspaceTrashSnapshot:
+        snapshot = self.load_snapshot()
+        items: list[DesktopWorkspaceTrashItem] = []
+        for record in snapshot.document.sorted_files():
+            if record.status != "deleted":
+                continue
+            if self._is_workspace_trash_purged(record):
+                continue
+            trash_path = self._workspace_trash_path_for_record(record)
+            exists_in_trash = trash_path.exists() and trash_path.is_file()
+            items.append(
+                DesktopWorkspaceTrashItem(
+                    file_id=record.file_id,
+                    path=record.path,
+                    type=record.type,
+                    deleted_at=record.updated_at,
+                    trash_path=trash_path,
+                    exists_in_trash=exists_in_trash,
+                    size_bytes=trash_path.stat().st_size if exists_in_trash else None,
+                )
+            )
+        return DesktopWorkspaceTrashSnapshot(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            trash_root=self.workspace.paths.root / NOTEAPP_DIRNAME / _WORKSPACE_TRASH_DIRNAME,
+            items=items,
+            total_count=len(items),
+        )
+
+    def restore_workspace_trash_item(
+        self,
+        file_id: str,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> DesktopWorkspaceFileMutationResult:
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        if record.status != "deleted":
+            raise ValueError(f"workspace file is not deleted: {file_id}")
+        trash_path = self._workspace_trash_path_for_record(record)
+        if not trash_path.exists() or not trash_path.is_file():
+            raise FileNotFoundError(f"workspace trash file not found: {file_id}")
+        restore_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+        if restore_path.exists():
+            raise FileExistsError(f"workspace restore path already exists: {record.path}")
+        restored_at = now_ms if now_ms is not None else _current_time_ms()
+        restored_files = [
+            (
+                FileRecord(
+                    file_id=item.file_id,
+                    path=item.path,
+                    type=item.type,
+                    status="active",
+                    updated_at=restored_at,
+                    content_hash=item.content_hash,
+                    last_known_revision=item.last_known_revision,
+                    meta=item.meta,
+                )
+                if item.file_id == file_id
+                else item
+            )
+            for item in snapshot.document.files
+        ]
+        restore_path.parent.mkdir(parents=True, exist_ok=True)
+        trash_path.replace(restore_path)
+        write_filemap_atomic(
+            self.workspace.paths.filemap_path,
+            snapshot.document.replace_files(restored_files, updated_at=restored_at),
+        )
+        tombstones = [item for item in load_tombstone_ledger(self.workspace.paths.ledger_path) if item.file_id != file_id]
+        rewrite_tombstone_ledger(self.workspace.paths.ledger_path, tombstones)
+        files_snapshot = self.list_workspace_files()
+        return DesktopWorkspaceFileMutationResult(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            operation="restore",
+            file=self._workspace_file_entry_for_id(files_snapshot, file_id),
+            files=files_snapshot,
+        )
+
+    def purge_workspace_trash_item(
+        self,
+        file_id: str,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> DesktopWorkspaceTrashSnapshot:
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        if record.status != "deleted":
+            raise ValueError(f"workspace file is not deleted: {file_id}")
+        self._workspace_trash_path_for_record(record).unlink(missing_ok=True)
+        purged_at = now_ms if now_ms is not None else _current_time_ms()
+        purged_files = [
+            self._mark_workspace_trash_purged(item, purged_at) if item.file_id == file_id else item
+            for item in snapshot.document.files
+        ]
+        write_filemap_atomic(
+            self.workspace.paths.filemap_path,
+            snapshot.document.replace_files(purged_files, updated_at=purged_at),
+        )
+        return self.list_workspace_trash()
+
+    def empty_workspace_trash(self, *, now_ms: Optional[int] = None) -> DesktopWorkspaceTrashSnapshot:
+        snapshot = self.load_snapshot()
+        purged_at = now_ms if now_ms is not None else _current_time_ms()
+        purged_files: list[FileRecord] = []
+        for record in snapshot.document.files:
+            if record.status == "deleted" and not self._is_workspace_trash_purged(record):
+                self._workspace_trash_path_for_record(record).unlink(missing_ok=True)
+                purged_files.append(self._mark_workspace_trash_purged(record, purged_at))
+            else:
+                purged_files.append(record)
+        write_filemap_atomic(
+            self.workspace.paths.filemap_path,
+            snapshot.document.replace_files(purged_files, updated_at=purged_at),
+        )
+        return self.list_workspace_trash()
+
+    def create_workspace_note(
+        self,
+        path: str,
+        *,
+        text: str = "",
+        now_ms: Optional[int] = None,
+    ) -> DesktopWorkspaceFileMutationResult:
+        normalized_path = _normalize_workspace_note_path(path)
+        snapshot = self.load_snapshot()
+        file_id = self.file_id_builder(normalized_path)
+        existing_file_ids = {record.file_id for record in snapshot.document.files}
+        while file_id in existing_file_ids:
+            file_id = str(uuid4())
+        content_path = _resolve_workspace_file_path(self.workspace.vault_root, normalized_path)
+        if content_path.exists():
+            raise FileExistsError(f"workspace note path already exists on disk: {normalized_path}")
+        payload = text.encode("utf-8")
+        created_at = now_ms if now_ms is not None else _current_time_ms()
+        _write_bytes_atomic(content_path, payload)
+        document = add_file(
+            snapshot.document,
+            file_id=file_id,
+            path=normalized_path,
+            type="note",
+            updated_at=created_at,
+            content_hash=None,
+            last_known_revision=None,
+        )
+        write_filemap_atomic(self.workspace.paths.filemap_path, document)
+        files_snapshot = self.list_workspace_files()
+        return DesktopWorkspaceFileMutationResult(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            operation="create",
+            file=self._workspace_file_entry_for_id(files_snapshot, file_id),
+            files=files_snapshot,
+        )
+
+    def rename_workspace_note(
+        self,
+        file_id: str,
+        new_path: str,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> DesktopWorkspaceFileMutationResult:
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        if record.status != "active":
+            raise ValueError(f"workspace file is not active: {file_id}")
+        if record.type != "note":
+            raise ValueError(f"workspace file is not a note: {file_id}")
+        normalized_path = _normalize_workspace_note_rename_path(record.path, new_path)
+        source_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+        target_path = _resolve_workspace_file_path(self.workspace.vault_root, normalized_path)
+        if not source_path.exists() or not source_path.is_file():
+            raise FileNotFoundError(f"workspace file content not found: {file_id}")
+        if target_path.exists() and target_path.resolve() != source_path.resolve():
+            raise FileExistsError(f"workspace note path already exists on disk: {normalized_path}")
+        updated_at = now_ms if now_ms is not None else _current_time_ms()
+        document = rename_file(
+            snapshot.document,
+            file_id=file_id,
+            new_path=normalized_path,
+            updated_at=updated_at,
+        )
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.replace(target_path)
+        if source_path.exists() and source_path.resolve() != target_path.resolve():
+            raise RuntimeError(f"workspace rename left source file in place: {record.path}")
+        if not target_path.exists() or not target_path.is_file():
+            raise RuntimeError(f"workspace rename did not create target file: {normalized_path}")
+        write_filemap_atomic(self.workspace.paths.filemap_path, document)
+        files_snapshot = self.list_workspace_files()
+        return DesktopWorkspaceFileMutationResult(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            operation="rename",
+            file=self._workspace_file_entry_for_id(files_snapshot, file_id),
+            files=files_snapshot,
+        )
+
+    def delete_workspace_note(
+        self,
+        file_id: str,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> DesktopWorkspaceFileMutationResult:
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        if record.status != "active":
+            raise ValueError(f"workspace file is not active: {file_id}")
+        if record.type != "note":
+            raise ValueError(f"workspace file is not a note: {file_id}")
+        deleted_at = now_ms if now_ms is not None else _current_time_ms()
+        local_delete_sequence = snapshot.state.local_delete_sequence + 1
+        document, tombstone = mark_deleted(
+            snapshot.document,
+            file_id=file_id,
+            deleted_at=deleted_at,
+            local_delete_seq=local_delete_sequence,
+            deleted_revision=record.last_known_revision,
+            deleted_by_device=self.config.device_id,
+        )
+        content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+        trash_path = (
+            self.workspace.paths.root
+            / NOTEAPP_DIRNAME
+            / _WORKSPACE_TRASH_DIRNAME
+            / _safe_deleted_file_name(file_id, deleted_at, record.path)
+        )
+        if content_path.exists() and content_path.is_file():
+            trash_path.parent.mkdir(parents=True, exist_ok=True)
+            content_path.replace(trash_path)
+        self.clear_workspace_file_draft(file_id)
+        write_filemap_atomic(self.workspace.paths.filemap_path, document)
+        append_tombstone(self.workspace.paths.ledger_path, tombstone)
+        with closing(self.workspace._open_connection()) as connection:
+            upsert_vault_state(
+                connection,
+                replace(snapshot.state, local_delete_sequence=local_delete_sequence),
+            )
+        files_snapshot = self.list_workspace_files()
+        return DesktopWorkspaceFileMutationResult(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            operation="delete",
+            file=self._workspace_file_entry_for_id(files_snapshot, file_id),
+            files=files_snapshot,
+        )
+
+    def load_workspace_file_draft(self, file_id: str) -> DesktopWorkspaceFileDraft:
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        draft_path = self.workspace.paths.root / NOTEAPP_DIRNAME / "drafts" / _safe_draft_file_name(file_id)
+        if not draft_path.exists() or not draft_path.is_file():
+            return DesktopWorkspaceFileDraft(
+                schema_version="v1",
+                vault_id=self.vault_id,
+                device_id=self.config.device_id,
+                vault_root=self.workspace.vault_root,
+                file_id=file_id,
+                path=record.path,
+                has_draft=False,
+                draft_path=draft_path,
+            )
+        payload = draft_path.read_bytes()
+        if len(payload) > _WORKSPACE_FILE_CONTENT_MAX_BYTES:
+            raise ValueError(f"workspace draft is too large to render: {file_id}")
+        text = payload.decode("utf-8")
+        stat = draft_path.stat()
+        return DesktopWorkspaceFileDraft(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            file_id=file_id,
+            path=record.path,
+            has_draft=True,
+            draft_path=draft_path,
+            updated_at=stat.st_mtime_ns // 1_000_000,
+            size_bytes=len(payload),
+            text=text,
+        )
+
+    def write_workspace_file_draft(self, file_id: str, text: str) -> DesktopWorkspaceFileDraft:
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        if record.status != "active":
+            raise ValueError(f"workspace file is not active: {file_id}")
+        content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+        if not content_path.exists() or not content_path.is_file():
+            raise FileNotFoundError(f"workspace file content not found: {file_id}")
+        draft_path = self.workspace.paths.root / NOTEAPP_DIRNAME / "drafts" / _safe_draft_file_name(file_id)
+        _write_bytes_atomic(draft_path, text.encode("utf-8"))
+        return self.load_workspace_file_draft(file_id)
+
+    def clear_workspace_file_draft(self, file_id: str) -> DesktopWorkspaceFileDraft:
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        draft_path = self.workspace.paths.root / NOTEAPP_DIRNAME / "drafts" / _safe_draft_file_name(file_id)
+        draft_path.unlink(missing_ok=True)
+        return DesktopWorkspaceFileDraft(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            file_id=file_id,
+            path=record.path,
+            has_draft=False,
+            draft_path=draft_path,
+        )
+
+    def rebuild_workspace_search_index(self) -> DesktopWorkspaceSearchSnapshot:
+        snapshot = self.load_snapshot()
+        entries: list[dict[str, str]] = []
+        for record in snapshot.document.sorted_files():
+            if record.status != "active" or record.type != "note":
+                continue
+            content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            if not content_path.exists() or not content_path.is_file():
+                continue
+            try:
+                payload = content_path.read_bytes()
+                if len(payload) > _WORKSPACE_FILE_CONTENT_MAX_BYTES:
+                    continue
+                text, _ = _decode_workspace_text(payload, file_id=record.file_id)
+            except (OSError, ValueError):
+                continue
+            entries.append(
+                {
+                    "file_id": record.file_id,
+                    "path": record.path,
+                    "content": text,
+                }
+            )
+        with closing(self.workspace._open_connection()) as connection:
+            replace_search_index_entries(connection, self.vault_id, entries)
+        return DesktopWorkspaceSearchSnapshot(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            query="",
+            total_count=0,
+            results=[],
+        )
+
+    def search_workspace(self, query: str, *, limit: int = 20) -> DesktopWorkspaceSearchSnapshot:
+        normalized_query = query.strip()
+        if not normalized_query:
+            return DesktopWorkspaceSearchSnapshot(
+                schema_version="v1",
+                vault_id=self.vault_id,
+                device_id=self.config.device_id,
+                vault_root=self.workspace.vault_root,
+                query=query,
+                total_count=0,
+                results=[],
+            )
+        self.rebuild_workspace_search_index()
+        with closing(self.workspace._open_connection()) as connection:
+            rows = search_index(connection, self.vault_id, normalized_query, limit=limit)
+        results = [
+            DesktopWorkspaceSearchResult(
+                file_id=row["file_id"],
+                path=row["path"],
+                title=_search_result_title(row["path"]),
+                snippet=row["snippet"] or row["path"],
+            )
+            for row in rows
+        ]
+        return DesktopWorkspaceSearchSnapshot(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            query=normalized_query,
+            total_count=len(results),
+            results=results,
+        )
+
+    def rebuild_workspace_note_links(self) -> None:
+        snapshot = self.load_snapshot()
+        active_notes = [
+            record
+            for record in snapshot.document.sorted_files()
+            if record.status == "active" and record.type == "note"
+        ]
+        target_by_alias: dict[str, FileRecord] = {}
+        for record in active_notes:
+            aliases = {
+                record.path,
+                PurePosixPath(record.path).as_posix(),
+                _note_title_from_path(record.path),
+            }
+            suffix = PurePosixPath(record.path).suffix
+            if suffix:
+                aliases.add(record.path[: -len(suffix)])
+            for alias in aliases:
+                normalized = alias.strip().lower()
+                if normalized:
+                    target_by_alias.setdefault(normalized, record)
+
+        entries: list[dict[str, object]] = []
+        for record in active_notes:
+            content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            if not content_path.exists() or not content_path.is_file():
+                continue
+            try:
+                payload = content_path.read_bytes()
+                if len(payload) > _WORKSPACE_FILE_CONTENT_MAX_BYTES:
+                    continue
+                text, _ = _decode_workspace_text(payload, file_id=record.file_id)
+            except (OSError, ValueError):
+                continue
+            for ordinal, match in enumerate(_WIKI_LINK_PATTERN.finditer(text)):
+                link_text = match.group(1).strip()
+                target_key = _normalize_wiki_link_target(link_text).lower()
+                target = target_by_alias.get(target_key)
+                if target is None and target_key and "." not in PurePosixPath(target_key).name:
+                    target = target_by_alias.get(f"{target_key}.md")
+                entries.append(
+                    {
+                        "source_file_id": record.file_id,
+                        "source_path": record.path,
+                        "link_text": link_text,
+                        "target_file_id": None if target is None else target.file_id,
+                        "target_path": None if target is None else target.path,
+                        "ordinal": ordinal,
+                    }
+                )
+
+        with closing(self.workspace._open_connection()) as connection:
+            replace_note_links(connection, self.vault_id, entries)
+
+    def load_workspace_note_links(self, file_id: str) -> DesktopWorkspaceNoteLinksSnapshot:
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        self.rebuild_workspace_note_links()
+        with closing(self.workspace._open_connection()) as connection:
+            outgoing_rows = list_note_links_for_file(connection, self.vault_id, file_id)
+            backlink_rows = list_note_backlinks_for_file(connection, self.vault_id, file_id)
+
+        def build_link(row) -> DesktopWorkspaceNoteLink:
+            return DesktopWorkspaceNoteLink(
+                source_file_id=row["source_file_id"],
+                source_path=row["source_path"],
+                link_text=row["link_text"],
+                target_file_id=row["target_file_id"],
+                target_path=row["target_path"],
+                ordinal=row["ordinal"],
+            )
+
+        outgoing = [build_link(row) for row in outgoing_rows]
+        backlinks = [build_link(row) for row in backlink_rows]
+        return DesktopWorkspaceNoteLinksSnapshot(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            file_id=record.file_id,
+            path=record.path,
+            outgoing=outgoing,
+            backlinks=backlinks,
+            outgoing_count=len(outgoing),
+            backlink_count=len(backlinks),
+        )
 
     def load_local_settings_snapshot(self) -> DesktopLocalSettingsSnapshot:
         settings_path = self.workspace.paths.settings_path

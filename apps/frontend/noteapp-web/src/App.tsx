@@ -5,13 +5,15 @@ import {
   Cloud,
   FolderOpen,
   Settings,
+  Trash2,
 } from 'lucide-react';
 
 import ExplorerView from './views/ExplorerView';
 import ConflictsView from './views/ConflictsView';
 import SettingsView from './views/SettingsView';
+import TrashView from './views/TrashView';
 
-type AppView = 'explorer' | 'conflicts' | 'settings' | 'sync';
+type AppView = 'explorer' | 'conflicts' | 'trash' | 'settings' | 'sync';
 
 interface NavItem {
   id: AppView;
@@ -23,6 +25,7 @@ const navItems: NavItem[] = [
   { id: 'explorer', icon: FolderOpen, label: '笔记库浏览' },
   { id: 'sync', icon: Cloud, label: '同步状态' },
   { id: 'conflicts', icon: AlertTriangle, label: '冲突解决' },
+  { id: 'trash', icon: Trash2, label: '回收站' },
   { id: 'settings', icon: Settings, label: '设置' },
 ];
 
@@ -77,7 +80,7 @@ function Sidebar({ currentView, setView }: { currentView: AppView, setView: (vie
 
 function MobileNav({ currentView, setView }: { currentView: AppView, setView: (view: AppView) => void }) {
   return (
-    <nav className="grid h-16 flex-shrink-0 grid-cols-4 border-t border-[#0f3460] bg-[#16213e] md:hidden">
+    <nav className="grid h-16 flex-shrink-0 grid-cols-5 border-t border-[#0f3460] bg-[#16213e] md:hidden">
       {navItems.map((item) => (
         <button
           key={item.id}
@@ -132,6 +135,7 @@ export default function App() {
             >
               {currentView === 'explorer' && <ExplorerView setView={setCurrentView} />}
               {currentView === 'conflicts' && <ConflictsView />}
+              {currentView === 'trash' && <TrashView />}
               {currentView === 'settings' && <SettingsView initialTab="general" />}
               {currentView === 'sync' && <SettingsView initialTab="sync" />}
             </motion.div>

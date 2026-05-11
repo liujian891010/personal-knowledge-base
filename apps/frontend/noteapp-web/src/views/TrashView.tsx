@@ -1,81 +1,273 @@
-import React from 'react';
-import { Trash2, RefreshCw, AlertCircle, FileText, Network, Search, MoreVertical } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AlertCircle, FileText, RefreshCw, Search, Trash2 } from 'lucide-react';
+
+import { invalidateWorkspaceFilesCache } from '../useWorkspaceFiles';
+
+const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
+const syncBridgeUrl = (
+  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
+).replace(/\/+$/, '');
+
+interface TrashItem {
+  file_id: string;
+  path: string;
+  type: string;
+  deleted_at: number;
+  trash_path: string;
+  exists_in_trash: boolean;
+  size_bytes: number | null;
+}
+
+interface TrashSnapshot {
+  items: TrashItem[];
+  total_count: number;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function requireString(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  if (typeof value !== 'string') {
+    throw new Error(`trash item missing string field: ${key}`);
+  }
+  return value;
+}
+
+function requireNumber(payload: Record<string, unknown>, key: string): number {
+  const value = payload[key];
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`trash item missing numeric field: ${key}`);
+  }
+  return value;
+}
+
+function optionalNumber(payload: Record<string, unknown>, key: string): number | null {
+  const value = payload[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function parseTrashSnapshot(payload: unknown): TrashSnapshot {
+  if (!isObject(payload) || !Array.isArray(payload.items)) {
+    throw new Error('trash snapshot must include items');
+  }
+  return {
+    total_count: requireNumber(payload, 'total_count'),
+    items: payload.items.map((item) => {
+      if (!isObject(item)) {
+        throw new Error('trash item must be an object');
+      }
+      return {
+        file_id: requireString(item, 'file_id'),
+        path: requireString(item, 'path'),
+        type: requireString(item, 'type'),
+        deleted_at: requireNumber(item, 'deleted_at'),
+        trash_path: requireString(item, 'trash_path'),
+        exists_in_trash: Boolean(item.exists_in_trash),
+        size_bytes: optionalNumber(item, 'size_bytes'),
+      };
+    }),
+  };
+}
+
+function fileName(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+function formatBytes(value: number | null): string {
+  if (value === null) {
+    return '不可用';
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatTime(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(ms));
+}
+
+async function responseError(response: Response): Promise<string> {
+  try {
+    const payload: unknown = await response.json();
+    if (isObject(payload) && typeof payload.message === 'string') {
+      if (response.status === 404 && payload.message === 'Route was not found.') {
+        return '回收站 API 未加载，请重启同步桥和前端开发服务后重试。';
+      }
+      return payload.message;
+    }
+  } catch {
+    // Fall through.
+  }
+  return `request failed: ${response.status}`;
+}
 
 export default function TrashView() {
-  const deletedFiles = [
-    { name: '旧架构草案.md', size: '14 KB', deletedAt: '2 天前', origin: '笔记 / 架构', type: 'doc' },
-    { name: 'Q2 路线图 (已弃用).md', size: '8 KB', deletedAt: '5 天前', origin: '笔记 / 规划', type: 'doc' },
-    { name: '会议记录 - 已取消.md', size: '2 KB', deletedAt: '1 周前', origin: '笔记 / 会议', type: 'doc' },
-    { name: '陈旧的想法.wiki', size: '32 KB', deletedAt: '2 周前', origin: '.ai/wiki', type: 'wiki' },
-  ];
+  const [snapshot, setSnapshot] = useState<TrashSnapshot>({ items: [], total_count: 0 });
+  const [query, setQuery] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [lastError, setLastError] = useState<string | null>(null);
+
+  const loadTrash = async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetch(`${syncBridgeUrl}/api/workspace/trash`, { cache: 'no-store' });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      setSnapshot(parseTrashSnapshot(await response.json()));
+      setLastError(null);
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadTrash();
+  }, []);
+
+  const filteredItems = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) {
+      return snapshot.items;
+    }
+    return snapshot.items.filter((item) => item.path.toLowerCase().includes(normalized));
+  }, [query, snapshot.items]);
+
+  async function mutateTrash(endpoint: string, init: RequestInit) {
+    setIsLoading(true);
+    try {
+      const response = await fetch(`${syncBridgeUrl}${endpoint}`, init);
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      invalidateWorkspaceFilesCache();
+      await loadTrash();
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsLoading(false);
+    }
+  }
 
   return (
-    <div className="flex flex-col h-full bg-[#1a1a2e] overflow-hidden">
-      <div className="px-6 md:px-8 py-6 border-b border-[#0f3460] bg-[#16213e] flex-shrink-0 z-10 shadow-lg shadow-black/20">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="flex h-full flex-col overflow-hidden bg-[#1a1a2e]">
+      <div className="flex-shrink-0 border-b border-[#0f3460] bg-[#16213e] px-6 py-6 shadow-lg shadow-black/20 md:px-8">
+        <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
           <div>
-            <h1 className="text-3xl font-bold text-[#e3e2e6] flex items-center gap-3 tracking-tight">
-              <Trash2 className="text-[#e94560]" size={32} /> 回收站
+            <h1 className="flex items-center gap-3 text-3xl font-bold tracking-tight text-[#e3e2e6]">
+              <Trash2 className="text-[#e94560]" size={32} />
+              回收站
             </h1>
-            <p className="text-slate-400 mt-2 text-sm max-w-xl">回收站中的项目会在 30 天后自动永久删除。在此之前，您可以将它们恢复到原来的位置。</p>
+            <p className="mt-2 max-w-xl text-sm text-slate-400">
+              这里显示从工作区移入 `.noteapp/trash` 的文档。恢复会回到原路径，原路径被占用时会失败以避免覆盖。
+            </p>
           </div>
-          <button className="px-4 py-2 bg-[#0f3460]/30 hover:bg-[#0f3460]/60 border border-[#0f3460] text-[#e94560] rounded-lg text-[13px] font-medium transition-colors flex items-center gap-2 w-fit">
-            <AlertCircle size={16} /> 清空回收站
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={loadTrash}
+              disabled={isLoading}
+              className="flex w-fit items-center gap-2 rounded-lg border border-[#0f3460] bg-[#121316] px-4 py-2 text-[13px] font-medium text-slate-300 transition-colors hover:text-white disabled:opacity-50"
+            >
+              <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} />
+              刷新
+            </button>
+            <button
+              onClick={() => void mutateTrash('/api/workspace/trash/empty', { method: 'POST' })}
+              disabled={isLoading || snapshot.items.length === 0}
+              className="flex w-fit items-center gap-2 rounded-lg border border-[#e94560]/40 bg-[#e94560]/10 px-4 py-2 text-[13px] font-medium text-[#ffb3c0] transition-colors hover:text-white disabled:opacity-50"
+            >
+              <AlertCircle size={16} />
+              清空回收站
+            </button>
+          </div>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 md:p-8">
-        <div className="max-w-5xl mx-auto">
-          {/* 搜索筛选栏 */}
-          <div className="flex items-center gap-4 mb-6">
-            <div className="relative flex-1 max-w-md">
+        <div className="mx-auto max-w-5xl">
+          <div className="mb-6 flex items-center gap-4">
+            <label className="relative max-w-md flex-1">
               <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-              <input type="text" placeholder="搜索已删除的项目..." className="w-full bg-[#121316] border border-[#0f3460] rounded-lg pl-10 pr-4 py-2 text-[13px] font-sans text-white focus:outline-none focus:border-[#e94560] focus:ring-1 focus:ring-[#e94560]/50 placeholder:text-slate-500" />
-            </div>
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                type="text"
+                placeholder="搜索回收站..."
+                className="w-full rounded-lg border border-[#0f3460] bg-[#121316] py-2 pl-10 pr-4 font-sans text-[13px] text-white placeholder:text-slate-500 focus:border-[#e94560] focus:outline-none focus:ring-1 focus:ring-[#e94560]/50"
+              />
+            </label>
+            <span className="font-mono text-[11px] text-slate-500">{snapshot.total_count} items</span>
           </div>
 
-          {/* 已删除项目列表 */}
-          <div className="bg-[#16213e] rounded-xl border border-[#0f3460] overflow-hidden shadow-lg shadow-black/20">
-            <div className="hidden md:grid grid-cols-12 gap-4 border-b border-[#0f3460] bg-[#1f2b4a]/50 p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              <div className="col-span-5">名称</div>
-              <div className="col-span-3">原始位置</div>
-              <div className="col-span-2">删除时间</div>
+          {lastError && (
+            <div className="mb-4 rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782]">
+              {lastError}
+            </div>
+          )}
+
+          <div className="overflow-hidden rounded-xl border border-[#0f3460] bg-[#16213e] shadow-lg shadow-black/20">
+            <div className="hidden grid-cols-12 gap-4 border-b border-[#0f3460] bg-[#1f2b4a]/50 p-4 text-xs font-semibold uppercase tracking-wider text-slate-400 md:grid">
+              <div className="col-span-5">文件</div>
+              <div className="col-span-3">原路径</div>
+              <div className="col-span-2">移入时间</div>
               <div className="col-span-2 text-right">操作</div>
             </div>
             <div className="divide-y divide-[#0f3460]">
-              {deletedFiles.map((file, i) => (
-                <div key={i} className="grid grid-cols-1 md:grid-cols-12 gap-4 p-4 items-center hover:bg-[#1f2b4a] transition-colors group">
-                  <div className="col-span-1 md:col-span-5 flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-[#121316] border border-[#0f3460] flex items-center justify-center flex-shrink-0">
-                      {file.type === 'wiki' ? (
-                        <Network size={20} className="text-[#a9c8fc]" />
-                      ) : (
-                        <FileText size={20} className="text-slate-400" />
-                      )}
+              {filteredItems.length === 0 ? (
+                <div className="p-8 text-center text-[13px] text-slate-500">回收站为空。</div>
+              ) : (
+                filteredItems.map((item) => (
+                  <div key={item.file_id} className="group grid grid-cols-1 items-center gap-4 p-4 transition-colors hover:bg-[#1f2b4a] md:grid-cols-12">
+                    <div className="col-span-1 flex items-center gap-3 md:col-span-5">
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-[#0f3460] bg-[#121316]">
+                        <FileText size={20} className={item.exists_in_trash ? 'text-slate-400' : 'text-[#e94560]'} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-[14px] font-medium text-[#e3e2e6]">{fileName(item.path)}</p>
+                        <p className="mt-1 font-mono text-[11px] text-slate-500">{formatBytes(item.size_bytes)}</p>
+                        {!item.exists_in_trash && <p className="mt-1 text-[11px] text-[#ffb782]">trash file missing</p>}
+                      </div>
                     </div>
-                    <div>
-                      <p className={`text-[14px] font-medium ${file.type === 'wiki' ? 'text-[#a9c8fc]' : 'text-[#e3e2e6]'} truncate`}>{file.name}</p>
-                      <p className="text-xs text-slate-500 md:hidden mt-0.5">{file.origin} • {file.deletedAt}</p>
-                      <p className="text-[11px] font-mono text-slate-500 mt-1">{file.size}</p>
+                    <div className="hidden min-w-0 items-center text-[13px] text-slate-400 md:col-span-3 md:flex">
+                      <span className="truncate" title={item.path}>{item.path}</span>
+                    </div>
+                    <div className="hidden items-center text-[13px] text-slate-400 md:col-span-2 md:flex">
+                      {formatTime(item.deleted_at)}
+                    </div>
+                    <div className="col-span-1 flex items-center justify-end gap-2 md:col-span-2">
+                      <button
+                        onClick={() => void mutateTrash(`/api/workspace/trash/${encodeURIComponent(item.file_id)}/restore`, { method: 'POST' })}
+                        disabled={!item.exists_in_trash || isLoading}
+                        className="flex items-center gap-1.5 rounded border border-[#0f3460] bg-[#121316] px-3 py-1.5 text-xs font-medium text-[#a9c8fc] transition-colors hover:bg-[#0f3460] hover:text-white disabled:opacity-50"
+                      >
+                        <RefreshCw size={14} />
+                        恢复
+                      </button>
+                      <button
+                        onClick={() => void mutateTrash(`/api/workspace/trash/${encodeURIComponent(item.file_id)}`, { method: 'DELETE' })}
+                        disabled={isLoading}
+                        className="rounded border border-[#e94560]/30 bg-[#e94560]/10 px-3 py-1.5 text-xs font-medium text-[#ffb3c0] transition-colors hover:text-white disabled:opacity-50"
+                      >
+                        清除
+                      </button>
                     </div>
                   </div>
-                  <div className="hidden md:flex col-span-3 text-[13px] text-slate-400 items-center">
-                    {file.origin}
-                  </div>
-                  <div className="hidden md:flex col-span-2 text-[13px] text-slate-400 items-center">
-                    {file.deletedAt}
-                  </div>
-                  <div className="col-span-1 md:col-span-2 flex items-center justify-end gap-2">
-                    <button className="px-3 py-1.5 rounded bg-[#121316] border border-[#0f3460] text-[#a9c8fc] hover:text-white hover:bg-[#0f3460] transition-colors text-xs font-medium flex items-center gap-1.5 invisible group-hover:visible opacity-0 group-hover:opacity-100">
-                      <RefreshCw size={14} /> 恢复
-                    </button>
-                    <button className="p-1.5 rounded text-slate-500 hover:text-[#e94560] hover:bg-[#121316] transition-colors">
-                      <MoreVertical size={18} />
-                    </button>
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         </div>
