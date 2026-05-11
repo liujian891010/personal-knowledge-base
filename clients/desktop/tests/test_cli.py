@@ -195,6 +195,23 @@ class FakeService:
             "text": "# A\n",
         }
 
+    def load_workspace_file_blob(self, file_id):
+        self.calls.append(("workspace-file-blob", file_id))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "file_id": file_id,
+            "path": "Attachments/photo.png",
+            "type": "attachment",
+            "status": "active",
+            "size_bytes": 8,
+            "content_hash": "sha256:aaa",
+            "content_base64": "iVBORw0KGgo=",
+            "mime_type": "image/png",
+        }
+
     def write_workspace_file_content(self, file_id, text):
         self.calls.append(("write-workspace-file-content", file_id, text))
         return {
@@ -230,6 +247,35 @@ class FakeService:
                 "updated_at": now_ms or 1770000040001,
                 "exists_on_disk": True,
                 "size_bytes": len(text.encode("utf-8")),
+            },
+            "files": {
+                "schema_version": "v1",
+                "vault_id": "vault-001",
+                "device_id": "desktop-shanghai",
+                "vault_root": "C:/vault",
+                "files": [],
+                "total_count": 0,
+                "active_count": 0,
+                "missing_count": 0,
+            },
+        }
+
+    def create_workspace_attachment(self, file_name, payload, *, now_ms=None):
+        self.calls.append(("create-workspace-attachment", file_name, payload, now_ms))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "operation": "create_attachment",
+            "file": {
+                "file_id": "file-attachment",
+                "path": f"Attachments/{file_name}",
+                "type": "attachment",
+                "status": "active",
+                "updated_at": now_ms or 1770000040001,
+                "exists_on_disk": True,
+                "size_bytes": len(payload),
             },
             "files": {
                 "schema_version": "v1",
@@ -1310,6 +1356,26 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(payload["text"], "# A\n")
         self.assertEqual(self.service.calls, [("workspace-file-content", "file-a")])
 
+    def test_workspace_file_blob_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "workspace-file-blob",
+            "--file-id",
+            "file-attachment",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["content_base64"], "iVBORw0KGgo=")
+        self.assertEqual(payload["mime_type"], "image/png")
+        self.assertEqual(self.service.calls, [("workspace-file-blob", "file-attachment")])
+
     def test_write_workspace_file_content_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(
             "--vault-root",
@@ -1389,6 +1455,33 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(
             self.service.calls,
             [("create-workspace-note", "Notes/New.md", "# New\n", 1770000041111)],
+        )
+
+    def test_create_workspace_attachment_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "create-workspace-attachment",
+            "--file-name",
+            "photo.png",
+            "--input-base64",
+            "aW1hZ2U=",
+            "--now-ms",
+            "1770000041111",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["operation"], "create_attachment")
+        self.assertEqual(payload["file"]["path"], "Attachments/photo.png")
+        self.assertEqual(
+            self.service.calls,
+            [("create-workspace-attachment", "photo.png", b"image", 1770000041111)],
         )
 
     def test_rename_workspace_note_command_routes_to_service(self) -> None:
