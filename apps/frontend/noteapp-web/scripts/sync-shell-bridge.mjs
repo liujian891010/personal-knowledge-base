@@ -253,6 +253,7 @@ function buildPythonPath() {
   const repoRoot = resolve(appRoot, '..', '..', '..');
   const entries = [
     resolve(repoRoot, 'packages', 'vault-core', 'src'),
+    resolve(repoRoot, 'packages', 'ai-core', 'src'),
     repoRoot,
   ];
   if (process.env.PYTHONPATH) {
@@ -701,6 +702,18 @@ const server = createServer(async (request, response) => {
       const query = url.searchParams.get('q') || '';
       const limit = url.searchParams.get('limit') || '20';
       const stdout = runDesktopCli(['search-workspace', '--query', query, '--limit', limit]);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    if (request.method === 'POST' && routePathname === '/api/ai/wiki/compile') {
+      const stdout = runDesktopCli(['compile-ai-wiki']);
+      runScript('write-workspace-files.mjs', {
+        NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+      });
+      runScript('write-live-sync-shell.mjs', {
+        NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
+      });
       jsonResponse(request, response, 200, JSON.parse(stdout));
       return;
     }

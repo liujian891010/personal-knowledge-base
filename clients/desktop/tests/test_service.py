@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 from contextlib import closing
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 from urllib.request import Request
 from zipfile import ZipFile
@@ -746,6 +746,36 @@ class DesktopSyncServiceTests(unittest.TestCase):
             result = service.search_workspace("anything")
 
             self.assertEqual(result.total_count, 0)
+
+    def test_compile_ai_wiki_writes_generated_pages_and_filemap_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            (root / "Notes" / "Live.md").write_text(
+                "# Live Note\n\nLocal first knowledge base content.\n\n## Links\nSee [[Second Brain]].\n",
+                encoding="utf-8",
+            )
+
+            result = service.compile_ai_wiki(now_ms=1770000045000)
+
+            self.assertEqual(result.source_count, 1)
+            self.assertEqual(result.artifact_count, 1)
+            self.assertEqual(result.index_path, ".ai/index.md")
+            self.assertTrue((root / ".ai" / "index.md").exists())
+            artifact = result.artifacts[0]
+            artifact_path = root.joinpath(*PurePosixPath(artifact.path).parts)
+            self.assertTrue(artifact_path.exists())
+            artifact_text = artifact_path.read_text(encoding="utf-8")
+            self.assertIn("Local first knowledge base content.", artifact_text)
+            self.assertIn("[[Second Brain]]", artifact_text)
+            filemap = load_filemap(service.workspace.paths.filemap_path)
+            records_by_path = {record.path: record for record in filemap.files}
+            self.assertEqual(records_by_path[".ai/index.md"].type, "ai_index")
+            self.assertEqual(records_by_path[artifact.path].type, "ai_wiki")
+            self.assertTrue(records_by_path[artifact.path].meta["ai_generated"])
 
     def test_load_workspace_note_links_resolves_outgoing_and_backlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

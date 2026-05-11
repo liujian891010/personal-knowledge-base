@@ -514,7 +514,13 @@ function statusClasses(file: WorkspaceFileEntry): string {
   return 'text-emerald-300 bg-emerald-400/10 border-emerald-400/30';
 }
 
-export default function ExplorerView({ setView }: { setView: (v: string) => void }) {
+export default function ExplorerView({
+  setView,
+  initialSelectedPath,
+}: {
+  setView: (v: string) => void;
+  initialSelectedPath?: string | null;
+}) {
   const {
     summary,
     files,
@@ -580,6 +586,16 @@ export default function ExplorerView({ setView }: { setView: (v: string) => void
       setSelectedFileId(visibleFiles[0].file_id);
     }
   }, [clearContent, selectedFileId, visibleFiles]);
+
+  useEffect(() => {
+    if (!initialSelectedPath) {
+      return;
+    }
+    const targetFile = visibleFiles.find((file) => file.path === initialSelectedPath);
+    if (targetFile && targetFile.file_id !== selectedFileId) {
+      setSelectedFileId(targetFile.file_id);
+    }
+  }, [initialSelectedPath, selectedFileId, visibleFiles]);
 
   const selectedFile = visibleFiles.find((file) => file.file_id === selectedFileId) ?? null;
   const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(false);

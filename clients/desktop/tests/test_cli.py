@@ -376,6 +376,38 @@ class FakeService:
             "total_count": 0,
         }
 
+    def compile_ai_wiki(self, *, now_ms=None):
+        self.calls.append(("compile-ai-wiki", now_ms))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "generated_at": "2026-05-11T00:00:00Z",
+            "source_count": 1,
+            "artifact_count": 1,
+            "index_path": ".ai/index.md",
+            "artifacts": [
+                {
+                    "title": "Live Note",
+                    "path": ".ai/wiki/live-note.md",
+                    "source_file_id": "file-a",
+                    "source_path": "Notes/A.md",
+                    "source_content_hash": "sha256:aaa",
+                }
+            ],
+            "files": {
+                "schema_version": "v1",
+                "vault_id": "vault-001",
+                "device_id": "desktop-shanghai",
+                "vault_root": "C:/vault",
+                "files": [],
+                "total_count": 0,
+                "active_count": 0,
+                "missing_count": 0,
+            },
+        }
+
     def load_workspace_file_draft(self, file_id):
         self.calls.append(("workspace-file-draft", file_id))
         return {
@@ -1452,6 +1484,26 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["total_count"], 0)
         self.assertEqual(self.service.calls, [("empty-workspace-trash", 1770000044444)])
+
+    def test_compile_ai_wiki_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "compile-ai-wiki",
+            "--now-ms",
+            "1770000045555",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["artifact_count"], 1)
+        self.assertEqual(payload["index_path"], ".ai/index.md")
+        self.assertEqual(self.service.calls, [("compile-ai-wiki", 1770000045555)])
 
     def test_workspace_file_draft_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(
