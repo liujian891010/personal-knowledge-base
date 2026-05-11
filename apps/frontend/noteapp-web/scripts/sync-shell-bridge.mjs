@@ -59,6 +59,8 @@ It forwards to:
   GET  /api/settings/live        Read current settings snapshot without running CLI
   GET  /api/workspace/files      npm run workspace:files equivalent
   POST /api/workspace/files      Create a local Markdown note
+  POST /api/workspace/attachments
+                                  Create a local attachment under Attachments/
   PATCH /api/workspace/files/:id Rename a local Markdown note
   DELETE /api/workspace/files/:id
                                   Delete a local Markdown note
@@ -72,6 +74,8 @@ It forwards to:
                                   Atomically write unsaved draft text
   DELETE /api/workspace/files/:id/draft
                                   Clear unsaved draft
+  GET  /api/workspace/files/:id/blob
+                                  Read a workspace file as base64 for preview
   GET  /api/workspace/live       Read current workspace files without running CLI
   GET  /api/workspace/root       Read selected workspace root
   POST /api/workspace/root       Validate and switch selected workspace root
@@ -431,6 +435,19 @@ function workspaceDraftFileIdFromPath(pathname) {
   return decodeURIComponent(encoded);
 }
 
+function workspaceBlobFileIdFromPath(pathname) {
+  const prefix = '/api/workspace/files/';
+  const suffix = '/blob';
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+    return null;
+  }
+  const encoded = pathname.slice(prefix.length, -suffix.length);
+  if (!encoded) {
+    return null;
+  }
+  return decodeURIComponent(encoded);
+}
+
 function workspaceLinksFileIdFromPath(pathname) {
   const prefix = '/api/workspace/files/';
   const suffix = '/links';
@@ -700,6 +717,36 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === 'POST' && routePathname === '/api/workspace/attachments') {
+      const rawBody = await readRequestBody(request);
+      const payload = JSON.parse(rawBody);
+      if (!payload || typeof payload.file_name !== 'string' || typeof payload.content_base64 !== 'string') {
+        throw new Error('workspace attachment create request must include file_name and content_base64');
+      }
+      const tempRoot = mkdtempSync(resolve(tmpdir(), 'noteapp-workspace-attachment-'));
+      try {
+        const inputPath = resolve(tempRoot, 'attachment.b64');
+        writeFileSync(inputPath, payload.content_base64, 'utf8');
+        const stdout = runDesktopCli([
+          'create-workspace-attachment',
+          '--file-name',
+          payload.file_name,
+          '--input-base64-file',
+          inputPath,
+        ]);
+        runScript('write-workspace-files.mjs', {
+          NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+        });
+        runScript('write-live-sync-shell.mjs', {
+          NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
+        });
+        jsonResponse(request, response, 200, JSON.parse(stdout));
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
+      }
+      return;
+    }
+
     if (request.method === 'GET' && url.pathname === '/api/workspace/search') {
       const query = url.searchParams.get('q') || '';
       const limit = url.searchParams.get('limit') || '20';
@@ -755,6 +802,13 @@ const server = createServer(async (request, response) => {
       } finally {
         rmSync(tempRoot, { recursive: true, force: true });
       }
+      return;
+    }
+
+    const workspaceBlobFileId = workspaceBlobFileIdFromPath(url.pathname);
+    if (request.method === 'GET' && workspaceBlobFileId) {
+      const stdout = runDesktopCli(['workspace-file-blob', '--file-id', workspaceBlobFileId]);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
       return;
     }
 

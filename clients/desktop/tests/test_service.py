@@ -497,6 +497,28 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(meta_by_path["Assets/photo.png"]["mime_type"], "image/png")
             self.assertEqual(meta_by_path["Docs/manual.pdf"]["mime_type"], "application/pdf")
 
+    def test_create_workspace_attachment_writes_filemap_and_preview_blob(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+
+            created = service.create_workspace_attachment(
+                "photo.png",
+                b"\x89PNG\r\n\x1a\n",
+                now_ms=1770000032000,
+            )
+
+            self.assertEqual(created.operation, "create_attachment")
+            self.assertEqual(created.file.path, "Attachments/photo.png")
+            self.assertEqual(created.file.type, "attachment")
+            self.assertTrue((root / "Attachments" / "photo.png").exists())
+            blob = service.load_workspace_file_blob(created.file.file_id)
+            self.assertEqual(blob.mime_type, "image/png")
+            self.assertEqual(blob.content_base64, "iVBORw0KGgo=")
+
     def test_import_existing_workspace_files_repairs_local_only_stale_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

@@ -4,6 +4,7 @@ import hashlib
 import json
 import mimetypes
 import re
+import base64
 from contextlib import closing, suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
@@ -207,6 +208,7 @@ _LOCAL_SETTINGS_EMBEDDING_STATUSES = {
     "error",
 }
 _WORKSPACE_FILE_CONTENT_MAX_BYTES = 1_000_000
+_WORKSPACE_FILE_BLOB_MAX_BYTES = 10_000_000
 _WORKSPACE_TRASH_DIRNAME = "trash"
 _WORKSPACE_TRASH_PURGED_META_KEY = "trash_purged_at"
 _WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]\n]+)\]\]")
@@ -402,6 +404,31 @@ def _normalize_workspace_note_rename_path(current_path: str, new_name: str) -> s
     if not _is_existing_workspace_import_path(normalized):
         raise ValueError(f"workspace note path is not importable: {new_name!r}")
     return normalized
+
+
+def _normalize_workspace_attachment_name(value: str) -> str:
+    name = PurePosixPath(value.strip().replace("\\", "/")).name
+    if not name or name in {".", ".."}:
+        raise ValueError("workspace attachment file name must be non-empty")
+    sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "-", name).strip(" .")
+    if not sanitized:
+        raise ValueError("workspace attachment file name is not safe")
+    return sanitized
+
+
+def _next_available_workspace_attachment_path(document: FileMapDocument, file_name: str, vault_root: Path) -> str:
+    normalized_name = _normalize_workspace_attachment_name(file_name)
+    stem = PurePosixPath(normalized_name).stem or "attachment"
+    suffix = PurePosixPath(normalized_name).suffix
+    active_paths = {record.path for record in document.files if record.status != "deleted"}
+    index = 0
+    while True:
+        candidate_name = normalized_name if index == 0 else f"{stem}-{index}{suffix}"
+        candidate = (PurePosixPath("Attachments") / candidate_name).as_posix()
+        disk_path = _resolve_workspace_file_path(vault_root, candidate)
+        if candidate not in active_paths and not disk_path.exists():
+            return candidate
+        index += 1
 
 
 def _iter_existing_workspace_import_files(vault_root: Path) -> Iterable[tuple[str, Path]]:
@@ -985,6 +1012,22 @@ class DesktopWorkspaceFileContent:
 
 
 @dataclass(frozen=True)
+class DesktopWorkspaceFileBlob:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    file_id: str
+    path: str
+    type: str
+    status: str
+    size_bytes: int
+    content_hash: str
+    content_base64: str
+    mime_type: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class DesktopWorkspaceFileDraft:
     schema_version: str
     vault_id: str
@@ -1293,6 +1336,36 @@ class DesktopSyncService:
             tracked_content_hash=record.content_hash,
             text=text,
             encoding=encoding,
+        )
+
+    def load_workspace_file_blob(self, file_id: str) -> DesktopWorkspaceFileBlob:
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        if record.status != "active":
+            raise ValueError(f"workspace file is not active: {file_id}")
+        content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+        if not content_path.exists() or not content_path.is_file():
+            raise FileNotFoundError(f"workspace file content not found: {file_id}")
+        payload = content_path.read_bytes()
+        if len(payload) > _WORKSPACE_FILE_BLOB_MAX_BYTES:
+            raise ValueError(f"workspace file is too large to preview: {file_id}")
+        meta = record.meta or {}
+        mime_type = meta.get("mime_type") if isinstance(meta.get("mime_type"), str) else None
+        return DesktopWorkspaceFileBlob(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            file_id=record.file_id,
+            path=record.path,
+            type=record.type,
+            status=record.status,
+            size_bytes=len(payload),
+            content_hash=_compute_content_hash(payload),
+            content_base64=base64.b64encode(payload).decode("ascii"),
+            mime_type=mime_type or _infer_imported_workspace_mime_type(record.path),
         )
 
     def write_workspace_file_content(self, file_id: str, text: str) -> DesktopWorkspaceFileContent:
@@ -1737,6 +1810,59 @@ class DesktopSyncService:
             device_id=self.config.device_id,
             vault_root=self.workspace.vault_root,
             operation="create",
+            file=self._workspace_file_entry_for_id(files_snapshot, file_id),
+            files=files_snapshot,
+        )
+
+    def create_workspace_attachment(
+        self,
+        file_name: str,
+        payload: bytes,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> DesktopWorkspaceFileMutationResult:
+        if not payload:
+            raise ValueError("workspace attachment payload must be non-empty")
+        snapshot = self.load_snapshot()
+        normalized_path = _next_available_workspace_attachment_path(
+            snapshot.document,
+            file_name,
+            self.workspace.vault_root,
+        )
+        file_id = self.file_id_builder(normalized_path)
+        existing_file_ids = {record.file_id for record in snapshot.document.files}
+        while file_id in existing_file_ids:
+            file_id = str(uuid4())
+        created_at = now_ms if now_ms is not None else _current_time_ms()
+        content_path = _resolve_workspace_file_path(self.workspace.vault_root, normalized_path)
+        _write_bytes_atomic(content_path, payload)
+        mime_type = _infer_imported_workspace_mime_type(normalized_path)
+        records = list(snapshot.document.files)
+        records.append(
+            FileRecord(
+                file_id=file_id,
+                path=normalized_path,
+                type="attachment",
+                status="active",
+                updated_at=created_at,
+                meta={
+                    "size": len(payload),
+                    "mtime": created_at,
+                    **({} if mime_type is None else {"mime_type": mime_type}),
+                },
+            )
+        )
+        write_filemap_atomic(
+            self.workspace.paths.filemap_path,
+            snapshot.document.replace_files(records, updated_at=created_at),
+        )
+        files_snapshot = self.list_workspace_files()
+        return DesktopWorkspaceFileMutationResult(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            operation="create_attachment",
             file=self._workspace_file_entry_for_id(files_snapshot, file_id),
             files=files_snapshot,
         )

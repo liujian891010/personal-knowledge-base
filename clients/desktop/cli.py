@@ -195,12 +195,20 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("workspace-files")
     workspace_file_content_parser = subparsers.add_parser("workspace-file-content")
     workspace_file_content_parser.add_argument("--file-id", required=True)
+    workspace_file_blob_parser = subparsers.add_parser("workspace-file-blob")
+    workspace_file_blob_parser.add_argument("--file-id", required=True)
     create_workspace_note_parser = subparsers.add_parser("create-workspace-note")
     create_workspace_note_parser.add_argument("--path", required=True)
     create_workspace_note_input = create_workspace_note_parser.add_mutually_exclusive_group(required=False)
     create_workspace_note_input.add_argument("--input-text")
     create_workspace_note_input.add_argument("--input-text-file")
     create_workspace_note_parser.add_argument("--now-ms", type=int)
+    create_workspace_attachment_parser = subparsers.add_parser("create-workspace-attachment")
+    create_workspace_attachment_parser.add_argument("--file-name", required=True)
+    create_workspace_attachment_input = create_workspace_attachment_parser.add_mutually_exclusive_group(required=True)
+    create_workspace_attachment_input.add_argument("--input-base64")
+    create_workspace_attachment_input.add_argument("--input-base64-file")
+    create_workspace_attachment_parser.add_argument("--now-ms", type=int)
     rename_workspace_note_parser = subparsers.add_parser("rename-workspace-note")
     rename_workspace_note_parser.add_argument("--file-id", required=True)
     rename_workspace_note_parser.add_argument("--path", required=True)
@@ -433,6 +441,8 @@ def run_cli(
         result = service.list_workspace_files()
     elif args.command == "workspace-file-content":
         result = service.load_workspace_file_content(args.file_id)
+    elif args.command == "workspace-file-blob":
+        result = service.load_workspace_file_blob(args.file_id)
     elif args.command == "create-workspace-note":
         result = service.create_workspace_note(
             args.path,
@@ -444,6 +454,16 @@ def run_cli(
                     input_text_file=args.input_text_file,
                 )
             ),
+            now_ms=args.now_ms,
+        )
+    elif args.command == "create-workspace-attachment":
+        encoded_payload = _load_text_input(
+            input_text=args.input_base64,
+            input_text_file=args.input_base64_file,
+        )
+        result = service.create_workspace_attachment(
+            args.file_name,
+            base64.b64decode(encoded_payload),
             now_ms=args.now_ms,
         )
     elif args.command == "rename-workspace-note":

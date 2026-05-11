@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ChevronDown,
@@ -13,6 +13,7 @@ import {
   Info,
   PanelRightClose,
   PanelRightOpen,
+  Paperclip,
   Plus,
   RefreshCw,
   Save,
@@ -28,6 +29,10 @@ import type { WorkspaceFileEntry } from '../workspaceFiles';
 import type { WorkspaceNoteLink } from '../workspaceLinks';
 
 const explorerCollapsedFoldersStoragePrefix = 'noteapp.explorer.collapsedFolders.v1';
+const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
+const syncBridgeUrl = (
+  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
+).replace(/\/+$/, '');
 
 function fileName(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
@@ -52,6 +57,32 @@ function isEditableWorkspaceFile(file: WorkspaceFileEntry | null): boolean {
     return false;
   }
   return ['note', 'ai_index', 'ai_wiki', 'ai_agents'].includes(file.type);
+}
+
+function isImagePath(path: string): boolean {
+  return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(path);
+}
+
+function relativeMarkdownPath(fromFilePath: string, targetPath: string): string {
+  const fromParts = fromFilePath.split('/').filter(Boolean).slice(0, -1);
+  const targetParts = targetPath.split('/').filter(Boolean);
+  while (fromParts.length > 0 && targetParts.length > 0 && fromParts[0] === targetParts[0]) {
+    fromParts.shift();
+    targetParts.shift();
+  }
+  return [...fromParts.map(() => '..'), ...targetParts].join('/') || fileName(targetPath);
+}
+
+function fileToBase64(file: globalThis.File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = typeof reader.result === 'string' ? reader.result : '';
+      resolve(value.includes(',') ? value.split(',', 2)[1] : value);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('failed to read attachment'));
+    reader.readAsDataURL(file);
+  });
 }
 
 function folderAncestors(folderPath: string): string[] {
@@ -543,6 +574,7 @@ export default function ExplorerView({
     isRefreshing,
     refresh,
     createNote,
+    createAttachment,
     renameNote,
     deleteNote,
   } = useWorkspaceFilesController();
@@ -627,6 +659,8 @@ export default function ExplorerView({
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'draft' | 'saving' | 'saved' | 'error'>('idle');
   const [fileMutationError, setFileMutationError] = useState<string | null>(null);
   const [fileDialog, setFileDialog] = useState<FileDialogState | null>(null);
+  const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState<string | null>(null);
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const wikiLinkByText = useMemo(() => {
     const result = new Map<string, WorkspaceNoteLink>();
     for (const link of selectedLinks?.outgoing ?? []) {
@@ -712,6 +746,36 @@ export default function ExplorerView({
   }, [selectedContent]);
 
   useEffect(() => {
+    let cancelled = false;
+    setAttachmentPreviewUrl(null);
+    if (!selectedFile || selectedFileIsEditable || !isImagePath(selectedFile.path)) {
+      return;
+    }
+    fetch(`${syncBridgeUrl}/api/workspace/files/${encodeURIComponent(selectedFile.file_id)}/blob`, {
+      cache: 'no-store',
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        return response.json() as Promise<{ content_base64: string; mime_type?: string | null }>;
+      })
+      .then((payload) => {
+        if (!cancelled && payload.content_base64) {
+          setAttachmentPreviewUrl(`data:${payload.mime_type || 'application/octet-stream'};base64,${payload.content_base64}`);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAttachmentPreviewUrl(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFile, selectedFileIsEditable]);
+
+  useEffect(() => {
     if (
       !selectedFile
       || !selectedContent
@@ -774,6 +838,33 @@ export default function ExplorerView({
     } catch {
       // 错误信息由 hook 写入页面状态。
       setAutoSaveStatus('error');
+    }
+  }
+
+  async function handleImportAttachment(file: globalThis.File) {
+    if (!selectedFile || !selectedFileIsEditable || !canEditContent) {
+      setFileMutationError('Select an editable Markdown note before inserting an attachment.');
+      return;
+    }
+    try {
+      const contentBase64 = await fileToBase64(file);
+      const created = await createAttachment(file.name, contentBase64);
+      const relativePath = relativeMarkdownPath(selectedFile.path, created.path);
+      const label = file.name.replace(/\]/g, '');
+      const markdown = isImagePath(created.path)
+        ? `![${label}](${relativePath})`
+        : `[${label}](${relativePath})`;
+      setDraftText((current) => {
+        const separator = current.endsWith('\n') || current.length === 0 ? '' : '\n\n';
+        return `${current}${separator}${markdown}\n`;
+      });
+      setFileMutationError(null);
+    } catch (error) {
+      setFileMutationError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (attachmentInputRef.current) {
+        attachmentInputRef.current.value = '';
+      }
     }
   }
 
@@ -1114,6 +1205,26 @@ export default function ExplorerView({
                     )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      ref={attachmentInputRef}
+                      type="file"
+                      className="hidden"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) {
+                          void handleImportAttachment(file);
+                        }
+                      }}
+                    />
+                    <button
+                      onClick={() => attachmentInputRef.current?.click()}
+                      disabled={!canEditContent || isContentLoading || isContentSaving}
+                      title="Insert attachment into the current note"
+                      className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                    >
+                      <Paperclip size={14} />
+                      <span>Attachment</span>
+                    </button>
                     {selectedFileIsEditable && (
                     <div className="flex items-center rounded border border-[#0f3460] bg-[#121316] p-0.5">
                       <button
@@ -1228,8 +1339,17 @@ export default function ExplorerView({
                         <h4 className="text-[16px] font-bold text-[#e3e2e6]">{fileName(selectedFile.path)}</h4>
                         <p className="mt-3 text-[13px] leading-6 text-slate-400">
                           This is a non-Markdown attachment. It is visible in the workspace file tree and tracked for sync,
-                          but the built-in editor will not preview or modify it.
+                          but the built-in editor will not modify it. Image attachments can be previewed here.
                         </p>
+                        {attachmentPreviewUrl && (
+                          <div className="mt-5 overflow-hidden rounded-lg border border-[#0f3460] bg-[#121316]">
+                            <img
+                              src={attachmentPreviewUrl}
+                              alt={fileName(selectedFile.path)}
+                              className="max-h-80 w-full object-contain"
+                            />
+                          </div>
+                        )}
                         <dl className="mt-5 grid grid-cols-1 gap-3 rounded-lg border border-[#0f3460] bg-[#121316] p-4 text-left text-[12px]">
                           <div>
                             <dt className="text-[10px] uppercase tracking-wider text-slate-500">Path</dt>

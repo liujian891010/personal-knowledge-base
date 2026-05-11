@@ -36,6 +36,7 @@ export interface WorkspaceFilesController {
   isRefreshing: boolean;
   refresh: () => Promise<void>;
   createNote: (path: string, text?: string) => Promise<WorkspaceFileEntry>;
+  createAttachment: (fileName: string, contentBase64: string) => Promise<WorkspaceFileEntry>;
   renameNote: (fileId: string, path: string) => Promise<WorkspaceFileEntry>;
   deleteNote: (fileId: string) => Promise<WorkspaceFileEntry>;
 }
@@ -246,6 +247,34 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     }
   };
 
+  const createAttachment = async (fileName: string, contentBase64: string) => {
+    setIsRefreshing(true);
+    try {
+      const result = await mutateWorkspace(
+        '/api/workspace/attachments',
+        {
+          method: 'POST',
+          body: JSON.stringify({ file_name: fileName, content_base64: contentBase64 }),
+        },
+        'workspace attachment create',
+      );
+      setSnapshot(result.files);
+      cachedLoadResult = {
+        snapshot: result.files,
+        source: 'bridge',
+        error: null,
+      };
+      setSource('bridge');
+      setLastError(null);
+      return result.file;
+    } catch (error) {
+      setLastError(errorMessage(error));
+      throw error;
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const deleteNote = async (fileId: string) => {
     setIsRefreshing(true);
     try {
@@ -283,6 +312,7 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     isRefreshing,
     refresh,
     createNote,
+    createAttachment,
     renameNote,
     deleteNote,
   };
