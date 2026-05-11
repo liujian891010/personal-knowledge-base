@@ -779,6 +779,12 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === 'POST' && routePathname === '/api/ai/provider/health') {
+      const stdout = runDesktopCli(['ai-provider-health']);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
     const workspaceLinksFileId = (
       workspaceLinksFileIdFromPath(url.pathname)
       || workspaceNoteLinksFileIdFromPath(url.pathname)

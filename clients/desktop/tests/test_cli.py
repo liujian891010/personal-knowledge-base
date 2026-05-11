@@ -479,6 +479,21 @@ class FakeService:
             "model_status": "local_deterministic",
         }
 
+    def check_ai_provider_health(self):
+        self.calls.append(("ai-provider-health", None))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "configured": True,
+            "status": "available",
+            "provider_api": "openai-completions",
+            "base_url": "https://llm.example.com/v1",
+            "model_id": "test-model",
+            "message": "AI provider responded successfully.",
+        }
+
     def load_workspace_file_draft(self, file_id):
         self.calls.append(("workspace-file-draft", file_id))
         return {
@@ -1644,6 +1659,24 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(payload["citation_count"], 1)
         self.assertEqual(payload["model_status"], "local_deterministic")
         self.assertEqual(self.service.calls, [("ask-ai-wiki", "What is local search?", 3)])
+
+    def test_ai_provider_health_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "ai-provider-health",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["configured"])
+        self.assertEqual(payload["status"], "available")
+        self.assertEqual(self.service.calls, [("ai-provider-health", None)])
 
     def test_workspace_file_draft_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(

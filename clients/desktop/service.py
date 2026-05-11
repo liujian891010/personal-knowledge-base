@@ -1138,6 +1138,20 @@ class DesktopAiWikiAnswerResult:
 
 
 @dataclass(frozen=True)
+class DesktopAiProviderHealthResult:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    configured: bool
+    status: str
+    provider_api: Optional[str]
+    base_url: Optional[str]
+    model_id: Optional[str]
+    message: str
+
+
+@dataclass(frozen=True)
 class DesktopAiProviderConfig:
     provider_api: str
     base_url: str
@@ -1839,10 +1853,7 @@ class DesktopSyncService:
         answer = answer_ai_wiki(question, pages, limit=limit)
         model_status = answer.model_status
         answer_text = answer.answer
-        provider_config = (
-            _load_ai_provider_config_from_settings(self.workspace.paths.settings_path)
-            or _load_ai_provider_config()
-        )
+        provider_config = self._load_configured_ai_provider()
         if provider_config is not None and answer.citations:
             try:
                 answer_text = self._answer_ai_wiki_with_provider(
@@ -1862,6 +1873,8 @@ class DesktopSyncService:
                 model_status = f"{provider_config.provider_api}:{provider_config.model}"
             except Exception:
                 model_status = "openai_compatible_error_fallback"
+        elif provider_config is not None and not answer.citations:
+            model_status = f"{provider_config.provider_api}:{provider_config.model}:no_citations"
         return DesktopAiWikiAnswerResult(
             schema_version=answer.schema_version,
             vault_id=self.vault_id,
@@ -1881,6 +1894,69 @@ class DesktopSyncService:
                 for citation in answer.citations
             ],
             model_status=model_status,
+        )
+
+    def _load_configured_ai_provider(self) -> Optional[DesktopAiProviderConfig]:
+        return (
+            _load_ai_provider_config_from_settings(self.workspace.paths.settings_path)
+            or _load_ai_provider_config()
+        )
+
+    def check_ai_provider_health(self) -> DesktopAiProviderHealthResult:
+        provider_config = self._load_configured_ai_provider()
+        if provider_config is None:
+            return DesktopAiProviderHealthResult(
+                schema_version="v1",
+                vault_id=self.vault_id,
+                device_id=self.config.device_id,
+                vault_root=self.workspace.vault_root,
+                configured=False,
+                status="not_configured",
+                provider_api=None,
+                base_url=None,
+                model_id=None,
+                message="AI provider is not configured. Choose a model and enter an AI Key in Settings.",
+            )
+
+        try:
+            self._answer_ai_wiki_with_provider(
+                provider_config,
+                question="Health check. Reply with OK only.",
+                citations=[
+                    DesktopAiWikiAnswerCitation(
+                        file_id="health-check",
+                        path=".ai/health-check.md",
+                        title="Health Check",
+                        excerpt="This is a connectivity check for the configured AI provider.",
+                        score=1,
+                    )
+                ],
+            )
+        except Exception as exc:
+            return DesktopAiProviderHealthResult(
+                schema_version="v1",
+                vault_id=self.vault_id,
+                device_id=self.config.device_id,
+                vault_root=self.workspace.vault_root,
+                configured=True,
+                status="error",
+                provider_api=provider_config.provider_api,
+                base_url=provider_config.base_url,
+                model_id=provider_config.model,
+                message=str(exc),
+            )
+
+        return DesktopAiProviderHealthResult(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            configured=True,
+            status="available",
+            provider_api=provider_config.provider_api,
+            base_url=provider_config.base_url,
+            model_id=provider_config.model,
+            message="AI provider responded successfully.",
         )
 
     def _answer_ai_wiki_with_provider(

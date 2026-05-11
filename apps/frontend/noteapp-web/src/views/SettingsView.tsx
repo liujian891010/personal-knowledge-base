@@ -18,10 +18,23 @@ import type { SyncShellAction, SyncShellActionEmphasis, SyncShellLevel } from '.
 import { useLocalSettingsController } from '../useLocalSettingsSnapshot';
 import { useSyncShellController } from '../useSyncShellSnapshot';
 
+const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
+const syncBridgeUrl = (
+  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
+).replace(/\/+$/, '');
+
 type SettingsTab = 'general' | 'sync' | 'appearance' | 'ai';
 
 type SettingsViewProps = {
   initialTab?: SettingsTab;
+};
+
+type AiProviderHealthResult = {
+  configured: boolean;
+  status: string;
+  provider_api: string | null;
+  model_id: string | null;
+  message: string;
 };
 
 const syncLevelClasses: Record<SyncShellLevel, string> = {
@@ -315,6 +328,8 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
   const [aiBaseUrlDraft, setAiBaseUrlDraft] = useState(settingsSummary.aiBaseUrl);
   const [aiModelIdDraft, setAiModelIdDraft] = useState(settingsSummary.aiModelId);
   const [aiKeyDraft, setAiKeyDraft] = useState('');
+  const [isTestingAiProvider, setIsTestingAiProvider] = useState(false);
+  const [aiProviderHealth, setAiProviderHealth] = useState<AiProviderHealthResult | null>(null);
 
   useEffect(() => {
     setThemeDraft(settingsSummary.theme);
@@ -324,6 +339,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     setAiBaseUrlDraft(settingsSummary.aiBaseUrl);
     setAiModelIdDraft(settingsSummary.aiModelId);
     setAiKeyDraft('');
+    setAiProviderHealth(null);
   }, [
     settingsSummary.theme,
     settingsSummary.localModelStatus,
@@ -359,6 +375,32 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     || aiKeyDraft.trim().length > 0
   );
   const selectedAiModelOption = findAiModelOption(aiProviderApiDraft, aiBaseUrlDraft, aiModelIdDraft);
+  const testAiProvider = async () => {
+    setIsTestingAiProvider(true);
+    try {
+      if (hasSettingsDraftChanges) {
+        await saveLocalSettings();
+      }
+      const response = await fetch(`${syncBridgeUrl}/api/ai/provider/health`, {
+        method: 'POST',
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(String(payload.message ?? `AI provider health returned ${response.status}`));
+      }
+      setAiProviderHealth(payload as AiProviderHealthResult);
+    } catch (error) {
+      setAiProviderHealth({
+        configured: false,
+        status: 'error',
+        provider_api: aiProviderApiDraft,
+        model_id: aiModelIdDraft,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsTestingAiProvider(false);
+    }
+  };
   const saveWorkspaceFolder = async () => {
     await selectWorkspaceRoot();
     await Promise.all([refreshSync(), refreshSettings()]);
@@ -748,6 +790,15 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                     >
                       <Save size={15} />
                     </button>
+                    <button
+                      disabled={isSettingsSaving || isSettingsRefreshing || isTestingAiProvider}
+                      onClick={() => void testAiProvider()}
+                      title="Test AI provider"
+                      className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <CheckCircle2 size={14} />
+                      {isTestingAiProvider ? 'Testing' : 'Test'}
+                    </button>
                   </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -795,6 +846,22 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                   <SettingsDetailRow label="模型地址" value={settingsSummary.aiBaseUrl} mono />
                   <SettingsDetailRow label="AI Key" value={settingsSummary.aiKeyConfigured ? 'configured' : 'not_configured'} />
                 </div>
+                {aiProviderHealth && (
+                  <div className={`mt-4 rounded-lg border p-3 text-[12px] ${
+                    aiProviderHealth.status === 'available'
+                      ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+                      : 'border-[#ffb782]/30 bg-[#ffb782]/10 text-[#ffb782]'
+                  }`}
+                  >
+                    <div className="mb-1 flex flex-wrap items-center gap-2">
+                      <span className="font-mono uppercase">{aiProviderHealth.status}</span>
+                      {aiProviderHealth.model_id && (
+                        <span className="font-mono text-slate-400">{aiProviderHealth.model_id}</span>
+                      )}
+                    </div>
+                    <p className="leading-relaxed">{aiProviderHealth.message}</p>
+                  </div>
+                )}
                 {settingsError && (
                   <p className="text-[12px] text-[#ffb782] mt-4 line-clamp-3">{settingsError}</p>
                 )}

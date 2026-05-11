@@ -1083,6 +1083,93 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(answer.model_status, "openai_compatible_error_fallback")
             self.assertIn("deterministic local answer", answer.answer)
 
+    def test_answer_ai_wiki_marks_configured_provider_without_citations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            service.write_local_settings(
+                {
+                    "appearance": {"theme": "dark"},
+                    "ai": {
+                        "local_model_status": "available",
+                        "embedding_status": "not_configured",
+                        "provider_api": "openai-completions",
+                        "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/",
+                        "model_id": "glm-5_codingplan",
+                        "api_key": "settings-key",
+                    },
+                }
+            )
+
+            answer = service.answer_ai_wiki("no matching citations")
+
+            self.assertEqual(answer.citation_count, 0)
+            self.assertEqual(answer.model_status, "openai-completions:glm-5_codingplan:no_citations")
+
+    def test_check_ai_provider_health_returns_not_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+
+            health = service.check_ai_provider_health()
+
+            self.assertFalse(health.configured)
+            self.assertEqual(health.status, "not_configured")
+            self.assertIsNone(health.model_id)
+
+    def test_check_ai_provider_health_calls_configured_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ai_opener = RecordingAiOpener(answer="OK")
+            service, _, _, _, _ = self._seed_workspace(root)
+            service = replace(service, ai_opener=ai_opener)
+            service.write_local_settings(
+                {
+                    "appearance": {"theme": "dark"},
+                    "ai": {
+                        "local_model_status": "available",
+                        "embedding_status": "not_configured",
+                        "provider_api": "openai-completions",
+                        "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/",
+                        "model_id": "glm-5_codingplan",
+                        "api_key": "settings-key",
+                    },
+                }
+            )
+
+            health = service.check_ai_provider_health()
+
+            self.assertTrue(health.configured)
+            self.assertEqual(health.status, "available")
+            self.assertEqual(health.provider_api, "openai-completions")
+            self.assertEqual(health.model_id, "glm-5_codingplan")
+            self.assertEqual(len(ai_opener.calls), 1)
+
+    def test_check_ai_provider_health_returns_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ai_opener = RecordingAiOpener(status_code=500)
+            service, _, _, _, _ = self._seed_workspace(root)
+            service = replace(service, ai_opener=ai_opener)
+            service.write_local_settings(
+                {
+                    "appearance": {"theme": "dark"},
+                    "ai": {
+                        "local_model_status": "available",
+                        "embedding_status": "not_configured",
+                        "provider_api": "openai-completions",
+                        "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/",
+                        "model_id": "glm-5_codingplan",
+                        "api_key": "settings-key",
+                    },
+                }
+            )
+
+            health = service.check_ai_provider_health()
+
+            self.assertTrue(health.configured)
+            self.assertEqual(health.status, "error")
+            self.assertIn("unexpected status", health.message)
+
     def test_load_workspace_note_links_resolves_outgoing_and_backlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
