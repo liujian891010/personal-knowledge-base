@@ -363,6 +363,32 @@ def _normalize_wiki_link_target(value: str) -> str:
     return value.split("|", 1)[0].split("#", 1)[0].strip()
 
 
+def _wiki_link_rewrite_target(value: str, new_target: str) -> str:
+    target_and_anchor, separator, alias = value.partition("|")
+    target, anchor_separator, anchor = target_and_anchor.partition("#")
+    rewritten = new_target
+    if anchor_separator:
+        rewritten = f"{rewritten}#{anchor}"
+    if separator:
+        rewritten = f"{rewritten}|{alias}"
+    return rewritten
+
+
+def _rewrite_wiki_links(text: str, old_target: str, new_target: str) -> tuple[str, int]:
+    old_key = old_target.strip().lower()
+    rewrite_count = 0
+
+    def replace_match(match: re.Match[str]) -> str:
+        nonlocal rewrite_count
+        link_text = match.group(1)
+        if _normalize_wiki_link_target(link_text).lower() != old_key:
+            return match.group(0)
+        rewrite_count += 1
+        return f"[[{_wiki_link_rewrite_target(link_text, new_target)}]]"
+
+    return _WIKI_LINK_PATTERN.sub(replace_match, text), rewrite_count
+
+
 def _parse_markdown_frontmatter(text: str) -> dict[str, str]:
     match = _MARKDOWN_FRONTMATTER_PATTERN.match(text)
     if not match:
@@ -1405,6 +1431,33 @@ class DesktopSyncService:
         with closing(self.workspace._open_connection()) as connection:
             delete_search_index_entry(connection, self.vault_id, file_id=file_id)
 
+    def _rewrite_workspace_note_links_for_rename(
+        self,
+        *,
+        old_title: str,
+        new_title: str,
+        renamed_file_id: str,
+    ) -> None:
+        snapshot = self.load_snapshot()
+        for record in snapshot.document.sorted_files():
+            if record.status != "active" or record.type != "note" or record.file_id == renamed_file_id:
+                continue
+            content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            if not content_path.exists() or not content_path.is_file():
+                continue
+            try:
+                payload = content_path.read_bytes()
+                if len(payload) > _WORKSPACE_FILE_CONTENT_MAX_BYTES:
+                    continue
+                text, encoding = _decode_workspace_text(payload, file_id=record.file_id)
+            except (OSError, ValueError):
+                continue
+            rewritten, rewrite_count = _rewrite_wiki_links(text, old_title, new_title)
+            if rewrite_count == 0:
+                continue
+            _write_bytes_atomic(content_path, rewritten.encode(encoding))
+            self._upsert_workspace_search_index_for_record(record)
+
     def write_workspace_file_content(self, file_id: str, text: str) -> DesktopWorkspaceFileContent:
         snapshot = self.load_snapshot()
         record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
@@ -1940,6 +1993,8 @@ class DesktopSyncService:
         if target_path.exists() and target_path.resolve() != source_path.resolve():
             raise FileExistsError(f"workspace note path already exists on disk: {normalized_path}")
         updated_at = now_ms if now_ms is not None else _current_time_ms()
+        old_title = _note_title_from_path(record.path)
+        new_title = _note_title_from_path(normalized_path)
         document = rename_file(
             snapshot.document,
             file_id=file_id,
@@ -1953,6 +2008,12 @@ class DesktopSyncService:
         if not target_path.exists() or not target_path.is_file():
             raise RuntimeError(f"workspace rename did not create target file: {normalized_path}")
         write_filemap_atomic(self.workspace.paths.filemap_path, document)
+        if old_title.lower() != new_title.lower():
+            self._rewrite_workspace_note_links_for_rename(
+                old_title=old_title,
+                new_title=new_title,
+                renamed_file_id=file_id,
+            )
         self._upsert_workspace_search_index_for_record(
             FileRecord(
                 file_id=file_id,

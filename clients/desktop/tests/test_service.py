@@ -777,6 +777,43 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             self.assertTrue((root / "Notes" / "Live.md").exists())
 
+    def test_rename_workspace_note_rewrites_wiki_links_to_new_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            source_path = root / "Notes" / "Source.md"
+            source_path.write_text(
+                "See [[Live]] and [[Live#Details|the details]].\n",
+                encoding="utf-8",
+            )
+            document = load_filemap(service.workspace.paths.filemap_path)
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                document.replace_files(
+                    [
+                        *document.files,
+                        FileRecord(
+                            file_id="file-source",
+                            path="Notes/Source.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000031000,
+                        ),
+                    ],
+                    updated_at=1770000031000,
+                ),
+            )
+
+            service.rename_workspace_note("file-live", "Renamed.md", now_ms=1770000032000)
+
+            self.assertEqual(
+                source_path.read_text(encoding="utf-8"),
+                "See [[Renamed]] and [[Renamed#Details|the details]].\n",
+            )
+            links = service.load_workspace_note_links("file-source")
+            self.assertEqual(links.outgoing[0].target_file_id, "file-live")
+            self.assertEqual(links.outgoing[0].target_path, "Notes/Renamed.md")
+
     def test_search_workspace_queries_existing_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
