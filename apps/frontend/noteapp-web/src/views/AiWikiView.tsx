@@ -139,6 +139,39 @@ async function responseError(response: Response): Promise<string> {
   return `request failed: ${response.status}`;
 }
 
+function formatAskError(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes('route was not found') || lower.includes('not found') || lower.includes('404')) {
+    return 'AI Ask 接口不可用：请重启本机 sync:bridge，确认已加载最新 /api/ai/ask 路由。';
+  }
+  if (lower.includes('failed to fetch') || lower.includes('connection refused')) {
+    return '无法连接本机 bridge：请先启动或重启 sync:bridge，再重试 Ask AI Wiki。';
+  }
+  if (lower.includes('not_configured') || lower.includes('api key')) {
+    return `模型配置不可用：请到设置页填写 AI Key 并点击 Test。原始错误：${message}`;
+  }
+  return message;
+}
+
+function askStatusNotice(result: AiAskResult): { level: 'info' | 'warning'; title: string; body: string } | null {
+  const status = result.model_status.toLowerCase();
+  if (status.includes('error_fallback')) {
+    return {
+      level: 'warning',
+      title: '模型调用失败，已使用本地兜底回答',
+      body: '当前答案来自本地确定性检索摘要。请在设置页点击 Test 检查 AI Key、模型协议和模型地址。',
+    };
+  }
+  if (status.endsWith(':no_citations') || result.citation_count === 0 || result.citations.length === 0) {
+    return {
+      level: 'info',
+      title: '没有找到可引用的 AI Wiki 页面',
+      body: 'Ask 只会基于已编译的 .ai/wiki 引用回答。请先编译 AI Wiki，或换一个更接近文档标题/关键词的问题后重试。',
+    };
+  }
+  return null;
+}
+
 function parseFrontmatter(text: string): { fields: Record<string, string>; body: string } {
   if (!text.startsWith('---\n')) {
     return { fields: {}, body: text };
@@ -236,6 +269,7 @@ export default function AiWikiView({
       .sort((left, right) => left.path.localeCompare(right.path)),
     [files],
   );
+  const currentAskStatusNotice = askResult ? askStatusNotice(askResult) : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -296,7 +330,7 @@ export default function AiWikiView({
   async function askAiWiki() {
     const normalizedQuestion = question.trim();
     if (!normalizedQuestion) {
-      setAskError('Question is required.');
+      setAskError('请输入问题后再 Ask。');
       return;
     }
     setIsAsking(true);
@@ -314,7 +348,8 @@ export default function AiWikiView({
       setAskResult(parseAskResult(await response.json()));
       setAskError(null);
     } catch (error) {
-      setAskError(error instanceof Error ? error.message : String(error));
+      setAskResult(null);
+      setAskError(formatAskError(error instanceof Error ? error.message : String(error)));
     } finally {
       setIsAsking(false);
     }
@@ -419,6 +454,37 @@ export default function AiWikiView({
                     </div>
                     <pre className="whitespace-pre-wrap text-[13px] leading-6 text-slate-300">{askResult.answer}</pre>
                   </div>
+                  {currentAskStatusNotice && (
+                    <div className={`rounded-lg border p-4 text-[12px] ${
+                      currentAskStatusNotice.level === 'warning'
+                        ? 'border-[#ffb782]/30 bg-[#ffb782]/10 text-[#ffb782]'
+                        : 'border-[#0f3460] bg-[#0f3460]/30 text-[#a9c8fc]'
+                    }`}
+                    >
+                      <p className="font-semibold text-[#e3e2e6]">{currentAskStatusNotice.title}</p>
+                      <p className="mt-1 leading-relaxed">{currentAskStatusNotice.body}</p>
+                      {askResult.citation_count === 0 && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            onClick={() => void compileWiki()}
+                            disabled={isCompiling}
+                            className="inline-flex items-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 py-1.5 text-[12px] font-medium text-[#a9c8fc] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <RefreshCw size={13} className={isCompiling ? 'animate-spin' : ''} />
+                            编译 AI Wiki
+                          </button>
+                          <button
+                            onClick={() => void refreshWorkspaceFiles()}
+                            disabled={isWorkspaceRefreshing}
+                            className="inline-flex items-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 py-1.5 text-[12px] font-medium text-slate-300 transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <RefreshCw size={13} className={isWorkspaceRefreshing ? 'animate-spin' : ''} />
+                            刷新检索数据
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {askResult.citations.length > 0 && (
                     <div className="grid gap-2">
                       {askResult.citations.map((citation) => (
