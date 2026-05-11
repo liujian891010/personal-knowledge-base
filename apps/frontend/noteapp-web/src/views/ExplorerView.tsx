@@ -73,6 +73,12 @@ function relativeMarkdownPath(fromFilePath: string, targetPath: string): string 
   return [...fromParts.map(() => '..'), ...targetParts].join('/') || fileName(targetPath);
 }
 
+function notePathFromWikiLink(linkText: string): string {
+  const target = linkText.split('|', 1)[0].split('#', 1)[0].trim();
+  const safeName = target.replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-').replace(/\s+/g, ' ').trim();
+  return `Notes/${safeName || 'Untitled'}.md`;
+}
+
 function fileToBase64(file: globalThis.File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -868,6 +874,22 @@ export default function ExplorerView({
     }
   }
 
+  async function handleCreateLinkedNote(linkText: string) {
+    if (!selectedFile) {
+      return;
+    }
+    try {
+      const path = notePathFromWikiLink(linkText);
+      const created = await createNote(path, `# ${fileName(path).replace(/\.(md|markdown)$/i, '')}\n`);
+      await loadLinks(selectedFile.file_id);
+      openWorkspaceFile(created.file_id);
+      setEditorMode('edit');
+      setFileMutationError(null);
+    } catch (error) {
+      setFileMutationError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   function handleCreateNote() {
     setFileDialog({ kind: 'create', path: 'Notes/Untitled.md' });
   }
@@ -1487,27 +1509,40 @@ export default function ExplorerView({
                         ) : (
                           <div className="space-y-1">
                             {selectedLinks?.outgoing.map((link) => (
-                              <button
+                              <div
                                 key={`${link.ordinal}-${link.link_text}`}
-                                type="button"
-                                disabled={!link.target_file_id}
-                                onClick={() => {
-                                  if (link.target_file_id) {
-                                    openWorkspaceFile(link.target_file_id);
-                                  }
-                                }}
-                                className={`block w-full rounded border px-2 py-1.5 text-left ${
+                                className={`rounded border px-2 py-1.5 ${
                                   link.target_file_id
                                     ? 'border-[#0f3460] bg-[#121316] text-[#a9c8fc] hover:text-white'
                                     : 'border-[#ffb782]/30 bg-[#ffb782]/10 text-[#ffb782]'
                                 }`}
                                 title={link.target_path ?? 'Unresolved link'}
                               >
-                                <span className="block truncate font-semibold">[[{link.link_text}]]</span>
-                                <span className="block truncate font-mono text-[10px] text-slate-500">
-                                  {link.target_path ?? 'unresolved'}
-                                </span>
-                              </button>
+                                <button
+                                  type="button"
+                                  disabled={!link.target_file_id}
+                                  onClick={() => {
+                                    if (link.target_file_id) {
+                                      openWorkspaceFile(link.target_file_id);
+                                    }
+                                  }}
+                                  className="block w-full text-left disabled:cursor-default"
+                                >
+                                  <span className="block truncate font-semibold">[[{link.link_text}]]</span>
+                                  <span className="block truncate font-mono text-[10px] text-slate-500">
+                                    {link.target_path ?? 'unresolved'}
+                                  </span>
+                                </button>
+                                {!link.target_file_id && (
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleCreateLinkedNote(link.link_text)}
+                                    className="mt-2 rounded border border-[#ffb782]/40 bg-[#ffb782]/10 px-2 py-1 text-[11px] font-semibold text-[#ffd8a8] hover:bg-[#ffb782]/20 hover:text-white"
+                                  >
+                                    Create linked note
+                                  </button>
+                                )}
+                              </div>
                             ))}
                           </div>
                         )}
