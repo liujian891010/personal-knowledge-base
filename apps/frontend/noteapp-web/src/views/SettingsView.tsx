@@ -7,6 +7,8 @@ import {
   Cloud,
   FolderOpen,
   GitCommitHorizontal,
+  Eye,
+  EyeOff,
   ListChecks,
   Palette,
   RefreshCw,
@@ -328,6 +330,8 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
   const [aiBaseUrlDraft, setAiBaseUrlDraft] = useState(settingsSummary.aiBaseUrl);
   const [aiModelIdDraft, setAiModelIdDraft] = useState(settingsSummary.aiModelId);
   const [aiKeyDraft, setAiKeyDraft] = useState('');
+  const [confirmedAiKeyDraft, setConfirmedAiKeyDraft] = useState('');
+  const [isAiKeyVisible, setIsAiKeyVisible] = useState(false);
   const [isTestingAiProvider, setIsTestingAiProvider] = useState(false);
   const [aiProviderHealth, setAiProviderHealth] = useState<AiProviderHealthResult | null>(null);
 
@@ -338,7 +342,9 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     setAiProviderApiDraft(settingsSummary.aiProviderApi);
     setAiBaseUrlDraft(settingsSummary.aiBaseUrl);
     setAiModelIdDraft(settingsSummary.aiModelId);
-    setAiKeyDraft('');
+    setAiKeyDraft(settingsSummary.aiKey);
+    setConfirmedAiKeyDraft(settingsSummary.aiKey);
+    setIsAiKeyVisible(false);
     setAiProviderHealth(null);
   }, [
     settingsSummary.theme,
@@ -347,6 +353,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     settingsSummary.aiProviderApi,
     settingsSummary.aiBaseUrl,
     settingsSummary.aiModelId,
+    settingsSummary.aiKey,
   ]);
 
   const saveLocalSettings = async () => {
@@ -361,7 +368,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
         provider_api: aiProviderApiDraft,
         base_url: aiBaseUrlDraft,
         model_id: aiModelIdDraft,
-        ...(aiKeyDraft.trim() ? { api_key: aiKeyDraft.trim() } : {}),
+        ...(confirmedAiKeyDraft ? { api_key: confirmedAiKeyDraft } : {}),
       },
     });
   };
@@ -372,7 +379,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     || aiProviderApiDraft !== settingsSummary.aiProviderApi
     || aiBaseUrlDraft !== settingsSummary.aiBaseUrl
     || aiModelIdDraft !== settingsSummary.aiModelId
-    || aiKeyDraft.trim().length > 0
+    || confirmedAiKeyDraft !== settingsSummary.aiKey
   );
   const selectedAiModelOption = findAiModelOption(aiProviderApiDraft, aiBaseUrlDraft, aiModelIdDraft);
   const testAiProvider = async () => {
@@ -826,15 +833,45 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
                   </label>
                   <label className="flex flex-col gap-2 min-w-0 md:col-span-2">
                     <span className="text-[11px] uppercase tracking-wider text-slate-500">AI Key</span>
-                    <input
-                      value={aiKeyDraft}
-                      type="password"
-                      autoComplete="off"
-                      placeholder={settingsSummary.aiKeyConfigured ? '已配置，留空则保留原 Key' : '请输入从“我的 AI Key”获取的 Key'}
-                      disabled={isSettingsSaving || isSettingsRefreshing}
-                      onChange={(event) => setAiKeyDraft(event.target.value)}
-                      className="w-full rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[13px] text-[#e3e2e6] placeholder:text-slate-600 disabled:opacity-50 focus:outline-none focus:border-[#e94560]"
-                    />
+                    <div className="flex flex-col gap-2 md:flex-row">
+                      <div className="flex min-w-0 flex-1 overflow-hidden rounded border border-[#0f3460] bg-[#121316] focus-within:border-[#e94560]">
+                        <input
+                          value={aiKeyDraft}
+                          type={isAiKeyVisible ? 'text' : 'password'}
+                          autoComplete="off"
+                          placeholder="请输入......"
+                          disabled={isSettingsSaving || isSettingsRefreshing}
+                          onChange={(event) => {
+                            setAiKeyDraft(event.target.value);
+                            setConfirmedAiKeyDraft('');
+                          }}
+                          className="min-w-0 flex-1 bg-transparent px-3 py-2 text-[13px] text-[#e3e2e6] placeholder:text-slate-600 disabled:opacity-50 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          disabled={isSettingsSaving || isSettingsRefreshing || !aiKeyDraft}
+                          onClick={() => setIsAiKeyVisible((value) => !value)}
+                          className="inline-flex w-10 items-center justify-center border-l border-[#0f3460] text-slate-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                          title={isAiKeyVisible ? '隐藏 AI Key' : '显示 AI Key'}
+                        >
+                          {isAiKeyVisible ? <EyeOff size={15} /> : <Eye size={15} />}
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isSettingsSaving || isSettingsRefreshing || !aiKeyDraft.trim()}
+                        onClick={() => setConfirmedAiKeyDraft(aiKeyDraft.trim())}
+                        className="inline-flex h-9 items-center justify-center rounded border border-[#0f3460] bg-[#0f3460]/30 px-4 text-[12px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        确定
+                      </button>
+                    </div>
+                    {aiKeyDraft.trim() && !confirmedAiKeyDraft && (
+                      <span className="text-[11px] text-[#ffb782]">请先点击“确定”，再保存或测试模型。</span>
+                    )}
+                    {confirmedAiKeyDraft && (
+                      <span className="text-[11px] text-emerald-300">AI Key 已确认，保存后生效。</span>
+                    )}
                     <span className="text-[12px] text-slate-500">
                       Key 只保存在本机 `.noteapp/settings.json`，不会写入同步数据；保存后 AI Wiki 问答会直接使用该模型。
                     </span>

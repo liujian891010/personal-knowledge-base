@@ -1861,6 +1861,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(snapshot.ai.provider_api, "anthropic-messages")
             self.assertEqual(snapshot.ai.model_id, "MiniMax-M2.7-highspeed_codingplan")
             self.assertFalse(snapshot.ai.api_key_configured)
+            self.assertIsNone(snapshot.ai.api_key)
 
     def test_load_local_settings_snapshot_reads_local_settings_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1915,6 +1916,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(snapshot.ai.provider_api, "openai-completions")
             self.assertEqual(snapshot.ai.model_id, "glm-5_codingplan")
             self.assertTrue(snapshot.ai.api_key_configured)
+            self.assertEqual(snapshot.ai.api_key, "local-key")
             self.assertEqual(
                 json.loads((root / ".noteapp" / "settings.json").read_text(encoding="utf-8")),
                 {

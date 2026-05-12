@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import bundledExampleSnapshot from '../fixtures/workspace-files.example.json';
 import {
@@ -36,7 +36,6 @@ export interface WorkspaceFilesController {
   isRefreshing: boolean;
   refresh: () => Promise<void>;
   createNote: (path: string, text?: string) => Promise<WorkspaceFileEntry>;
-  createAttachment: (fileName: string, contentBase64: string) => Promise<WorkspaceFileEntry>;
   renameNote: (fileId: string, path: string) => Promise<WorkspaceFileEntry>;
   deleteNote: (fileId: string) => Promise<WorkspaceFileEntry>;
 }
@@ -176,7 +175,7 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     };
   }, []);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
       const result = await loadSnapshot();
@@ -187,9 +186,9 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, []);
 
-  const createNote = async (path: string, text = '') => {
+  const createNote = useCallback(async (path: string, text = '') => {
     setIsRefreshing(true);
     try {
       const result = await mutateWorkspace(
@@ -216,9 +215,9 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, []);
 
-  const renameNote = async (fileId: string, path: string) => {
+  const renameNote = useCallback(async (fileId: string, path: string) => {
     setIsRefreshing(true);
     try {
       const result = await mutateWorkspace(
@@ -245,37 +244,9 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, []);
 
-  const createAttachment = async (fileName: string, contentBase64: string) => {
-    setIsRefreshing(true);
-    try {
-      const result = await mutateWorkspace(
-        '/api/workspace/attachments',
-        {
-          method: 'POST',
-          body: JSON.stringify({ file_name: fileName, content_base64: contentBase64 }),
-        },
-        'workspace attachment create',
-      );
-      setSnapshot(result.files);
-      cachedLoadResult = {
-        snapshot: result.files,
-        source: 'bridge',
-        error: null,
-      };
-      setSource('bridge');
-      setLastError(null);
-      return result.file;
-    } catch (error) {
-      setLastError(errorMessage(error));
-      throw error;
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
-
-  const deleteNote = async (fileId: string) => {
+  const deleteNote = useCallback(async (fileId: string) => {
     setIsRefreshing(true);
     try {
       const result = await mutateWorkspace(
@@ -301,7 +272,7 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, []);
 
   const summary = useMemo(() => summarizeWorkspaceFilesSnapshot(snapshot), [snapshot]);
   return {
@@ -312,7 +283,6 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     isRefreshing,
     refresh,
     createNote,
-    createAttachment,
     renameNote,
     deleteNote,
   };

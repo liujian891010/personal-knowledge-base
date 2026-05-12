@@ -59,6 +59,7 @@ export interface LocalSettingsSummary {
   aiBaseUrl: string;
   aiModelId: string;
   aiKeyConfigured: boolean;
+  aiKey: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -129,6 +130,7 @@ export function parseLocalSettingsSnapshot(payload: unknown): LocalSettingsSnaps
       base_url: requireString(ai, 'base_url'),
       model_id: requireString(ai, 'model_id'),
       api_key_configured: Boolean(ai.api_key_configured),
+      api_key: typeof ai.api_key === 'string' ? ai.api_key : '',
     },
   };
 }
@@ -153,5 +155,6 @@ export function summarizeLocalSettingsSnapshot(snapshot: LocalSettingsSnapshot):
     aiBaseUrl: snapshot.ai.base_url,
     aiModelId: snapshot.ai.model_id,
     aiKeyConfigured: snapshot.ai.api_key_configured,
+    aiKey: snapshot.ai.api_key ?? '',
   };
 }
