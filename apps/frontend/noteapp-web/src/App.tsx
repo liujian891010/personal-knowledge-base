@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   AlertTriangle,
   Bot,
-  Cloud,
   FolderOpen,
   Settings,
   Trash2,
@@ -27,11 +26,8 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { id: 'explorer', icon: FolderOpen, label: '笔记库浏览' },
-  { id: 'sync', icon: Cloud, label: '同步状态' },
-  { id: 'conflicts', icon: AlertTriangle, label: '冲突解决' },
   { id: 'trash', icon: Trash2, label: '回收站' },
   { id: 'ai-chat', icon: Bot, label: 'AI 文档' },
-  { id: 'ai-wiki', icon: Bot, label: 'AI 知识库' },
   { id: 'settings', icon: Settings, label: '设置' },
 ];
 
@@ -72,14 +68,6 @@ function Sidebar({ currentView, setView }: { currentView: AppView, setView: (vie
         </ul>
       </nav>
 
-      <div className="border-t border-[#0f3460] p-4">
-        <div className="rounded-lg border border-[#0f3460] bg-[#121316] px-3 py-2">
-          <div className="text-[12px] font-semibold text-[#e3e2e6]">当前收口范围</div>
-          <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
-            仅开放已接入真实工作区与同步桥接的页面。AI Wiki、图谱、回收站和仪表盘暂不进入主流程。
-          </p>
-        </div>
-      </div>
     </aside>
   );
 }
@@ -111,9 +99,6 @@ function TopBar({ currentView }: { currentView: AppView }) {
       <div>
         <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">当前页面</div>
         <h2 className="text-base font-bold text-[#e3e2e6]">{currentItem?.label ?? '笔记库浏览'}</h2>
-      </div>
-      <div className="rounded border border-[#0f3460] bg-[#121316] px-2 py-1 text-[11px] text-slate-400">
-        MVP 收口版
       </div>
     </header>
   );

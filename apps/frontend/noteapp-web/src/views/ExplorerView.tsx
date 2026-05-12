@@ -5,7 +5,6 @@ import {
   ChevronDown,
   ChevronRight,
   Columns2,
-  Cloud,
   Code2,
   Edit3,
   Eye,
@@ -1142,13 +1141,6 @@ export default function ExplorerView({
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center bg-[#0f3460]/30 rounded-md p-0.5 border border-[#0f3460]">
-              <span className="px-3 py-1.5 rounded text-slate-500 flex items-center gap-1.5 font-mono text-[12px] font-bold uppercase tracking-wider">
-                AI Wiki 暂不开放
-              </span>
-            </div>
-          </div>
         </header>
 
         <div className="flex-1 overflow-hidden bg-[#121316] p-4 md:p-6">
@@ -1263,7 +1255,7 @@ export default function ExplorerView({
                         {autoSaveStatus === 'error' && 'Autosave failed'}
                       </span>
                     )}
-                    {savedAtMs && !isContentDirty && (
+                    {false && savedAtMs && !isContentDirty && (
                       <span className="hidden sm:inline font-mono text-[11px] text-emerald-300">
                         已保存到本地 {formatFileTime(savedAtMs)}
                       </span>
@@ -1336,7 +1328,6 @@ export default function ExplorerView({
                         title="打开同步状态"
                         className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-3 text-[12px] font-semibold text-[#a9c8fc] hover:text-white transition-colors"
                       >
-                        <Cloud size={14} />
                         <span>打开同步</span>
                       </button>
                     )}
@@ -1582,9 +1573,6 @@ export default function ExplorerView({
                 </aside>
               )}
 
-              <div className="hidden w-fit items-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-3 py-2 text-[13px] text-slate-500">
-                知识图谱暂不进入当前收口版本
-              </div>
             </div>
           ) : (
             <div className="max-w-2xl rounded-xl border border-[#0f3460] bg-[#16213e] p-6 text-[13px] text-slate-400">

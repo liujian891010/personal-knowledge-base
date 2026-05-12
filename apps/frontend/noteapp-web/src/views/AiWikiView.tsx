@@ -364,7 +364,7 @@ export default function AiWikiView({
               <Bot className="text-[#a9c8fc]" size={32} />
               AI 知识库
             </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-400">
+            <p className="hidden">
               当前 MVP 使用本地确定性编译：读取 Markdown 笔记，生成 `.ai/wiki/*.md` 和 `.ai/index.md`。
               附件/图片/PDF 解析已暂缓，后续再接入。
             </p>
