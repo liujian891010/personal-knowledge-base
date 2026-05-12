@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bot,
@@ -556,14 +556,12 @@ function statusClasses(file: WorkspaceFileEntry): string {
 }
 
 export default function ExplorerView({
-  setView,
   initialSelectedPath,
   initialContextFileIds,
   onInitialSelectedPathConsumed,
   onInitialContextFileIdsConsumed,
   onOpenAiContext,
 }: {
-  setView: (v: string) => void;
   initialSelectedPath?: string | null;
   initialContextFileIds?: string[] | null;
   onInitialSelectedPathConsumed?: () => void;
@@ -665,6 +663,8 @@ export default function ExplorerView({
   const [fileMutationError, setFileMutationError] = useState<string | null>(null);
   const [fileDialog, setFileDialog] = useState<FileDialogState | null>(null);
   const [selectedContextFileIds, setSelectedContextFileIds] = useState<Set<string>>(() => new Set());
+  const hydratedContentFileIdRef = useRef<string | null>(null);
+  const hydratedContentTextRef = useRef('');
   const wikiLinkByText = useMemo(() => {
     const result = new Map<string, WorkspaceNoteLink>();
     for (const link of selectedLinks?.outgoing ?? []) {
@@ -812,9 +812,24 @@ export default function ExplorerView({
   }, [selectedFileId]);
 
   useEffect(() => {
-    setDraftText(selectedContent?.text ?? '');
-    setAutoSaveStatus('idle');
-  }, [selectedContent]);
+    if (!selectedFileId || !selectedContent) {
+      hydratedContentFileIdRef.current = selectedFileId;
+      hydratedContentTextRef.current = '';
+      setDraftText('');
+      setAutoSaveStatus('idle');
+      return;
+    }
+    const fileChanged = hydratedContentFileIdRef.current !== selectedFileId;
+    const localDraftMatchesLastHydrated = draftText === hydratedContentTextRef.current;
+    if (fileChanged || localDraftMatchesLastHydrated) {
+      setDraftText(selectedContent.text);
+    }
+    if (fileChanged) {
+      setAutoSaveStatus('idle');
+    }
+    hydratedContentFileIdRef.current = selectedFileId;
+    hydratedContentTextRef.current = selectedContent.text;
+  }, [draftText, selectedContent, selectedFileId]);
 
   useEffect(() => {
     if (
@@ -1322,15 +1337,6 @@ export default function ExplorerView({
                       <Trash2 size={14} />
                       <span>删除</span>
                     </button>
-                    {savedAtMs && !isContentDirty && (
-                      <button
-                        onClick={() => setView('sync')}
-                        title="打开同步状态"
-                        className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-3 text-[12px] font-semibold text-[#a9c8fc] hover:text-white transition-colors"
-                      >
-                        <span>打开同步</span>
-                      </button>
-                    )}
                     <button
                       onClick={handleSaveContent}
                       disabled={!canEditContent || !isContentDirty || isContentLoading || isContentSaving}
@@ -1372,7 +1378,7 @@ export default function ExplorerView({
                     <textarea
                       value={isContentLoading ? '正在加载文件内容...' : draftText}
                       onChange={(event) => setDraftText(event.target.value)}
-                      disabled={!canEditContent || isContentLoading || isContentSaving}
+                      disabled={!canEditContent || isContentLoading}
                       spellCheck={false}
                       className="block h-full min-h-0 w-full resize-none overflow-auto bg-[#121316] p-5 font-mono text-[13px] leading-relaxed text-slate-300 outline-none placeholder:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-500"
                       placeholder="此文件内容不可用。"
@@ -1394,7 +1400,7 @@ export default function ExplorerView({
                       <textarea
                         value={isContentLoading ? '正在加载文件内容...' : draftText}
                         onChange={(event) => setDraftText(event.target.value)}
-                        disabled={!canEditContent || isContentLoading || isContentSaving}
+                        disabled={!canEditContent || isContentLoading}
                         spellCheck={false}
                         className="block h-full min-h-0 w-full resize-none overflow-auto border-b border-[#0f3460] bg-[#121316] p-5 font-mono text-[13px] leading-relaxed text-slate-300 outline-none placeholder:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-500 md:border-b-0 md:border-r"
                         placeholder="此文件内容不可用。"

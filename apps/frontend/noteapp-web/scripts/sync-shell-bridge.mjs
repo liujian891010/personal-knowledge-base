@@ -1,9 +1,21 @@
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const appRoot = resolve(scriptPath, '..', '..');
@@ -29,7 +41,7 @@ const workspaceRootPath = process.env.NOTEAPP_WORKSPACE_ROOT_OUTPUT
   : defaultWorkspaceRootPath;
 const initialVaultRoot = process.env.NOTEAPP_VAULT_ROOT || '';
 let selectedVaultRoot = readPersistedWorkspaceRoot() || initialVaultRoot;
-const maxRequestBodyBytes = 1_200_000;
+const maxRequestBodyBytes = 5_000_000;
 
 const args = new Set(process.argv.slice(2));
 
@@ -84,6 +96,12 @@ It forwards to:
   POST /api/ai/wiki/compile      Compile deterministic local AI Wiki pages
   POST /api/ai/ask               Answer from local AI Wiki citations
   POST /api/ai/context-task      Run an AI task with selected workspace context
+  GET  /api/ai/chat-sessions     List local AI document sessions
+  POST /api/ai/chat-sessions     Create a local AI document session
+  GET  /api/ai/chat-sessions/:id Read a local AI document session
+  PUT  /api/ai/chat-sessions/:id Update a local AI document session
+  DELETE /api/ai/chat-sessions/:id
+                                  Delete a local AI document session
   POST /api/ai/provider/health   Test configured AI provider
   GET  /health                   Health check
 `);
@@ -160,6 +178,131 @@ function persistWorkspaceRoot(vaultRoot) {
     )}\n`,
     'utf8',
   );
+}
+
+function requireWorkspaceRoot() {
+  if (!selectedVaultRoot || !selectedVaultRoot.trim()) {
+    throw new Error('workspace root is not configured');
+  }
+  return selectedVaultRoot;
+}
+
+function aiChatRootPath() {
+  return resolve(requireWorkspaceRoot(), '.noteapp', 'ai-chats');
+}
+
+function aiChatSessionsPath() {
+  return resolve(aiChatRootPath(), 'sessions');
+}
+
+function aiChatIndexPath() {
+  return resolve(aiChatRootPath(), 'index.json');
+}
+
+function ensureAiChatSessionsDir() {
+  const sessionsPath = aiChatSessionsPath();
+  mkdirSync(sessionsPath, { recursive: true });
+  return sessionsPath;
+}
+
+function normalizeAiChatSessionId(value) {
+  if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(value)) {
+    throw new Error('AI chat session id is invalid');
+  }
+  return value;
+}
+
+function aiChatSessionPath(sessionId) {
+  return resolve(ensureAiChatSessionsDir(), `${normalizeAiChatSessionId(sessionId)}.json`);
+}
+
+function summarizeAiChatSession(session) {
+  return {
+    id: session.id,
+    title: session.title,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    messageCount: Array.isArray(session.messages) ? session.messages.length : 0,
+    contextFileCount: session.context && Array.isArray(session.context.fileIds)
+      ? session.context.fileIds.length
+      : 0,
+  };
+}
+
+function normalizeAiChatSession(payload, existingSession = null) {
+  const now = Date.now();
+  const source = payload && typeof payload === 'object' ? payload : {};
+  const id = existingSession?.id || normalizeAiChatSessionId(
+    typeof source.id === 'string' ? source.id : `chat_${now}_${randomUUID().slice(0, 8)}`,
+  );
+  const title = typeof source.title === 'string' && source.title.trim()
+    ? source.title.trim().slice(0, 120)
+    : existingSession?.title || '新的 AI 文档会话';
+  const createdAt = Number.isFinite(Number(existingSession?.createdAt))
+    ? Number(existingSession.createdAt)
+    : now;
+  const updatedAt = Number.isFinite(Number(source.updatedAt)) ? Number(source.updatedAt) : now;
+  const messages = Array.isArray(source.messages) ? source.messages : existingSession?.messages || [];
+  const context = Object.prototype.hasOwnProperty.call(source, 'context')
+    ? source.context
+    : existingSession?.context ?? null;
+
+  return {
+    schemaVersion: 'v1',
+    id,
+    title,
+    createdAt,
+    updatedAt,
+    context,
+    messages,
+  };
+}
+
+function readAiChatSession(sessionId) {
+  const path = aiChatSessionPath(sessionId);
+  if (!existsSync(path)) {
+    throw Object.assign(new Error('AI chat session was not found'), { statusCode: 404 });
+  }
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function writeAiChatSession(session) {
+  const path = aiChatSessionPath(session.id);
+  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tempPath, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+  renameSync(tempPath, path);
+  return session;
+}
+
+function listAiChatSessions() {
+  const sessionsPath = ensureAiChatSessionsDir();
+  const sessions = readdirSync(sessionsPath)
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => {
+      try {
+        const payload = JSON.parse(readFileSync(resolve(sessionsPath, name), 'utf8'));
+        return summarizeAiChatSession(payload);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+
+  const payload = {
+    schemaVersion: 'v1',
+    sessions,
+  };
+  writeFileSync(aiChatIndexPath(), `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  return payload;
+}
+
+function deleteAiChatSession(sessionId) {
+  const path = aiChatSessionPath(sessionId);
+  if (existsSync(path)) {
+    unlinkSync(path);
+  }
+  return listAiChatSessions();
 }
 
 function bridgeEnv(extraEnv = {}) {
@@ -502,6 +645,15 @@ function workspaceNoteLinksFileIdFromPath(pathname) {
 
 function errorPayload(error) {
   const message = error instanceof Error ? error.message : String(error);
+  if (error && typeof error === 'object' && Number.isFinite(Number(error.statusCode))) {
+    return {
+      statusCode: Number(error.statusCode),
+      payload: {
+        code: Number(error.statusCode) === 404 ? 'not_found' : 'sync_bridge_error',
+        message,
+      },
+    };
+  }
   if (
     message.includes('request body is too large')
     || message.includes('Unexpected end of JSON input')
@@ -794,6 +946,40 @@ const server = createServer(async (request, response) => {
         rmSync(tempRoot, { recursive: true, force: true });
       }
       return;
+    }
+
+    if (request.method === 'GET' && routePathname === '/api/ai/chat-sessions') {
+      jsonResponse(request, response, 200, listAiChatSessions());
+      return;
+    }
+
+    if (request.method === 'POST' && routePathname === '/api/ai/chat-sessions') {
+      const rawBody = await readRequestBody(request);
+      const payload = rawBody ? JSON.parse(rawBody) : {};
+      const session = writeAiChatSession(normalizeAiChatSession(payload));
+      jsonResponse(request, response, 200, session);
+      return;
+    }
+
+    const aiChatSessionPrefix = '/api/ai/chat-sessions/';
+    if (routePathname.startsWith(aiChatSessionPrefix)) {
+      const sessionId = decodeURIComponent(routePathname.slice(aiChatSessionPrefix.length));
+      if (request.method === 'GET') {
+        jsonResponse(request, response, 200, readAiChatSession(sessionId));
+        return;
+      }
+      if (request.method === 'PUT') {
+        const rawBody = await readRequestBody(request);
+        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const existingSession = readAiChatSession(sessionId);
+        const session = writeAiChatSession(normalizeAiChatSession({ ...payload, id: sessionId }, existingSession));
+        jsonResponse(request, response, 200, session);
+        return;
+      }
+      if (request.method === 'DELETE') {
+        jsonResponse(request, response, 200, deleteAiChatSession(sessionId));
+        return;
+      }
     }
 
     if (request.method === 'POST' && routePathname === '/api/ai/provider/health') {

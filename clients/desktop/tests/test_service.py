@@ -1238,9 +1238,33 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(result.model_status, "not_configured_context_preview")
             self.assertEqual(result.source_count, 1)
             self.assertEqual(result.sources[0].excerpt, "# Live n")
-            self.assertTrue(result.sources[0].truncated)
             self.assertTrue(result.truncation.truncated)
             self.assertIn("local context preview", result.answer)
+
+    def test_ai_context_task_selected_files_can_retrieve_relevant_late_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            (root / "Notes" / "Live.md").write_text(
+                "# Live note\n\n"
+                + ("intro " * 40)
+                + "\n\n## API Notes\n\nThe context task returns the selected document answer.\n",
+                encoding="utf-8",
+            )
+
+            result = service.run_ai_context_task(
+                context_type="selected_files",
+                file_ids=["file-live"],
+                instruction="What does the context task return?",
+                max_chars_per_file=80,
+                max_total_chars=80,
+            )
+
+            self.assertEqual(result.truncation.included_file_count, 1)
+            self.assertTrue(
+                any("returns the selected document answer" in source.excerpt for source in result.sources)
+            )
+            self.assertTrue(result.truncation.truncated)
 
     def test_load_workspace_note_links_resolves_outgoing_and_backlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

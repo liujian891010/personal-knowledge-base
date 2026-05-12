@@ -1,39 +1,24 @@
 import React, { useMemo, useState } from 'react';
-import { Bot, FileText, Loader2, Plus, Send, Sparkles, User, X } from 'lucide-react';
+import { Bot, FileText, Loader2, Plus, Send, Sparkles, Trash2, User, X } from 'lucide-react';
 
 import type { AiContextDraft } from '../aiContext';
+import {
+  createAiChatSession,
+  deleteAiChatSession,
+  listAiChatSessions,
+  readAiChatSession,
+  saveAiChatSession,
+  type AiChatMessage,
+  type AiChatSession,
+  type AiChatSessionSummary,
+  type AiChatTaskResult,
+} from '../aiChatSessions';
 import { useWorkspaceFilesController } from '../useWorkspaceFiles';
 
 const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
 const syncBridgeUrl = (
   import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
 ).replace(/\/+$/, '');
-
-interface AiContextTaskSource {
-  file_id: string;
-  path: string;
-  title: string;
-  excerpt: string;
-  included_chars: number;
-  original_chars: number;
-  truncated: boolean;
-}
-
-interface AiContextTaskResult {
-  context_type: string;
-  instruction: string;
-  answer: string;
-  source_count: number;
-  sources: AiContextTaskSource[];
-  model_status: string;
-  truncation: {
-    included_file_count: number;
-    skipped_file_count: number;
-    included_chars: number;
-    truncated: boolean;
-    note: string;
-  };
-}
 
 function renderInlineMarkdown(text: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
@@ -125,10 +110,6 @@ interface PreviewState {
   text: string;
 }
 
-type ChatMessage =
-  | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; result: AiContextTaskResult };
-
 function mergeContext(current: AiContextDraft | null, incoming: AiContextDraft): AiContextDraft {
   if (!current) {
     return incoming;
@@ -157,7 +138,7 @@ async function responseErrorMessage(response: Response): Promise<string> {
   return `request failed: ${response.status}`;
 }
 
-function parseAiContextTaskResult(payload: unknown): AiContextTaskResult {
+function parseAiContextTaskResult(payload: unknown): AiChatTaskResult {
   if (!isObject(payload) || !Array.isArray(payload.sources)) {
     throw new Error('AI context task response must include sources');
   }
@@ -197,6 +178,38 @@ function fileName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
+function createMessageId(): string {
+  return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function defaultSessionTitle(messages: AiChatMessage[]): string {
+  const firstUserMessage = messages.find((message) => message.role === 'user');
+  if (!firstUserMessage) {
+    return '新的 AI 文档会话';
+  }
+  return firstUserMessage.content.replace(/\s+/g, ' ').trim().slice(0, 28) || '新的 AI 文档会话';
+}
+
+function formatSessionTime(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(ms));
+}
+
+function sessionSummaryFromSession(session: AiChatSession): AiChatSessionSummary {
+  return {
+    id: session.id,
+    title: session.title,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    messageCount: session.messages.length,
+    contextFileCount: session.context?.fileIds.length ?? 0,
+  };
+}
+
 async function fetchWorkspaceText(fileId: string): Promise<string> {
   const response = await fetch(`${syncBridgeUrl}/api/workspace/files/${encodeURIComponent(fileId)}/content`, {
     cache: 'no-store',
@@ -221,21 +234,172 @@ export default function AiChatView({
   onClearInitialContext: () => void;
 }) {
   const { files } = useWorkspaceFilesController();
-  const [context, setContext] = useState<AiContextDraft | null>(() => initialContext);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [sessions, setSessions] = useState<AiChatSessionSummary[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [sessionTitle, setSessionTitle] = useState('新的 AI 文档会话');
+  const [context, setContext] = useState<AiContextDraft | null>(null);
+  const [messages, setMessages] = useState<AiChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [isSessionLoading, setIsSessionLoading] = useState(true);
+  const [isSessionSaving, setIsSessionSaving] = useState(false);
+  const [sessionToDelete, setSessionToDelete] = useState<AiChatSessionSummary | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const skipNextAutoSaveRef = React.useRef(false);
 
   React.useEffect(() => {
-    if (!initialContext) {
+    let cancelled = false;
+    async function loadInitialSession() {
+      setIsSessionLoading(true);
+      try {
+        const nextSessions = await listAiChatSessions();
+        if (cancelled) {
+          return;
+        }
+        setSessions(nextSessions);
+        if (nextSessions[0]) {
+          const session = await readAiChatSession(nextSessions[0].id);
+          if (cancelled) {
+            return;
+          }
+          skipNextAutoSaveRef.current = true;
+          setActiveSessionId(session.id);
+          setSessionTitle(session.title);
+          setContext(session.context ?? null);
+          setMessages(session.messages ?? []);
+        } else {
+          skipNextAutoSaveRef.current = true;
+          setActiveSessionId(null);
+          setSessionTitle('新的 AI 文档会话');
+          setContext(null);
+          setMessages([]);
+        }
+      } catch (nextError) {
+        if (!cancelled) {
+          setError(nextError instanceof Error ? nextError.message : String(nextError));
+        }
+      } finally {
+        if (!cancelled) {
+          setIsSessionLoading(false);
+        }
+      }
+    }
+    void loadInitialSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!initialContext || isSessionLoading) {
       return;
     }
-    setContext((current) => mergeContext(current, initialContext));
+    skipNextAutoSaveRef.current = true;
+    setActiveSessionId(null);
+    setSessionTitle('新的 AI 文档会话');
+    setMessages([]);
+    setContext(initialContext);
+    setInput('');
+    setError(null);
     onClearInitialContext();
-  }, [initialContext, onClearInitialContext]);
+  }, [initialContext, isSessionLoading, onClearInitialContext]);
+
+  React.useEffect(() => {
+    if (!activeSessionId || isSessionLoading) {
+      return;
+    }
+    if (skipNextAutoSaveRef.current) {
+      skipNextAutoSaveRef.current = false;
+      return;
+    }
+    const nextTitle = sessionTitle === '新的 AI 文档会话' ? defaultSessionTitle(messages) : sessionTitle;
+    const session: AiChatSession = {
+      schemaVersion: 'v1',
+      id: activeSessionId,
+      title: nextTitle,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      context,
+      messages,
+    };
+    const timer = window.setTimeout(() => {
+      setIsSessionSaving(true);
+      saveAiChatSession(session)
+        .then((savedSession) => {
+          setSessionTitle(savedSession.title);
+          setSessions((current) => {
+            const summary = sessionSummaryFromSession(savedSession);
+            return [summary, ...current.filter((item) => item.id !== savedSession.id)]
+              .sort((left, right) => right.updatedAt - left.updatedAt);
+          });
+          setError(null);
+        })
+        .catch((nextError) => {
+          setError(nextError instanceof Error ? nextError.message : String(nextError));
+        })
+        .finally(() => setIsSessionSaving(false));
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [activeSessionId, context, isSessionLoading, messages, sessionTitle]);
+
+  async function refreshSessions() {
+    setSessions(await listAiChatSessions());
+  }
+
+  async function openSession(sessionId: string) {
+    if (sessionId === activeSessionId) {
+      return;
+    }
+    setIsSessionLoading(true);
+    try {
+      const session = await readAiChatSession(sessionId);
+      skipNextAutoSaveRef.current = true;
+      setActiveSessionId(session.id);
+      setSessionTitle(session.title);
+      setContext(session.context ?? null);
+      setMessages(session.messages ?? []);
+      setError(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setIsSessionLoading(false);
+    }
+  }
+
+  async function confirmDeleteSession() {
+    if (!sessionToDelete) {
+      return;
+    }
+    setIsSessionLoading(true);
+    try {
+      const nextSessions = await deleteAiChatSession(sessionToDelete.id);
+      setSessions(nextSessions);
+      if (sessionToDelete.id === activeSessionId) {
+        if (nextSessions[0]) {
+          const nextSession = await readAiChatSession(nextSessions[0].id);
+          skipNextAutoSaveRef.current = true;
+          setActiveSessionId(nextSession.id);
+          setSessionTitle(nextSession.title);
+          setContext(nextSession.context ?? null);
+          setMessages(nextSession.messages ?? []);
+        } else {
+          skipNextAutoSaveRef.current = true;
+          setActiveSessionId(null);
+          setSessionTitle('新的 AI 文档会话');
+          setContext(null);
+          setMessages([]);
+        }
+      }
+      setSessionToDelete(null);
+      setError(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setIsSessionLoading(false);
+    }
+  }
 
   const contextFiles = useMemo(
     () => (context ? files.filter((file) => context.fileIds.includes(file.file_id)) : []),
@@ -304,10 +468,32 @@ export default function AiChatView({
       setError('请输入要让 AI 执行的指令。');
       return;
     }
-    setMessages((current) => [...current, { role: 'user', content: instruction }]);
+    const userMessage: AiChatMessage = {
+      id: createMessageId(),
+      role: 'user',
+      content: instruction,
+      createdAt: Date.now(),
+    };
     setInput('');
     setIsRunning(true);
     try {
+      let resolvedSessionId = activeSessionId;
+      if (!resolvedSessionId) {
+        const session = await createAiChatSession({
+          title: defaultSessionTitle([userMessage]),
+          context,
+          messages: [userMessage],
+        });
+        skipNextAutoSaveRef.current = true;
+        resolvedSessionId = session.id;
+        setActiveSessionId(session.id);
+        setSessionTitle(session.title);
+        setContext(session.context ?? context);
+        setMessages(session.messages ?? [userMessage]);
+        setSessions((current) => [sessionSummaryFromSession(session), ...current.filter((item) => item.id !== session.id)]);
+      } else {
+        setMessages((current) => [...current, userMessage]);
+      }
       const response = await fetch(`${syncBridgeUrl}/api/ai/context-task`, {
         method: 'POST',
         headers: {
@@ -334,7 +520,16 @@ export default function AiChatView({
         throw new Error(await responseErrorMessage(response));
       }
       const result = parseAiContextTaskResult(await response.json());
-      setMessages((current) => [...current, { role: 'assistant', content: result.answer, result }]);
+      setMessages((current) => [
+        ...current,
+        {
+          id: createMessageId(),
+          role: 'assistant',
+          content: result.answer,
+          createdAt: Date.now(),
+          result,
+        },
+      ]);
       setError(null);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -353,6 +548,53 @@ export default function AiChatView({
         <p className="mt-2 text-[12px] leading-5 text-slate-500">
           从笔记库把文件夹或多个 Markdown 加入上下文，然后在这里持续追问、改写、提炼或生成文档。
         </p>
+        <div className="mt-4 rounded-xl border border-[#0f3460] bg-[#121316] p-3">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <p className="text-[12px] font-bold text-[#e3e2e6]">会话</p>
+          </div>
+          <div className="grid max-h-[22vh] gap-2 overflow-y-auto overflow-x-hidden pr-1">
+            {isSessionLoading && sessions.length === 0 ? (
+              <div className="flex items-center gap-2 rounded border border-[#0f3460] bg-[#16213e] px-3 py-2 text-[12px] text-slate-400">
+                <Loader2 size={13} className="animate-spin text-[#a9c8fc]" />
+                正在加载会话...
+              </div>
+            ) : sessions.length === 0 ? (
+              <p className="rounded border border-[#0f3460] bg-[#16213e] px-3 py-2 text-[12px] text-slate-500">
+                暂无会话
+              </p>
+            ) : sessions.map((session) => (
+              <div
+                key={session.id}
+                className={`grid grid-cols-[minmax(0,1fr)_26px] items-center gap-2 rounded border px-2 py-2 ${
+                  session.id === activeSessionId
+                    ? 'border-[#e94560]/50 bg-[#0f3460]/40'
+                    : 'border-[#0f3460] bg-[#16213e]'
+                }`}
+              >
+                <button
+                  onClick={() => void openSession(session.id)}
+                  className="min-w-0 text-left"
+                  title={session.title}
+                >
+                  <p className="truncate text-[12px] font-semibold text-[#e3e2e6]">{session.title}</p>
+                  <p className="mt-1 truncate font-mono text-[10px] text-slate-500">
+                    {formatSessionTime(session.updatedAt)} · {session.messageCount} 条
+                  </p>
+                </button>
+                <button
+                  onClick={() => setSessionToDelete(session)}
+                  className="flex h-6 w-6 items-center justify-center rounded border border-[#0f3460] text-slate-500 hover:text-[#ffb782]"
+                  title="删除会话"
+                >
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-[10px] text-slate-600">
+            {isSessionSaving ? '正在保存...' : '会话保存在当前工作区 .noteapp/ai-chats'}
+          </p>
+        </div>
         <div className="mt-4 rounded-xl border border-[#0f3460] bg-[#121316] p-3">
           {context ? (
             <>
@@ -417,18 +659,30 @@ export default function AiChatView({
 
       <main className="flex min-h-0 flex-col bg-[#121316]">
         <div className="flex-1 overflow-y-auto p-5 md:p-8">
-          {messages.length === 0 ? (
+          {!activeSessionId && !context ? (
             <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center text-center">
               <div className="rounded-2xl border border-[#0f3460] bg-[#16213e] p-5 text-[#a9c8fc]">
                 <Bot size={36} />
               </div>
-              <h1 className="mt-5 text-2xl font-black text-[#e3e2e6]">基于文档持续交流</h1>
+              <h1 className="mt-5 text-2xl font-black text-[#e3e2e6]">暂无会话</h1>
+              <p className="mt-3 max-w-xl text-[14px] leading-7 text-slate-400">
+                这里不会预先创建空会话。输入第一条问题并发送后，会自动创建新的 AI 会话。
+              </p>
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center text-center">
+              <div className="rounded-2xl border border-[#0f3460] bg-[#16213e] p-5 text-[#a9c8fc]">
+                <Bot size={36} />
+              </div>
+              <h1 className="mt-5 text-2xl font-black text-[#e3e2e6]">
+                {context ? '基于新上下文开始提问' : '基于文档持续交流'}
+              </h1>
             </div>
           ) : (
             <div className="mx-auto grid max-w-4xl gap-5">
-              {messages.map((message, index) => (
+              {messages.map((message) => (
                 <div
-                  key={index}
+                  key={message.id}
                   className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   {message.role === 'assistant' && (
@@ -442,33 +696,10 @@ export default function AiChatView({
                       : 'border-[#0f3460] bg-[#16213e] text-slate-300'
                   }`}
                   >
-                    <pre className="whitespace-pre-wrap font-sans text-[13px] leading-6">{message.content}</pre>
-                    {message.role === 'assistant' && (
-                      <div className="mt-4 border-t border-[#0f3460] pt-3">
-                        <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px]">
-                          <span className="rounded border border-[#0f3460] bg-[#121316] px-2 py-1 font-mono text-[#a9c8fc]">
-                            {message.result.model_status}
-                          </span>
-                          <span className="font-mono text-slate-500">sources {message.result.source_count}</span>
-                          {message.result.truncation.truncated && (
-                            <span className="rounded border border-[#ffb782]/30 bg-[#ffb782]/10 px-2 py-1 text-[#ffb782]">
-                              部分内容已截断
-                            </span>
-                          )}
-                        </div>
-                        <div className="grid gap-2">
-                          {message.result.sources.map((source) => (
-                            <button
-                              key={source.file_id}
-                              onClick={() => void openPreview(source.file_id, source.title, source.path)}
-                              className="rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-left hover:bg-[#1f2b4a]"
-                            >
-                              <p className="truncate text-[12px] font-semibold text-[#e3e2e6]">{source.title}</p>
-                              <p className="mt-1 truncate font-mono text-[10px] text-slate-500">{source.path}</p>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+                    {message.role === 'assistant' ? (
+                      <MarkdownPreview markdown={message.content} />
+                    ) : (
+                      <pre className="whitespace-pre-wrap font-sans text-[13px] leading-6">{message.content}</pre>
                     )}
                   </div>
                   {message.role === 'user' && (
@@ -503,6 +734,7 @@ export default function AiChatView({
           <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row">
             <textarea
               value={input}
+              disabled={isSessionLoading}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey) {
@@ -510,12 +742,14 @@ export default function AiChatView({
                   void sendMessage();
                 }
               }}
-              className="h-20 min-w-0 flex-1 resize-none rounded-xl border border-[#0f3460] bg-[#121316] p-3 text-[13px] leading-5 text-[#e3e2e6] outline-none placeholder:text-slate-600 focus:border-[#a9c8fc]/60"
-              placeholder="请输入问题或指令，例如：写报告、提炼风险、生成行动项、改写为汇报口径..."
+              className="h-20 min-w-0 flex-1 resize-none rounded-xl border border-[#0f3460] bg-[#121316] p-3 text-[13px] leading-5 text-[#e3e2e6] outline-none placeholder:text-slate-600 focus:border-[#a9c8fc]/60 disabled:opacity-60"
+              placeholder={context
+                ? '请输入问题或指令，例如：写报告、提炼风险、生成行动项、改写为汇报口径...'
+                : '请输入问题；如需基于文档回答，请先从笔记库选择文件夹或文档加入 AI 上下文'}
             />
             <button
               onClick={() => void sendMessage()}
-              disabled={isRunning}
+              disabled={isRunning || isSessionLoading || !context}
               className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#0f3460] bg-[#0f3460]/40 text-[13px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50 sm:h-auto sm:w-28 sm:flex-shrink-0"
             >
               <Send size={15} />
@@ -524,6 +758,31 @@ export default function AiChatView({
           </div>
         </div>
       </main>
+      {sessionToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-[#0f3460] bg-[#16213e] p-5 shadow-2xl shadow-black/50">
+            <h3 className="text-lg font-bold text-[#e3e2e6]">删除会话</h3>
+            <p className="mt-3 text-[13px] leading-6 text-slate-400">
+              将删除本地 AI 文档会话：{sessionToDelete.title}
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setSessionToDelete(null)}
+                className="rounded border border-[#0f3460] bg-[#121316] px-4 py-2 text-[13px] text-slate-300 hover:text-white"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void confirmDeleteSession()}
+                disabled={isSessionLoading}
+                className="rounded border border-[#e94560]/40 bg-[#e94560]/20 px-4 py-2 text-[13px] font-semibold text-[#ffb3c0] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {preview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div className="flex h-[min(760px,86vh)] w-[min(920px,94vw)] flex-col overflow-hidden rounded-2xl border border-[#0f3460] bg-[#16213e] shadow-2xl shadow-black/50">
