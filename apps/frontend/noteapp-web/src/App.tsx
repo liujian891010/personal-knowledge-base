@@ -294,7 +294,6 @@ export default function App() {
             >
               {currentView === 'explorer' && (
                 <ExplorerView
-                  setView={setCurrentView}
                   initialSelectedPath={initialExplorerPath}
                   initialContextFileIds={initialExplorerContextFileIds}
                   onInitialSelectedPathConsumed={() => setInitialExplorerPath(null)}

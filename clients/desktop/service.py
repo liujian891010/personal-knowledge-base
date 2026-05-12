@@ -202,6 +202,77 @@ def _load_jsonl_records(path: Path) -> list[dict[str, object]]:
     return records
 
 
+def _normalize_ai_context_text(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _extract_ai_context_search_terms(text: str) -> list[str]:
+    normalized = text.lower()
+    terms: set[str] = set(_AI_CONTEXT_ASCII_TERM_PATTERN.findall(normalized))
+    for token in _AI_CONTEXT_CJK_TERM_PATTERN.findall(text):
+        terms.add(token)
+        if len(token) > 2:
+            for index in range(len(token) - 1):
+                terms.add(token[index : index + 2])
+    return sorted(terms, key=lambda value: (-len(value), value))
+
+
+def _split_ai_context_blocks(text: str) -> list[str]:
+    parts = re.split(r"(?m)(?=^\s{0,3}#{1,6}\s+\S)|\n{2,}", text)
+    blocks = [part.strip() for part in parts if part and part.strip()]
+    return blocks or [text]
+
+
+def _split_ai_context_chunks(text: str, *, max_chars_per_chunk: int) -> list[str]:
+    normalized = _normalize_ai_context_text(text)
+    if not normalized:
+        return []
+    if len(normalized) <= max_chars_per_chunk:
+        return [normalized]
+    overlap_chars = min(_AI_CONTEXT_CHUNK_OVERLAP_CHARS, max(0, max_chars_per_chunk // 5))
+    blocks = _split_ai_context_blocks(normalized)
+    chunks: list[str] = []
+    current = ""
+
+    def append_chunk(chunk_text: str) -> None:
+        trimmed = chunk_text.strip()
+        if trimmed:
+            chunks.append(trimmed)
+
+    for block in blocks:
+        candidate = block if not current else current + "\n\n" + block
+        if len(candidate) <= max_chars_per_chunk:
+            current = candidate
+            continue
+        if current:
+            append_chunk(current)
+            current = ""
+        pending = block
+        while len(pending) > max_chars_per_chunk:
+            append_chunk(pending[:max_chars_per_chunk])
+            remainder = pending[max_chars_per_chunk:].lstrip()
+            if not remainder:
+                pending = ""
+                break
+            if overlap_chars > 0:
+                overlap_text = pending[max(0, max_chars_per_chunk - overlap_chars) : max_chars_per_chunk].strip()
+                pending = overlap_text + "\n\n" + remainder if overlap_text else remainder
+            else:
+                pending = remainder
+        current = pending
+    append_chunk(current)
+    return chunks or [normalized[:max_chars_per_chunk].strip()]
+
+
+def _ai_context_heading_text(text: str) -> str:
+    headings = [
+        line.lstrip().lstrip("#").strip()
+        for line in text.splitlines()
+        if _AI_CONTEXT_HEADING_PATTERN.match(line)
+    ]
+    return "\n".join(headings)
+
+
 def _resolve_sync_activity_limit(argv: list[str]) -> int:
     for index, item in enumerate(argv):
         if item != "--limit" or index + 1 >= len(argv):
@@ -260,10 +331,14 @@ _WORKSPACE_FILE_BLOB_MAX_BYTES = 10_000_000
 _AI_CONTEXT_DEFAULT_MAX_FILES = 20
 _AI_CONTEXT_DEFAULT_MAX_CHARS_PER_FILE = 4000
 _AI_CONTEXT_DEFAULT_MAX_TOTAL_CHARS = 30000
+_AI_CONTEXT_CHUNK_OVERLAP_CHARS = 240
 _WORKSPACE_TRASH_DIRNAME = "trash"
 _WORKSPACE_TRASH_PURGED_META_KEY = "trash_purged_at"
 _WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]\n]+)\]\]")
 _MARKDOWN_FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---", re.DOTALL)
+_AI_CONTEXT_HEADING_PATTERN = re.compile(r"^\s{0,3}#{1,6}\s+\S", re.MULTILINE)
+_AI_CONTEXT_ASCII_TERM_PATTERN = re.compile(r"[a-z0-9_]{2,}")
+_AI_CONTEXT_CJK_TERM_PATTERN = re.compile(r"[\u4e00-\u9fff]{2,}")
 _AI_PROVIDER_DEFAULT_BASE_URL = "https://api.openai.com/v1"
 _AI_PROVIDER_DEFAULT_API = "openai-completions"
 _AI_PROVIDER_DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -1209,6 +1284,18 @@ class DesktopAiContextTaskResult:
 
 
 @dataclass(frozen=True)
+class _DesktopAiContextChunk:
+    file_id: str
+    path: str
+    title: str
+    file_order: int
+    chunk_index: int
+    chunk_count: int
+    text: str
+    original_chars: int
+
+
+@dataclass(frozen=True)
 class DesktopAiProviderHealthResult:
     schema_version: str
     vault_id: str
@@ -1994,17 +2081,19 @@ class DesktopSyncService:
             recursive=recursive,
             max_files=limits["max_files"],
         )
-        sources, skipped_count, included_chars = self._load_ai_context_sources(
+        sources, skipped_count, included_chars, selection_truncated = self._load_ai_context_sources(
             source_records,
+            instruction=normalized_instruction,
             max_chars_per_file=limits["max_chars_per_file"],
             max_total_chars=limits["max_total_chars"],
         )
-        truncated = skipped_count > 0 or any(source.truncated for source in sources)
+        included_file_count = len({source.file_id for source in sources})
+        truncated = skipped_count > 0 or selection_truncated
         truncation = DesktopAiContextTaskTruncation(
             max_files=limits["max_files"],
             max_chars_per_file=limits["max_chars_per_file"],
             max_total_chars=limits["max_total_chars"],
-            included_file_count=len(sources),
+            included_file_count=included_file_count,
             skipped_file_count=skipped_count,
             included_chars=included_chars,
             truncated=truncated,
@@ -2121,43 +2210,117 @@ class DesktopSyncService:
         self,
         records: list[FileRecord],
         *,
+        instruction: str,
         max_chars_per_file: int,
         max_total_chars: int,
-    ) -> tuple[list[DesktopAiContextTaskSource], int, int]:
-        sources: list[DesktopAiContextTaskSource] = []
-        included_chars = 0
-        skipped_count = 0
-        for record in records:
-            if included_chars >= max_total_chars:
-                skipped_count += 1
-                continue
+    ) -> tuple[list[DesktopAiContextTaskSource], int, int, bool]:
+        chunks: list[_DesktopAiContextChunk] = []
+        available_chunk_counts: dict[str, int] = {}
+        for file_order, record in enumerate(records):
             content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
             if not content_path.exists() or not content_path.is_file():
-                skipped_count += 1
                 continue
             payload = content_path.read_bytes()
             if len(payload) > _WORKSPACE_FILE_CONTENT_MAX_BYTES:
-                skipped_count += 1
                 continue
             text, _ = _decode_workspace_text(payload, file_id=record.file_id)
+            normalized_text = _normalize_ai_context_text(text)
+            if not normalized_text:
+                continue
+            chunk_texts = _split_ai_context_chunks(normalized_text, max_chars_per_chunk=max_chars_per_file)
+            title = _note_title_from_path(record.path)
+            original_chars = len(normalized_text)
+            available_chunk_counts[record.file_id] = len(chunk_texts)
+            for chunk_index, chunk_text in enumerate(chunk_texts):
+                chunks.append(
+                    _DesktopAiContextChunk(
+                        file_id=record.file_id,
+                        path=record.path,
+                        title=title,
+                        file_order=file_order,
+                        chunk_index=chunk_index,
+                        chunk_count=len(chunk_texts),
+                        text=chunk_text,
+                        original_chars=original_chars,
+                    )
+                )
+        instruction_terms = _extract_ai_context_search_terms(instruction)
+        ranked_chunks = sorted(
+            chunks,
+            key=lambda chunk: self._ai_context_chunk_sort_key(chunk, instruction_terms=instruction_terms),
+        )
+        sources: list[DesktopAiContextTaskSource] = []
+        included_chars = 0
+        included_file_ids: set[str] = set()
+        selected_chunk_counts: dict[str, int] = {}
+        selection_truncated = False
+        for chunk in ranked_chunks:
+            if included_chars >= max_total_chars:
+                break
             remaining_chars = max_total_chars - included_chars
-            limit = min(max_chars_per_file, remaining_chars)
-            excerpt = text[:limit]
-            original_chars = len(text)
-            truncated = original_chars > len(excerpt)
+            excerpt = chunk.text[:remaining_chars]
+            if not excerpt.strip():
+                continue
+            if len(excerpt) < len(chunk.text):
+                selection_truncated = True
             included_chars += len(excerpt)
+            included_file_ids.add(chunk.file_id)
+            selected_chunk_counts[chunk.file_id] = selected_chunk_counts.get(chunk.file_id, 0) + 1
+            title = chunk.title
+            if chunk.chunk_count > 1:
+                title = f"{title} [part {chunk.chunk_index + 1}/{chunk.chunk_count}]"
             sources.append(
                 DesktopAiContextTaskSource(
-                    file_id=record.file_id,
-                    path=record.path,
-                    title=_note_title_from_path(record.path),
+                    file_id=chunk.file_id,
+                    path=chunk.path,
+                    title=title,
                     excerpt=excerpt,
                     included_chars=len(excerpt),
-                    original_chars=original_chars,
-                    truncated=truncated,
+                    original_chars=chunk.original_chars,
+                    truncated=len(excerpt) < len(chunk.text),
                 )
             )
-        return sources, skipped_count, included_chars
+        skipped_count = max(0, len(records) - len(included_file_ids))
+        selection_truncated = selection_truncated or any(
+            selected_chunk_counts.get(file_id, 0) < available_chunk_counts.get(file_id, 0)
+            for file_id in included_file_ids
+        )
+        return sources, skipped_count, included_chars, selection_truncated
+
+    def _ai_context_chunk_sort_key(
+        self,
+        chunk: _DesktopAiContextChunk,
+        *,
+        instruction_terms: list[str],
+    ) -> tuple[int, int, int, int, str]:
+        body_text = chunk.text
+        body_text_lower = body_text.lower()
+        title_text = chunk.title
+        title_text_lower = title_text.lower()
+        heading_text = _ai_context_heading_text(body_text)
+        heading_text_lower = heading_text.lower()
+        score = 0
+        hits = 0
+        for term in instruction_terms:
+            haystack = body_text_lower if term.isascii() else body_text
+            title_haystack = title_text_lower if term.isascii() else title_text
+            heading_haystack = heading_text_lower if term.isascii() else heading_text
+            match_count = haystack.count(term)
+            if match_count <= 0:
+                if term in title_haystack:
+                    score += max(4, len(term))
+                    hits += 1
+                continue
+            hits += 1
+            term_weight = min(len(term), 8)
+            score += term_weight * min(match_count, 3)
+            if term in title_haystack:
+                score += max(4, term_weight)
+            if term in heading_haystack:
+                score += max(4, term_weight)
+        if chunk.chunk_index == 0:
+            score += 1
+        return (-score, -hits, chunk.chunk_index, chunk.file_order, chunk.path)
 
     @staticmethod
     def _local_ai_context_fallback_answer(
