@@ -29,6 +29,7 @@ type SettingsTab = 'general' | 'sync' | 'appearance' | 'ai';
 
 type SettingsViewProps = {
   initialTab?: SettingsTab;
+  onWorkspaceChanged?: () => void;
 };
 
 type AiProviderHealthResult = {
@@ -296,7 +297,7 @@ function SettingsDetailRow({
   );
 }
 
-export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps) {
+export default function SettingsView({ initialTab = 'sync', onWorkspaceChanged }: SettingsViewProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(
     visibleTabs.some((tab) => tab.id === initialTab) ? initialTab : 'general',
   );
@@ -414,6 +415,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
   const saveWorkspaceFolder = async () => {
     await selectWorkspaceRoot();
     await Promise.all([refreshSync(), refreshSettings()]);
+    onWorkspaceChanged?.();
   };
   const savedAtLabel = savedAtMs ? `已保存 ${formatActivityTime(savedAtMs)}` : null;
   const localChangesCard = syncCards.find((card) => card.card_id === 'local-changes') ?? null;

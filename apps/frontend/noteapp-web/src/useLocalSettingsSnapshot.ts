@@ -19,6 +19,11 @@ type LocalSettingsSnapshotSource = 'loading' | 'bridge' | 'live-fixture' | 'exam
 let cachedSnapshot: LocalSettingsSnapshot | null = null;
 let cachedSource: LocalSettingsSnapshotSource | null = null;
 
+export function invalidateLocalSettingsCache(): void {
+  cachedSnapshot = null;
+  cachedSource = null;
+}
+
 interface SettingsSnapshotLoadResult {
   snapshot: LocalSettingsSnapshot;
   source: LocalSettingsSnapshotSource;
