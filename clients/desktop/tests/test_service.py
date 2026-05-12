@@ -1170,6 +1170,78 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(health.status, "error")
             self.assertIn("unexpected status", health.message)
 
+    def test_ai_context_task_uses_folder_markdown_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ai_opener = RecordingAiOpener(answer="Folder answer [1].")
+            service, _, _, _, _ = self._seed_workspace(root)
+            service = replace(service, ai_opener=ai_opener)
+            second_path = root / "Notes" / "Specs" / "Plan.md"
+            second_path.parent.mkdir(parents=True, exist_ok=True)
+            second_path.write_text("# Plan\n\nFolder context content.\n", encoding="utf-8")
+            document = load_filemap(service.workspace.paths.filemap_path)
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                replace(
+                    document,
+                    files=[
+                        *document.files,
+                        FileRecord(
+                            file_id="file-plan",
+                            path="Notes/Specs/Plan.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000040000,
+                            content_hash="sha256:plan",
+                        ),
+                    ],
+                ),
+            )
+            service.write_local_settings(
+                {
+                    "appearance": {"theme": "dark"},
+                    "ai": {
+                        "provider_api": "openai-completions",
+                        "base_url": "https://llm.example.com/v1",
+                        "model_id": "test-model",
+                        "api_key": "settings-key",
+                    },
+                }
+            )
+
+            result = service.run_ai_context_task(
+                context_type="folder",
+                folder_path="Notes/Specs",
+                instruction="Summarize these docs",
+            )
+
+            self.assertEqual(result.answer, "Folder answer [1].")
+            self.assertEqual(result.source_count, 1)
+            self.assertEqual(result.sources[0].path, "Notes/Specs/Plan.md")
+            self.assertEqual(result.model_status, "openai-completions:test-model")
+            self.assertIn("Folder context content", ai_opener.calls[0][2]["messages"][1]["content"])
+
+    def test_ai_context_task_selected_files_respects_configurable_truncation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            (root / "Notes" / "Live.md").write_text("# Live note\n\nabcdef", encoding="utf-8")
+
+            result = service.run_ai_context_task(
+                context_type="selected_files",
+                file_ids=["file-live"],
+                instruction="Use this context",
+                max_chars_per_file=8,
+                max_total_chars=8,
+            )
+
+            self.assertEqual(result.model_status, "not_configured_context_preview")
+            self.assertEqual(result.source_count, 1)
+            self.assertEqual(result.sources[0].excerpt, "# Live n")
+            self.assertTrue(result.sources[0].truncated)
+            self.assertTrue(result.truncation.truncated)
+            self.assertIn("local context preview", result.answer)
+
     def test_load_workspace_note_links_resolves_outgoing_and_backlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

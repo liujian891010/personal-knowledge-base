@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Bot,
   ChevronDown,
   ChevronRight,
   Columns2,
@@ -25,6 +26,7 @@ import { useWorkspaceFilesController } from '../useWorkspaceFiles';
 import { useWorkspaceFileContentController } from '../useWorkspaceFileContent';
 import { useWorkspaceLinksController } from '../useWorkspaceLinks';
 import { useWorkspaceSearchController } from '../useWorkspaceSearch';
+import type { AiContextDraft } from '../aiContext';
 import type { WorkspaceFileEntry } from '../workspaceFiles';
 import type { WorkspaceNoteLink } from '../workspaceLinks';
 
@@ -48,6 +50,14 @@ function folderPathForFile(path: string): string {
   return parts.slice(0, -1).join('/');
 }
 
+function fileBelongsToFolder(path: string, folderPath: string): boolean {
+  const fileFolder = folderPathForFile(path);
+  if (!folderPath) {
+    return true;
+  }
+  return fileFolder === folderPath || fileFolder.startsWith(`${folderPath}/`);
+}
+
 function isSystemAiPath(path: string): boolean {
   return path === '.ai' || path.startsWith('.ai/');
 }
@@ -57,6 +67,10 @@ function isEditableWorkspaceFile(file: WorkspaceFileEntry | null): boolean {
     return false;
   }
   return ['note', 'ai_index', 'ai_wiki', 'ai_agents'].includes(file.type);
+}
+
+function isAiContextEligibleFile(file: WorkspaceFileEntry): boolean {
+  return file.type === 'note' && file.status === 'active' && file.exists_on_disk && !isSystemAiPath(file.path);
 }
 
 function isImagePath(path: string): boolean {
@@ -135,7 +149,6 @@ type FileDialogState =
   | { kind: 'create'; path: string }
   | { kind: 'rename'; path: string }
   | { kind: 'delete'; path: string };
-
 function isRowVisible(row: ExplorerRow, collapsedFolders: Set<string>): boolean {
   if (row.kind === 'folder') {
     if (row.path === '') {
@@ -566,11 +579,17 @@ function statusClasses(file: WorkspaceFileEntry): string {
 export default function ExplorerView({
   setView,
   initialSelectedPath,
+  initialContextFileIds,
   onInitialSelectedPathConsumed,
+  onInitialContextFileIdsConsumed,
+  onOpenAiContext,
 }: {
   setView: (v: string) => void;
   initialSelectedPath?: string | null;
+  initialContextFileIds?: string[] | null;
   onInitialSelectedPathConsumed?: () => void;
+  onInitialContextFileIdsConsumed?: () => void;
+  onOpenAiContext: (context: AiContextDraft) => void;
 }) {
   const {
     summary,
@@ -666,6 +685,7 @@ export default function ExplorerView({
   const [fileMutationError, setFileMutationError] = useState<string | null>(null);
   const [fileDialog, setFileDialog] = useState<FileDialogState | null>(null);
   const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState<string | null>(null);
+  const [selectedContextFileIds, setSelectedContextFileIds] = useState<Set<string>>(() => new Set());
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const wikiLinkByText = useMemo(() => {
     const result = new Map<string, WorkspaceNoteLink>();
@@ -678,6 +698,56 @@ export default function ExplorerView({
   const openWorkspaceFile = useCallback((fileId: string) => {
     setSelectedFileId(fileId);
   }, []);
+
+  useEffect(() => {
+    if (!initialContextFileIds) {
+      return;
+    }
+    setSelectedContextFileIds(new Set(initialContextFileIds));
+    onInitialContextFileIdsConsumed?.();
+  }, [initialContextFileIds, onInitialContextFileIdsConsumed]);
+
+  const selectedContextFiles = useMemo(
+    () => visibleFiles.filter((file) => selectedContextFileIds.has(file.file_id) && isAiContextEligibleFile(file)),
+    [selectedContextFileIds, visibleFiles],
+  );
+
+  function toggleContextFile(fileId: string) {
+    setSelectedContextFileIds((current) => {
+      const next = new Set(current);
+      if (next.has(fileId)) {
+        next.delete(fileId);
+      } else {
+        next.add(fileId);
+      }
+      return next;
+    });
+  }
+
+  function openAiContextForFolder(folderPath: string) {
+    const folderFiles = visibleFiles.filter((file) => (
+      isAiContextEligibleFile(file)
+      && fileBelongsToFolder(file.path, folderPath)
+    ));
+    onOpenAiContext({
+      type: 'folder',
+      title: folderPath ? `文件夹：${folderPath}` : `工作区：${rootName}`,
+      folderPath,
+      fileIds: folderFiles.map((file) => file.file_id),
+    });
+  }
+
+  function openAiContextForSelectedFiles() {
+    if (selectedContextFiles.length === 0) {
+      return;
+    }
+    onOpenAiContext({
+      type: 'selected_files',
+      title: `已选择 ${selectedContextFiles.length} 个文档`,
+      fileIds: selectedContextFiles.map((file) => file.file_id),
+    });
+    setSelectedContextFileIds(new Set());
+  }
 
   useEffect(() => {
     setCollapsedFolders(readCollapsedFolders(folderStorageKey));
@@ -1002,6 +1072,17 @@ export default function ExplorerView({
             </button>
           </div>
         </div>
+        {selectedContextFiles.length > 0 && (
+          <div className="border-b border-[#0f3460] bg-[#0f3460]/20 px-3 py-2">
+            <button
+              onClick={openAiContextForSelectedFiles}
+              className="flex w-full items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[12px] font-semibold text-[#a9c8fc] transition-colors hover:text-white"
+            >
+              <Bot size={14} />
+              已选 {selectedContextFiles.length} 个文档，打开 AI 文档
+            </button>
+          </div>
+        )}
         <div className="border-b border-[#0f3460] bg-[#121316]/50 p-3">
           <label className="flex items-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-slate-400 focus-within:border-[#a9c8fc]">
             <Search size={14} />
@@ -1044,28 +1125,38 @@ export default function ExplorerView({
           ) : (
             visibleExplorerRows.map((row) => (
               row.kind === 'folder' ? (
-                <button
+                <div
                   key={row.id}
-                  type="button"
-                  onClick={() => toggleFolder(row.path)}
-                  className="flex w-full items-center gap-2 py-2 pr-4 text-left text-slate-300 transition-colors hover:bg-[#1f2b4a] hover:text-slate-100"
+                  className="flex w-full items-center gap-2 py-1.5 pr-2 text-left text-slate-300 transition-colors hover:bg-[#1f2b4a] hover:text-slate-100"
                   style={{ paddingLeft: `${16 + row.depth * 14}px` }}
-                  title={`${collapsedFolders.has(row.path) ? '展开目录' : '折叠目录'}：${row.path || summary.vaultRoot || rootName}`}
                 >
-                  {collapsedFolders.has(row.path) ? (
-                    <ChevronRight size={14} className="text-slate-500" />
-                  ) : (
-                    <ChevronDown size={14} className="text-slate-500" />
-                  )}
-                  <Folder size={16} className="text-[#a9c8fc]" />
-                  <span className="text-[13px] font-semibold flex-1 font-sans truncate">{row.name}</span>
-                  <span className="font-mono text-[10px] text-slate-500" title={`${row.count} 篇文档`}>{row.count}</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleFolder(row.path)}
+                    className="flex min-w-0 flex-1 items-center gap-2 py-0.5 text-left"
+                    title={`${collapsedFolders.has(row.path) ? '展开目录' : '折叠目录'}：${row.path || summary.vaultRoot || rootName}`}
+                  >
+                    {collapsedFolders.has(row.path) ? (
+                      <ChevronRight size={14} className="text-slate-500" />
+                    ) : (
+                      <ChevronDown size={14} className="text-slate-500" />
+                    )}
+                    <Folder size={16} className="text-[#a9c8fc]" />
+                    <span className="text-[13px] font-semibold flex-1 font-sans truncate">{row.name}</span>
+                    <span className="font-mono text-[10px] text-slate-500" title={`${row.count} 篇文档`}>{row.count}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openAiContextForFolder(row.path)}
+                    className="rounded border border-[#0f3460] bg-[#121316] px-2 py-1 text-[10px] font-semibold text-[#a9c8fc] hover:text-white"
+                    title="将此文件夹下的 Markdown 加入 AI 上下文"
+                  >
+                    AI
+                  </button>
+                </div>
               ) : (
-                <button
+                <div
                   key={row.id}
-                  onClick={() => openWorkspaceFile(row.file.file_id)}
-                  title={row.file.path}
                   style={{ paddingLeft: `${24 + row.depth * 14}px` }}
                   className={`flex w-full items-center gap-2 py-2 pr-4 text-[13px] font-sans truncate text-left transition-colors ${
                     selectedFileId === row.file.file_id
@@ -1073,16 +1164,36 @@ export default function ExplorerView({
                       : 'text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a]'
                   }`}
                 >
-                  {isEditableWorkspaceFile(row.file) ? (
-                    <MarkdownFileIcon size={14} tone={row.file.exists_on_disk ? 'normal' : 'danger'} />
-                  ) : (
-                    <File
-                      size={14}
-                      className={`flex-shrink-0 ${row.file.exists_on_disk ? 'text-slate-400' : 'text-[#e94560]'}`}
-                    />
+                  {isAiContextEligibleFile(row.file) && (
+                    <button
+                      type="button"
+                      onClick={() => toggleContextFile(row.file.file_id)}
+                      className={`h-4 w-4 flex-shrink-0 rounded border text-[10px] leading-3 ${
+                        selectedContextFileIds.has(row.file.file_id)
+                          ? 'border-[#a9c8fc] bg-[#0f3460] text-white'
+                          : 'border-[#0f3460] bg-[#121316] text-transparent'
+                      }`}
+                      title="选择此文档加入 AI 上下文"
+                    >
+                      ✓
+                    </button>
                   )}
-                  <span className="truncate">{fileName(row.file.path)}</span>
-                </button>
+                  <button
+                    onClick={() => openWorkspaceFile(row.file.file_id)}
+                    title={row.file.path}
+                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  >
+                    {isEditableWorkspaceFile(row.file) ? (
+                      <MarkdownFileIcon size={14} tone={row.file.exists_on_disk ? 'normal' : 'danger'} />
+                    ) : (
+                      <File
+                        size={14}
+                        className={`flex-shrink-0 ${row.file.exists_on_disk ? 'text-slate-400' : 'text-[#e94560]'}`}
+                      />
+                    )}
+                    <span className="truncate">{fileName(row.file.path)}</span>
+                  </button>
+                </div>
               )
             ))
           )}
