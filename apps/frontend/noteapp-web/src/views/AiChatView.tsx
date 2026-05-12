@@ -423,9 +423,6 @@ export default function AiChatView({
                 <Bot size={36} />
               </div>
               <h1 className="mt-5 text-2xl font-black text-[#e3e2e6]">基于文档持续交流</h1>
-              <p className="mt-3 max-w-xl text-[13px] leading-6 text-slate-400">
-                上下文会持续保留在本页。你可以先问“总结一下”，再继续追问“改成汇报口径”“列出风险”“生成行动项”。
-              </p>
             </div>
           ) : (
             <div className="mx-auto grid max-w-4xl gap-5">
@@ -499,11 +496,11 @@ export default function AiChatView({
         </div>
         <div className="border-t border-[#0f3460] bg-[#16213e] p-4">
           {error && (
-            <div className="mx-auto mb-3 max-w-4xl rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782]">
+            <div className="mb-3 w-full rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782]">
               {error}
             </div>
           )}
-          <div className="mx-auto flex max-w-4xl gap-3">
+          <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row">
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
@@ -519,7 +516,7 @@ export default function AiChatView({
             <button
               onClick={() => void sendMessage()}
               disabled={isRunning}
-              className="inline-flex w-28 items-center justify-center gap-2 rounded-xl border border-[#0f3460] bg-[#0f3460]/40 text-[13px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#0f3460] bg-[#0f3460]/40 text-[13px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50 sm:h-auto sm:w-28 sm:flex-shrink-0"
             >
               <Send size={15} />
               {isRunning ? '生成中' : '发送'}
