@@ -1073,6 +1073,7 @@ class DesktopLocalAiSettings:
     base_url: str
     model_id: str
     api_key_configured: bool
+    api_key: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -3070,6 +3071,7 @@ class DesktopSyncService:
         base_url = ai_payload.get("base_url")
         model_id = ai_payload.get("model_id")
         api_key = ai_payload.get("api_key")
+        normalized_api_key = api_key.strip() if isinstance(api_key, str) and api_key.strip() else None
 
         return DesktopLocalSettingsSnapshot(
             schema_version="v1",
@@ -3106,7 +3108,8 @@ class DesktopSyncService:
                 ),
                 base_url=base_url if isinstance(base_url, str) and base_url else _LOCAL_SETTINGS_DEFAULT_AI_BASE_URL,
                 model_id=model_id if isinstance(model_id, str) and model_id else _LOCAL_SETTINGS_DEFAULT_AI_MODEL_ID,
-                api_key_configured=isinstance(api_key, str) and bool(api_key.strip()),
+                api_key_configured=normalized_api_key is not None,
+                api_key=normalized_api_key,
             ),
         )
 
