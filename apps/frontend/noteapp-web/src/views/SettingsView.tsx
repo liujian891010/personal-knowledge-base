@@ -52,6 +52,7 @@ const tabs: Array<{ id: SettingsTab; label: string; icon: React.ComponentType<{ 
   { id: 'appearance', label: '外观', icon: Palette },
   { id: 'ai', label: 'AI 模型', icon: Bot },
 ];
+const visibleTabs = tabs.filter((tab) => tab.id === 'general' || tab.id === 'ai');
 
 const actionButtonClasses: Record<SyncShellActionEmphasis, string> = {
   normal: 'bg-[#121316] border-[#0f3460] text-slate-300 hover:text-white',
@@ -296,7 +297,9 @@ function SettingsDetailRow({
 }
 
 export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  const [activeTab, setActiveTab] = useState<SettingsTab>(
+    visibleTabs.some((tab) => tab.id === initialTab) ? initialTab : 'general',
+  );
   const {
     summary: syncSummary,
     cards: syncCards,
@@ -444,7 +447,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
           <aside className="w-full md:w-64 flex-shrink-0">
             <h1 className="text-3xl font-bold text-[#e3e2e6] mb-8">设置</h1>
             <nav className="flex flex-col gap-2">
-              {tabs.map((tab) => (
+              {visibleTabs.map((tab) => (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
