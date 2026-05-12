@@ -494,6 +494,64 @@ class FakeService:
             "message": "AI provider responded successfully.",
         }
 
+    def run_ai_context_task(
+        self,
+        *,
+        context_type,
+        instruction,
+        file_ids=None,
+        folder_path=None,
+        recursive=True,
+        max_files=None,
+        max_chars_per_file=None,
+        max_total_chars=None,
+    ):
+        self.calls.append(
+            (
+                "ai-context-task",
+                context_type,
+                instruction,
+                list(file_ids or []),
+                folder_path,
+                recursive,
+                max_files,
+                max_chars_per_file,
+                max_total_chars,
+            )
+        )
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "context_type": context_type,
+            "instruction": instruction,
+            "answer": "Context answer [1].",
+            "source_count": 1,
+            "sources": [
+                {
+                    "file_id": "file-a",
+                    "path": "Notes/A.md",
+                    "title": "A",
+                    "excerpt": "Source text",
+                    "included_chars": 11,
+                    "original_chars": 11,
+                    "truncated": False,
+                }
+            ],
+            "model_status": "openai-completions:test-model",
+            "truncation": {
+                "max_files": 20,
+                "max_chars_per_file": 4000,
+                "max_total_chars": 30000,
+                "included_file_count": 1,
+                "skipped_file_count": 0,
+                "included_chars": 11,
+                "truncated": False,
+                "note": "temporary",
+            },
+        }
+
     def load_workspace_file_draft(self, file_id):
         self.calls.append(("workspace-file-draft", file_id))
         return {
@@ -1677,6 +1735,59 @@ class DesktopCliTests(unittest.TestCase):
         self.assertTrue(payload["configured"])
         self.assertEqual(payload["status"], "available")
         self.assertEqual(self.service.calls, [("ai-provider-health", None)])
+
+    def test_ai_context_task_command_routes_to_service(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "request.json"
+            input_path.write_text(
+                json.dumps(
+                    {
+                        "context": {
+                            "type": "selected_files",
+                            "file_ids": ["file-a"],
+                        },
+                        "instruction": "Write a report",
+                        "output": {"mode": "preview"},
+                        "max_files": 5,
+                        "max_chars_per_file": 1200,
+                        "max_total_chars": 2400,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "ai-context-task",
+                "--input-json",
+                str(input_path),
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["answer"], "Context answer [1].")
+        self.assertEqual(
+            self.service.calls,
+            [
+                (
+                    "ai-context-task",
+                    "selected_files",
+                    "Write a report",
+                    ["file-a"],
+                    None,
+                    True,
+                    5,
+                    1200,
+                    2400,
+                )
+            ],
+        )
 
     def test_workspace_file_draft_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(

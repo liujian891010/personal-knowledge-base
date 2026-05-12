@@ -251,6 +251,8 @@ def create_parser() -> argparse.ArgumentParser:
     ask_ai_wiki_parser.add_argument("--question", required=True)
     ask_ai_wiki_parser.add_argument("--limit", type=int, default=5)
     subparsers.add_parser("ai-provider-health")
+    ai_context_task_parser = subparsers.add_parser("ai-context-task")
+    ai_context_task_parser.add_argument("--input-json", required=True)
     subparsers.add_parser("local-settings-snapshot")
     write_settings_parser = subparsers.add_parser("write-local-settings")
     write_settings_parser.add_argument("--input-json", required=True)
@@ -524,6 +526,28 @@ def run_cli(
         result = service.answer_ai_wiki(args.question, limit=args.limit)
     elif args.command == "ai-provider-health":
         result = service.check_ai_provider_health()
+    elif args.command == "ai-context-task":
+        payload = _load_json_object(Path(args.input_json))
+        context = payload.get("context")
+        if not isinstance(context, dict):
+            raise ValueError("AI context task request must include context")
+        output = payload.get("output")
+        if output is not None and not isinstance(output, dict):
+            raise ValueError("AI context task output must be an object")
+        if isinstance(output, dict) and output.get("mode") not in (None, "preview"):
+            raise ValueError("AI context task currently supports preview output only")
+        result = service.run_ai_context_task(
+            context_type=str(context.get("type", "")),
+            instruction=str(payload.get("instruction", "")),
+            file_ids=context.get("file_ids") if isinstance(context.get("file_ids"), list) else None,
+            folder_path=context.get("folder_path") if isinstance(context.get("folder_path"), str) else None,
+            recursive=bool(context.get("recursive", True)),
+            max_files=payload.get("max_files") if isinstance(payload.get("max_files"), int) else None,
+            max_chars_per_file=(
+                payload.get("max_chars_per_file") if isinstance(payload.get("max_chars_per_file"), int) else None
+            ),
+            max_total_chars=payload.get("max_total_chars") if isinstance(payload.get("max_total_chars"), int) else None,
+        )
     elif args.command == "local-settings-snapshot":
         result = service.load_local_settings_snapshot()
     elif args.command == "write-local-settings":

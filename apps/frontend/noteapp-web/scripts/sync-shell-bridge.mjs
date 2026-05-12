@@ -83,6 +83,8 @@ It forwards to:
                                   Open a native folder picker and switch selected workspace root
   POST /api/ai/wiki/compile      Compile deterministic local AI Wiki pages
   POST /api/ai/ask               Answer from local AI Wiki citations
+  POST /api/ai/context-task      Run an AI task with selected workspace context
+  POST /api/ai/provider/health   Test configured AI provider
   GET  /health                   Health check
 `);
 }
@@ -776,6 +778,21 @@ const server = createServer(async (request, response) => {
       const limit = Number.isFinite(Number(payload.limit)) ? String(Number(payload.limit)) : '5';
       const stdout = runDesktopCli(['ask-ai-wiki', '--question', payload.question, '--limit', limit]);
       jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    if (request.method === 'POST' && routePathname === '/api/ai/context-task') {
+      const rawBody = await readRequestBody(request);
+      const payload = JSON.parse(rawBody);
+      const tempRoot = mkdtempSync(resolve(tmpdir(), 'noteapp-ai-context-'));
+      const inputPath = resolve(tempRoot, 'request.json');
+      try {
+        writeFileSync(inputPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+        const stdout = runDesktopCli(['ai-context-task', '--input-json', inputPath]);
+        jsonResponse(request, response, 200, JSON.parse(stdout));
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
+      }
       return;
     }
 

@@ -102,6 +102,35 @@ def _resolve_workspace_file_path(vault_root: Path, relative_path: str) -> Path:
     return vault_root / path
 
 
+def _is_hidden_workspace_context_path(relative_path: str) -> bool:
+    normalized = relative_path.replace("\\", "/").strip("/")
+    return (
+        normalized == ".ai"
+        or normalized.startswith(".ai/")
+        or normalized == ".noteapp"
+        or normalized.startswith(".noteapp/")
+    )
+
+
+def _normalize_ai_context_folder_path(folder_path: str) -> str:
+    normalized = folder_path.replace("\\", "/").strip("/")
+    if normalized in (".", "/"):
+        return ""
+    path = PurePosixPath(normalized)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"AI context folder path is not safe: {folder_path!r}")
+    return "/".join(path.parts)
+
+
+def _record_belongs_to_ai_context_folder(record_path: str, folder_path: str, *, recursive: bool) -> bool:
+    record_folder = "/".join(PurePosixPath(record_path.replace("\\", "/")).parts[:-1])
+    if not folder_path:
+        return recursive or record_folder == ""
+    if recursive:
+        return record_folder == folder_path or record_folder.startswith(folder_path.rstrip("/") + "/")
+    return record_folder == folder_path
+
+
 def _write_bytes_atomic(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(path.name + ".tmp")
@@ -228,6 +257,9 @@ _LOCAL_SETTINGS_DEFAULT_AI_BASE_URL = "https://sg-al-cwork-web.mediportal.com.cn
 _LOCAL_SETTINGS_DEFAULT_AI_MODEL_ID = "MiniMax-M2.7-highspeed_codingplan"
 _WORKSPACE_FILE_CONTENT_MAX_BYTES = 1_000_000
 _WORKSPACE_FILE_BLOB_MAX_BYTES = 10_000_000
+_AI_CONTEXT_DEFAULT_MAX_FILES = 20
+_AI_CONTEXT_DEFAULT_MAX_CHARS_PER_FILE = 4000
+_AI_CONTEXT_DEFAULT_MAX_TOTAL_CHARS = 30000
 _WORKSPACE_TRASH_DIRNAME = "trash"
 _WORKSPACE_TRASH_PURGED_META_KEY = "trash_purged_at"
 _WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]\n]+)\]\]")
@@ -1138,6 +1170,44 @@ class DesktopAiWikiAnswerResult:
 
 
 @dataclass(frozen=True)
+class DesktopAiContextTaskSource:
+    file_id: str
+    path: str
+    title: str
+    excerpt: str
+    included_chars: int
+    original_chars: int
+    truncated: bool
+
+
+@dataclass(frozen=True)
+class DesktopAiContextTaskTruncation:
+    max_files: int
+    max_chars_per_file: int
+    max_total_chars: int
+    included_file_count: int
+    skipped_file_count: int
+    included_chars: int
+    truncated: bool
+    note: str
+
+
+@dataclass(frozen=True)
+class DesktopAiContextTaskResult:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    context_type: str
+    instruction: str
+    answer: str
+    source_count: int
+    sources: list[DesktopAiContextTaskSource]
+    model_status: str
+    truncation: DesktopAiContextTaskTruncation
+
+
+@dataclass(frozen=True)
 class DesktopAiProviderHealthResult:
     schema_version: str
     vault_id: str
@@ -1895,6 +1965,220 @@ class DesktopSyncService:
             ],
             model_status=model_status,
         )
+
+    def run_ai_context_task(
+        self,
+        *,
+        context_type: str,
+        instruction: str,
+        file_ids: Optional[Iterable[str]] = None,
+        folder_path: Optional[str] = None,
+        recursive: bool = True,
+        max_files: Optional[int] = None,
+        max_chars_per_file: Optional[int] = None,
+        max_total_chars: Optional[int] = None,
+    ) -> DesktopAiContextTaskResult:
+        normalized_instruction = instruction.strip()
+        if not normalized_instruction:
+            raise ValueError("AI context task instruction is required")
+        limits = self._resolve_ai_context_limits(
+            max_files=max_files,
+            max_chars_per_file=max_chars_per_file,
+            max_total_chars=max_total_chars,
+        )
+        source_records = self._resolve_ai_context_records(
+            context_type=context_type,
+            file_ids=file_ids,
+            folder_path=folder_path,
+            recursive=recursive,
+            max_files=limits["max_files"],
+        )
+        sources, skipped_count, included_chars = self._load_ai_context_sources(
+            source_records,
+            max_chars_per_file=limits["max_chars_per_file"],
+            max_total_chars=limits["max_total_chars"],
+        )
+        truncated = skipped_count > 0 or any(source.truncated for source in sources)
+        truncation = DesktopAiContextTaskTruncation(
+            max_files=limits["max_files"],
+            max_chars_per_file=limits["max_chars_per_file"],
+            max_total_chars=limits["max_total_chars"],
+            included_file_count=len(sources),
+            skipped_file_count=skipped_count,
+            included_chars=included_chars,
+            truncated=truncated,
+            note=(
+                "Temporary configurable guardrail for v1; not a product standard. "
+                "Future versions should derive the budget from the selected model context window."
+            ),
+        )
+        if not sources:
+            model_status = "no_context_sources"
+            answer_text = "No eligible Markdown documents were added to the AI context."
+        else:
+            provider_config = self._load_configured_ai_provider()
+            citations = [
+                DesktopAiWikiAnswerCitation(
+                    file_id=source.file_id,
+                    path=source.path,
+                    title=source.title,
+                    excerpt=source.excerpt,
+                    score=index,
+                )
+                for index, source in enumerate(sources, start=1)
+            ]
+            if provider_config is None:
+                model_status = "not_configured_context_preview"
+                answer_text = self._local_ai_context_fallback_answer(normalized_instruction, sources)
+            else:
+                answer_text = self._answer_ai_wiki_with_provider(
+                    provider_config,
+                    question=normalized_instruction,
+                    citations=citations,
+                )
+                model_status = f"{provider_config.provider_api}:{provider_config.model}"
+        return DesktopAiContextTaskResult(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            context_type=context_type,
+            instruction=normalized_instruction,
+            answer=answer_text,
+            source_count=len(sources),
+            sources=sources,
+            model_status=model_status,
+            truncation=truncation,
+        )
+
+    def _resolve_ai_context_limits(
+        self,
+        *,
+        max_files: Optional[int],
+        max_chars_per_file: Optional[int],
+        max_total_chars: Optional[int],
+    ) -> dict[str, int]:
+        return {
+            "max_files": self._positive_int_setting("NOTEAPP_AI_CONTEXT_MAX_FILES", max_files, _AI_CONTEXT_DEFAULT_MAX_FILES),
+            "max_chars_per_file": self._positive_int_setting(
+                "NOTEAPP_AI_CONTEXT_MAX_CHARS_PER_FILE",
+                max_chars_per_file,
+                _AI_CONTEXT_DEFAULT_MAX_CHARS_PER_FILE,
+            ),
+            "max_total_chars": self._positive_int_setting(
+                "NOTEAPP_AI_CONTEXT_MAX_TOTAL_CHARS",
+                max_total_chars,
+                _AI_CONTEXT_DEFAULT_MAX_TOTAL_CHARS,
+            ),
+        }
+
+    @staticmethod
+    def _positive_int_setting(env_name: str, explicit_value: Optional[int], default_value: int) -> int:
+        if explicit_value is not None and explicit_value > 0:
+            return explicit_value
+        raw_value = os.environ.get(env_name, "").strip()
+        if raw_value:
+            try:
+                parsed = int(raw_value)
+            except ValueError:
+                parsed = default_value
+            if parsed > 0:
+                return parsed
+        return default_value
+
+    def _resolve_ai_context_records(
+        self,
+        *,
+        context_type: str,
+        file_ids: Optional[Iterable[str]],
+        folder_path: Optional[str],
+        recursive: bool,
+        max_files: int,
+    ) -> list[FileRecord]:
+        snapshot = self.load_snapshot()
+        active_notes = [
+            record
+            for record in snapshot.document.sorted_files()
+            if record.status == "active"
+            and record.type == "note"
+            and not _is_hidden_workspace_context_path(record.path)
+        ]
+        if context_type == "selected_files":
+            requested_ids = list(dict.fromkeys(file_ids or []))
+            by_id = {record.file_id: record for record in active_notes}
+            return [by_id[file_id] for file_id in requested_ids if file_id in by_id][:max_files]
+        if context_type == "folder":
+            normalized_folder = _normalize_ai_context_folder_path(folder_path or "")
+            return [
+                record
+                for record in active_notes
+                if _record_belongs_to_ai_context_folder(record.path, normalized_folder, recursive=recursive)
+            ][:max_files]
+        raise ValueError(f"unsupported AI context type: {context_type}")
+
+    def _load_ai_context_sources(
+        self,
+        records: list[FileRecord],
+        *,
+        max_chars_per_file: int,
+        max_total_chars: int,
+    ) -> tuple[list[DesktopAiContextTaskSource], int, int]:
+        sources: list[DesktopAiContextTaskSource] = []
+        included_chars = 0
+        skipped_count = 0
+        for record in records:
+            if included_chars >= max_total_chars:
+                skipped_count += 1
+                continue
+            content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            if not content_path.exists() or not content_path.is_file():
+                skipped_count += 1
+                continue
+            payload = content_path.read_bytes()
+            if len(payload) > _WORKSPACE_FILE_CONTENT_MAX_BYTES:
+                skipped_count += 1
+                continue
+            text, _ = _decode_workspace_text(payload, file_id=record.file_id)
+            remaining_chars = max_total_chars - included_chars
+            limit = min(max_chars_per_file, remaining_chars)
+            excerpt = text[:limit]
+            original_chars = len(text)
+            truncated = original_chars > len(excerpt)
+            included_chars += len(excerpt)
+            sources.append(
+                DesktopAiContextTaskSource(
+                    file_id=record.file_id,
+                    path=record.path,
+                    title=_note_title_from_path(record.path),
+                    excerpt=excerpt,
+                    included_chars=len(excerpt),
+                    original_chars=original_chars,
+                    truncated=truncated,
+                )
+            )
+        return sources, skipped_count, included_chars
+
+    @staticmethod
+    def _local_ai_context_fallback_answer(
+        instruction: str,
+        sources: list[DesktopAiContextTaskSource],
+    ) -> str:
+        lines = [
+            "AI provider is not configured, so this is a local context preview.",
+            "",
+            f"Instruction: {instruction}",
+            "",
+            "Context sources:",
+        ]
+        for index, source in enumerate(sources, start=1):
+            lines.append(f"{index}. {source.title} ({source.path})")
+        lines.extend(
+            [
+                "",
+                "Configure an AI Key in Settings > AI and click Test to generate a model answer from these sources.",
+            ]
+        )
+        return "\n".join(lines)
 
     def _load_configured_ai_provider(self) -> Optional[DesktopAiProviderConfig]:
         return (

@@ -14,8 +14,10 @@ import ConflictsView from './views/ConflictsView';
 import SettingsView from './views/SettingsView';
 import TrashView from './views/TrashView';
 import AiWikiView from './views/AiWikiView';
+import AiChatView from './views/AiChatView';
+import type { AiContextDraft } from './aiContext';
 
-type AppView = 'explorer' | 'conflicts' | 'trash' | 'ai-wiki' | 'settings' | 'sync';
+type AppView = 'explorer' | 'conflicts' | 'trash' | 'ai-chat' | 'ai-wiki' | 'settings' | 'sync';
 
 interface NavItem {
   id: AppView;
@@ -28,6 +30,7 @@ const navItems: NavItem[] = [
   { id: 'sync', icon: Cloud, label: '同步状态' },
   { id: 'conflicts', icon: AlertTriangle, label: '冲突解决' },
   { id: 'trash', icon: Trash2, label: '回收站' },
+  { id: 'ai-chat', icon: Bot, label: 'AI 文档' },
   { id: 'ai-wiki', icon: Bot, label: 'AI 知识库' },
   { id: 'settings', icon: Settings, label: '设置' },
 ];
@@ -83,7 +86,7 @@ function Sidebar({ currentView, setView }: { currentView: AppView, setView: (vie
 
 function MobileNav({ currentView, setView }: { currentView: AppView, setView: (view: AppView) => void }) {
   return (
-    <nav className="grid h-16 flex-shrink-0 grid-cols-6 border-t border-[#0f3460] bg-[#16213e] md:hidden">
+    <nav className="grid h-16 flex-shrink-0 grid-cols-7 border-t border-[#0f3460] bg-[#16213e] md:hidden">
       {navItems.map((item) => (
         <button
           key={item.id}
@@ -119,9 +122,21 @@ function TopBar({ currentView }: { currentView: AppView }) {
 export default function App() {
   const [currentView, setCurrentView] = useState<AppView>('explorer');
   const [initialExplorerPath, setInitialExplorerPath] = useState<string | null>(null);
+  const [initialExplorerContextFileIds, setInitialExplorerContextFileIds] = useState<string[] | null>(null);
+  const [initialAiContext, setInitialAiContext] = useState<AiContextDraft | null>(null);
 
   function openWorkspacePath(path: string) {
     setInitialExplorerPath(path);
+    setCurrentView('explorer');
+  }
+
+  function openAiContext(context: AiContextDraft) {
+    setInitialAiContext(context);
+    setCurrentView('ai-chat');
+  }
+
+  function openExplorerWithContext(fileIds: string[]) {
+    setInitialExplorerContextFileIds(fileIds);
     setCurrentView('explorer');
   }
 
@@ -146,11 +161,21 @@ export default function App() {
                 <ExplorerView
                   setView={setCurrentView}
                   initialSelectedPath={initialExplorerPath}
+                  initialContextFileIds={initialExplorerContextFileIds}
                   onInitialSelectedPathConsumed={() => setInitialExplorerPath(null)}
+                  onInitialContextFileIdsConsumed={() => setInitialExplorerContextFileIds(null)}
+                  onOpenAiContext={openAiContext}
                 />
               )}
               {currentView === 'conflicts' && <ConflictsView />}
               {currentView === 'trash' && <TrashView />}
+              {currentView === 'ai-chat' && (
+                <AiChatView
+                  initialContext={initialAiContext}
+                  onClearInitialContext={() => setInitialAiContext(null)}
+                  onOpenExplorer={openExplorerWithContext}
+                />
+              )}
               {currentView === 'ai-wiki' && <AiWikiView onOpenWorkspacePath={openWorkspacePath} />}
               {currentView === 'settings' && <SettingsView initialTab="general" />}
               {currentView === 'sync' && <SettingsView initialTab="sync" />}
