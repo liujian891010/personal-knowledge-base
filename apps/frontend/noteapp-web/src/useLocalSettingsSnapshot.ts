@@ -15,7 +15,9 @@ const syncBridgeUrl = (
 ).replace(/\/+$/, '');
 const fallbackSnapshot = parseLocalSettingsSnapshot(bundledExampleSnapshot);
 
-type LocalSettingsSnapshotSource = 'bridge' | 'live-fixture' | 'example';
+type LocalSettingsSnapshotSource = 'loading' | 'bridge' | 'live-fixture' | 'example';
+let cachedSnapshot: LocalSettingsSnapshot | null = null;
+let cachedSource: LocalSettingsSnapshotSource | null = null;
 
 interface SettingsSnapshotLoadResult {
   snapshot: LocalSettingsSnapshot;
@@ -136,10 +138,10 @@ async function selectBridgeWorkspaceRoot(): Promise<LocalSettingsSnapshot> {
 }
 
 export function useLocalSettingsController(): LocalSettingsController {
-  const [snapshot, setSnapshot] = useState<LocalSettingsSnapshot>(fallbackSnapshot);
-  const [source, setSource] = useState<LocalSettingsSnapshotSource>('example');
+  const [snapshot, setSnapshot] = useState<LocalSettingsSnapshot>(cachedSnapshot ?? fallbackSnapshot);
+  const [source, setSource] = useState<LocalSettingsSnapshotSource>(cachedSource ?? 'loading');
   const [lastError, setLastError] = useState<string | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(!cachedSnapshot);
   const [isSaving, setIsSaving] = useState(false);
   const [savedAtMs, setSavedAtMs] = useState<number | null>(null);
 
@@ -152,6 +154,8 @@ export function useLocalSettingsController(): LocalSettingsController {
         if (cancelled) {
           return;
         }
+        cachedSnapshot = result.snapshot;
+        cachedSource = result.source;
         setSnapshot(result.snapshot);
         setSource(result.source);
         setLastError(result.error);
@@ -171,6 +175,8 @@ export function useLocalSettingsController(): LocalSettingsController {
     setIsRefreshing(true);
     try {
       const result = await loadSnapshot();
+      cachedSnapshot = result.snapshot;
+      cachedSource = result.source;
       setSnapshot(result.snapshot);
       setSource(result.source);
       setLastError(result.error);
@@ -182,7 +188,10 @@ export function useLocalSettingsController(): LocalSettingsController {
   const saveSettings = async (payload: LocalSettingsWritePayload) => {
     setIsSaving(true);
     try {
-      setSnapshot(await saveBridgeSettings(payload));
+      const nextSnapshot = await saveBridgeSettings(payload);
+      cachedSnapshot = nextSnapshot;
+      cachedSource = 'bridge';
+      setSnapshot(nextSnapshot);
       setSource('bridge');
       setLastError(null);
       setSavedAtMs(Date.now());
@@ -196,7 +205,10 @@ export function useLocalSettingsController(): LocalSettingsController {
   const saveWorkspaceRoot = async (vaultRoot: string) => {
     setIsSaving(true);
     try {
-      setSnapshot(await saveBridgeWorkspaceRoot(vaultRoot));
+      const nextSnapshot = await saveBridgeWorkspaceRoot(vaultRoot);
+      cachedSnapshot = nextSnapshot;
+      cachedSource = 'bridge';
+      setSnapshot(nextSnapshot);
       setSource('bridge');
       setLastError(null);
       setSavedAtMs(Date.now());
@@ -210,7 +222,10 @@ export function useLocalSettingsController(): LocalSettingsController {
   const selectWorkspaceRoot = async () => {
     setIsSaving(true);
     try {
-      setSnapshot(await selectBridgeWorkspaceRoot());
+      const nextSnapshot = await selectBridgeWorkspaceRoot();
+      cachedSnapshot = nextSnapshot;
+      cachedSource = 'bridge';
+      setSnapshot(nextSnapshot);
       setSource('bridge');
       setLastError(null);
       setSavedAtMs(Date.now());

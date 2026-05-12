@@ -424,6 +424,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
     (action) => action.action_id === 'submit-detected-commit',
   );
   const hasPendingLocalChanges = syncSummary.changeBadgeCount > 0;
+  const isSettingsInitialLoading = settingsSource === 'loading' && isSettingsRefreshing;
 
   const renderActionButton = (
     action: SyncShellAction,
@@ -465,7 +466,14 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
           </aside>
 
           <div className="flex-1 flex flex-col gap-8">
-            {activeTab === 'sync' && (
+            {isSettingsInitialLoading ? (
+              <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-6 shadow-lg shadow-black/20">
+                <div className="flex items-center gap-3 text-slate-300">
+                  <RefreshCw size={16} className="animate-spin text-[#a9c8fc]" />
+                  <span className="text-[13px] font-semibold">正在读取本地设置...</span>
+                </div>
+              </section>
+            ) : activeTab === 'sync' && (
               <>
                 <header className="border-b border-[#0f3460] pb-4">
                   <h2 className="text-2xl font-bold text-[#e3e2e6]">同步状态</h2>
@@ -712,7 +720,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
               </>
             )}
 
-            {activeTab === 'appearance' && (
+            {!isSettingsInitialLoading && activeTab === 'appearance' && (
               <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-6 shadow-lg shadow-black/20">
                 <div className="flex items-center justify-between gap-3 mb-5">
                   <div>
@@ -774,7 +782,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
               </section>
             )}
 
-            {activeTab === 'ai' && (
+            {!isSettingsInitialLoading && activeTab === 'ai' && (
               <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-6 shadow-lg shadow-black/20">
                 <div className="flex items-center justify-between gap-3 mb-5">
                   <div>
@@ -911,7 +919,7 @@ export default function SettingsView({ initialTab = 'sync' }: SettingsViewProps)
               </section>
             )}
 
-            {activeTab === 'general' && (
+            {!isSettingsInitialLoading && activeTab === 'general' && (
               <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-6 shadow-lg shadow-black/20">
                 <div className="flex items-start justify-between gap-3 mb-5">
                   <div className="min-w-0">
