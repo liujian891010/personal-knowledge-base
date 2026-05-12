@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  AlertTriangle,
   Bot,
+  ChevronsUpDown,
   FolderOpen,
   KeyRound,
   Loader2,
@@ -10,6 +10,7 @@ import {
   Settings,
   Trash2,
   UserRound,
+  X,
 } from 'lucide-react';
 
 import ExplorerView from './views/ExplorerView';
@@ -19,6 +20,9 @@ import TrashView from './views/TrashView';
 import AiWikiView from './views/AiWikiView';
 import AiChatView from './views/AiChatView';
 import type { AiContextDraft } from './aiContext';
+import { invalidateLocalSettingsCache } from './useLocalSettingsSnapshot';
+import { invalidateWorkspaceFilesCache } from './useWorkspaceFiles';
+import { useWorkspaceRegistryController, type RegisteredWorkspace } from './useWorkspaceRegistry';
 
 type AppView = 'explorer' | 'conflicts' | 'trash' | 'ai-chat' | 'ai-wiki' | 'settings' | 'sync';
 
@@ -216,18 +220,98 @@ function MobileNav({ currentView, setView }: { currentView: AppView, setView: (v
   );
 }
 
+function WorkspaceGate({
+  isLoading,
+  isMutating,
+  lastError,
+  onSelectWorkspaceFolder,
+}: {
+  isLoading: boolean;
+  isMutating: boolean;
+  lastError: string | null;
+  onSelectWorkspaceFolder: () => void;
+}) {
+  return (
+    <div className="flex h-full items-center justify-center p-6">
+      <div className="w-full max-w-md rounded-3xl border border-[#0f3460] bg-[#16213e] p-8 shadow-2xl shadow-black/30">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[#0f3460] bg-[#121316] text-[#a9c8fc]">
+          <FolderOpen size={22} />
+        </div>
+        <h2 className="mt-5 text-2xl font-black text-[#e3e2e6]">请选择工作区</h2>
+        <p className="mt-3 text-[13px] leading-6 text-slate-400">
+          当前没有活动工作区。添加一个 Markdown 工作区后，笔记库、搜索、回收站和 AI 文档会自动切换到该工作区。
+        </p>
+        {lastError && (
+          <p className="mt-4 rounded-xl border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] leading-5 text-[#ffb782]">
+            {lastError}
+          </p>
+        )}
+        <button
+          type="button"
+          disabled={isLoading || isMutating}
+          onClick={onSelectWorkspaceFolder}
+          className="mt-6 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#0f3460] bg-[#0f3460]/40 text-[13px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {(isLoading || isMutating) && <Loader2 size={16} className="animate-spin" />}
+          选择工作区文件夹
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function TopBar({
+  activeWorkspace,
+  workspaces,
+  isWorkspaceLoading,
+  isWorkspaceMutating,
+  isWorkspaceSwitching,
+  workspaceError,
+  onSelectWorkspaceFolder,
+  onActivateWorkspace,
+  onDeleteWorkspace,
   userInfo,
   onLogout,
 }: {
+  activeWorkspace: RegisteredWorkspace | null;
+  workspaces: RegisteredWorkspace[];
+  isWorkspaceLoading: boolean;
+  isWorkspaceMutating: boolean;
+  isWorkspaceSwitching: boolean;
+  workspaceError: string | null;
+  onSelectWorkspaceFolder: () => void;
+  onActivateWorkspace: (workspaceId: string) => Promise<void>;
+  onDeleteWorkspace: (workspaceId: string) => void;
   userInfo: unknown;
   onLogout: () => void;
 }) {
   const userName = userNameFromUserInfo(userInfo);
+  const [isWorkspaceDialogOpen, setIsWorkspaceDialogOpen] = useState(false);
+  const [workspaceToDelete, setWorkspaceToDelete] = useState<RegisteredWorkspace | null>(null);
+  const [workspaceToActivate, setWorkspaceToActivate] = useState<RegisteredWorkspace | null>(null);
 
   return (
+    <>
     <header className="sticky top-0 z-30 flex h-16 w-full flex-shrink-0 items-center justify-between border-b border-[#0f3460] bg-[#16213e]/80 px-4 backdrop-blur-md md:px-6">
-      <div />
+      <div className="min-w-0">
+        <button
+          type="button"
+          onClick={() => setIsWorkspaceDialogOpen(true)}
+          className="flex min-w-0 items-center gap-3 rounded-xl border border-[#2a5ea3] bg-gradient-to-r from-[#0f3460]/55 to-[#121316] px-3 py-2 text-left text-[12px] text-slate-200 shadow-sm shadow-black/20 transition-colors hover:border-[#5a8ed1] hover:text-white"
+          title={activeWorkspace?.vault_root ?? '未选择工作区'}
+        >
+          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-[#2a5ea3] bg-[#0b1020] text-[#a9c8fc]">
+            <FolderOpen size={15} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7eaee8]">Workspace</div>
+            <div className="truncate text-[13px] font-semibold">
+              {activeWorkspace?.name ?? (isWorkspaceLoading ? '正在读取工作区...' : '未选择工作区')}
+            </div>
+          </div>
+          <ChevronsUpDown size={14} className="flex-shrink-0 text-[#7eaee8]" />
+        </button>
+      </div>
       <div className="flex min-w-0 items-center gap-2">
         <div className="hidden min-w-0 items-center gap-2 rounded-lg border border-[#0f3460] bg-[#121316] px-3 py-2 text-[12px] text-slate-300 sm:flex">
           <UserRound size={14} className="flex-shrink-0 text-[#a9c8fc]" />
@@ -244,6 +328,159 @@ function TopBar({
         </button>
       </div>
     </header>
+    {isWorkspaceDialogOpen && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+        <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-[#0f3460] bg-[#16213e] shadow-2xl shadow-black/50">
+          <div className="flex items-center justify-between gap-3 border-b border-[#0f3460] px-5 py-4">
+            <div>
+              <h3 className="text-lg font-bold text-[#e3e2e6]">工作区</h3>
+              <p className="mt-1 text-[12px] text-slate-500">切换当前活动工作区，或添加新的工作区文件夹。</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsWorkspaceDialogOpen(false)}
+              className="rounded border border-[#0f3460] bg-[#121316] p-2 text-slate-400 hover:text-white"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div className="max-h-[60vh] overflow-y-auto p-5">
+            {workspaceError && (
+              <p className="mb-4 rounded-xl border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] leading-5 text-[#ffb782]">
+                {workspaceError}
+              </p>
+            )}
+            <div className="grid gap-3">
+              {workspaces.map((workspace) => (
+                <div
+                  key={workspace.id}
+                  className={`grid grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-2xl border p-4 ${
+                    workspace.is_active
+                      ? 'border-[#e94560]/40 bg-[#0f3460]/30'
+                      : 'border-[#0f3460] bg-[#121316]'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (workspace.is_active) {
+                        setIsWorkspaceDialogOpen(false);
+                        return;
+                      }
+                      setWorkspaceToActivate(workspace);
+                    }}
+                    className="min-w-0 text-left"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-[13px] font-semibold text-[#e3e2e6]">{workspace.name}</span>
+                      {workspace.is_active && (
+                        <span className="rounded border border-[#e94560]/40 bg-[#e94560]/10 px-2 py-0.5 text-[10px] font-bold text-[#ffb3c0]">
+                          当前
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 break-all font-mono text-[11px] text-slate-500">{workspace.vault_root}</p>
+                    <p className="mt-2 text-[11px] text-slate-500">
+                      {workspace.initialized ? '已初始化' : '待初始化'} · {workspace.exists ? '路径存在' : '路径缺失'}
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isWorkspaceMutating}
+                    onClick={() => setWorkspaceToDelete(workspace)}
+                    className="inline-flex h-9 items-center justify-center rounded-lg border border-[#0f3460] bg-[#121316] px-3 text-[12px] text-slate-400 hover:text-[#ffb782] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    移除
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-3 border-t border-[#0f3460] px-5 py-4">
+            <p className="text-[11px] text-slate-500">移除只删除注册项，不删除真实文件夹。</p>
+            <button
+              type="button"
+              disabled={isWorkspaceMutating}
+              onClick={() => {
+                void onSelectWorkspaceFolder();
+                setIsWorkspaceDialogOpen(false);
+              }}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#0f3460] bg-[#0f3460]/40 px-4 text-[13px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isWorkspaceMutating && <Loader2 size={15} className="animate-spin" />}
+              添加工作区
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    {workspaceToDelete && (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+        <div className="w-full max-w-md rounded-2xl border border-[#0f3460] bg-[#16213e] p-5 shadow-2xl shadow-black/50">
+          <h3 className="text-lg font-bold text-[#e3e2e6]">移除工作区</h3>
+          <p className="mt-3 text-[13px] leading-6 text-slate-400">
+            将从工作区列表移除：{workspaceToDelete.name}
+          </p>
+          <p className="mt-2 break-all font-mono text-[11px] text-slate-500">{workspaceToDelete.vault_root}</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setWorkspaceToDelete(null)}
+              className="rounded border border-[#0f3460] bg-[#121316] px-4 py-2 text-[13px] text-slate-300 hover:text-white"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={isWorkspaceMutating}
+              onClick={() => {
+                void onDeleteWorkspace(workspaceToDelete.id);
+                setWorkspaceToDelete(null);
+                setIsWorkspaceDialogOpen(false);
+              }}
+              className="rounded border border-[#e94560]/40 bg-[#e94560]/20 px-4 py-2 text-[13px] font-semibold text-[#ffb3c0] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              移除
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    {workspaceToActivate && (
+      <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+        <div className="w-full max-w-md rounded-2xl border border-[#0f3460] bg-[#16213e] p-5 shadow-2xl shadow-black/50">
+          <h3 className="text-lg font-bold text-[#e3e2e6]">切换工作区</h3>
+          <p className="mt-3 text-[13px] leading-6 text-slate-400">
+            确认切换到：{workspaceToActivate.name}
+          </p>
+          <p className="mt-2 break-all font-mono text-[11px] text-slate-500">{workspaceToActivate.vault_root}</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              disabled={isWorkspaceSwitching}
+              onClick={() => setWorkspaceToActivate(null)}
+              className="rounded border border-[#0f3460] bg-[#121316] px-4 py-2 text-[13px] text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={isWorkspaceSwitching}
+              onClick={() => {
+                void onActivateWorkspace(workspaceToActivate.id);
+                setWorkspaceToActivate(null);
+                setIsWorkspaceDialogOpen(false);
+              }}
+              className="inline-flex items-center justify-center gap-2 rounded border border-[#2a5ea3] bg-[#0f3460]/40 px-4 py-2 text-[13px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isWorkspaceSwitching && <Loader2 size={14} className="animate-spin" />}
+              确认切换
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -253,6 +490,20 @@ export default function App() {
   const [initialExplorerContextFileIds, setInitialExplorerContextFileIds] = useState<string[] | null>(null);
   const [initialAiContext, setInitialAiContext] = useState<AiContextDraft | null>(null);
   const [userInfo, setUserInfo] = useState<unknown | null>(() => readLoginSession());
+  const [workspaceReloadVersion, setWorkspaceReloadVersion] = useState(0);
+  const [isWorkspaceSwitching, setIsWorkspaceSwitching] = useState(false);
+  const {
+    workspaces,
+    activeWorkspace,
+    activeWorkspaceId,
+    isLoading: isWorkspaceLoading,
+    isMutating: isWorkspaceMutating,
+    lastError: workspaceError,
+    refresh: refreshWorkspaces,
+    activateWorkspace,
+    selectWorkspaceFolder,
+    removeWorkspace,
+  } = useWorkspaceRegistryController();
 
   function openWorkspacePath(path: string) {
     setInitialExplorerPath(path);
@@ -274,18 +525,82 @@ export default function App() {
     setUserInfo(null);
   }
 
+  function refreshWorkspaceShell() {
+    invalidateWorkspaceFilesCache();
+    invalidateLocalSettingsCache();
+    setInitialExplorerPath(null);
+    setInitialExplorerContextFileIds(null);
+    setInitialAiContext(null);
+    setWorkspaceReloadVersion((current) => current + 1);
+  }
+
+  async function handleActivateWorkspace(workspaceId: string) {
+    setIsWorkspaceSwitching(true);
+    try {
+      const nextActiveWorkspaceId = await activateWorkspace(workspaceId);
+      if (nextActiveWorkspaceId) {
+        refreshWorkspaceShell();
+      }
+    } finally {
+      setIsWorkspaceSwitching(false);
+    }
+  }
+
+  async function handleSelectWorkspaceFolder() {
+    const nextActiveWorkspaceId = await selectWorkspaceFolder();
+    if (nextActiveWorkspaceId) {
+      refreshWorkspaceShell();
+    }
+  }
+
+  async function handleDeleteWorkspace(workspaceId: string) {
+    await removeWorkspace(workspaceId);
+    refreshWorkspaceShell();
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-[#1a1a2e] font-sans text-[#e3e2e6]">
       {!userInfo && <LoginGate onLogin={setUserInfo} />}
       <Sidebar currentView={currentView} setView={setCurrentView} />
 
       <div className="relative flex h-screen min-w-0 flex-1 flex-col overflow-hidden bg-[#1a1a2e]">
-        <TopBar userInfo={userInfo} onLogout={logout} />
+        <TopBar
+          activeWorkspace={activeWorkspace}
+          workspaces={workspaces}
+          isWorkspaceLoading={isWorkspaceLoading}
+          isWorkspaceMutating={isWorkspaceMutating}
+          isWorkspaceSwitching={isWorkspaceSwitching}
+          workspaceError={workspaceError}
+          onSelectWorkspaceFolder={() => void handleSelectWorkspaceFolder()}
+          onActivateWorkspace={handleActivateWorkspace}
+          onDeleteWorkspace={(workspaceId) => void handleDeleteWorkspace(workspaceId)}
+          userInfo={userInfo}
+          onLogout={logout}
+        />
 
         <div className="relative flex-1 overflow-hidden">
+          {isWorkspaceSwitching && (
+            <div className="absolute inset-0 z-40 flex items-center justify-center bg-[#0b1020]/78 backdrop-blur-sm">
+              <div className="rounded-2xl border border-[#2a5ea3] bg-[#121316] px-5 py-4 text-center shadow-2xl shadow-black/40">
+                <div className="flex items-center justify-center gap-3 text-[#a9c8fc]">
+                  <Loader2 size={18} className="animate-spin" />
+                  <span className="text-[14px] font-semibold">正在切换工作区...</span>
+                </div>
+                <p className="mt-2 text-[12px] text-slate-500">切换完成前，旧工作区内容将暂时隐藏。</p>
+              </div>
+            </div>
+          )}
+          {!activeWorkspace && userInfo ? (
+            <WorkspaceGate
+              isLoading={isWorkspaceLoading}
+              isMutating={isWorkspaceMutating}
+              lastError={workspaceError}
+              onSelectWorkspaceFolder={() => void handleSelectWorkspaceFolder()}
+            />
+          ) : (
           <AnimatePresence mode="wait">
             <motion.div
-              key={currentView}
+              key={`${currentView}:${activeWorkspaceId ?? 'none'}:${workspaceReloadVersion}`}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
@@ -311,10 +626,27 @@ export default function App() {
                 />
               )}
               {currentView === 'ai-wiki' && <AiWikiView onOpenWorkspacePath={openWorkspacePath} />}
-              {currentView === 'settings' && <SettingsView initialTab="general" />}
-              {currentView === 'sync' && <SettingsView initialTab="sync" />}
+              {currentView === 'settings' && (
+                <SettingsView
+                  initialTab="general"
+                  onWorkspaceChanged={() => {
+                    void refreshWorkspaces();
+                    refreshWorkspaceShell();
+                  }}
+                />
+              )}
+              {currentView === 'sync' && (
+                <SettingsView
+                  initialTab="sync"
+                  onWorkspaceChanged={() => {
+                    void refreshWorkspaces();
+                    refreshWorkspaceShell();
+                  }}
+                />
+              )}
             </motion.div>
           </AnimatePresence>
+          )}
         </div>
 
         <MobileNav currentView={currentView} setView={setCurrentView} />

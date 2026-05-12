@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -23,6 +23,7 @@ const defaultSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'live-sync-sh
 const defaultSettingsSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'local-settings-snapshot.json');
 const defaultWorkspaceFilesPath = resolve(appRoot, 'public', 'fixtures', 'workspace-files.json');
 const defaultWorkspaceRootPath = resolve(appRoot, 'public', 'fixtures', 'workspace-root.json');
+const defaultWorkspaceRegistryPath = resolve(appRoot, 'public', 'fixtures', 'workspace-registry.json');
 const host = process.env.NOTEAPP_SYNC_BRIDGE_HOST || '127.0.0.1';
 const port = Number(process.env.NOTEAPP_SYNC_BRIDGE_PORT || 3187);
 const allowRemoteHost = process.env.NOTEAPP_SYNC_BRIDGE_ALLOW_REMOTE === 'true';
@@ -39,8 +40,14 @@ const workspaceFilesPath = process.env.NOTEAPP_WORKSPACE_FILES_OUTPUT
 const workspaceRootPath = process.env.NOTEAPP_WORKSPACE_ROOT_OUTPUT
   ? resolve(process.env.NOTEAPP_WORKSPACE_ROOT_OUTPUT)
   : defaultWorkspaceRootPath;
+const workspaceRegistryPath = process.env.NOTEAPP_WORKSPACE_REGISTRY_OUTPUT
+  ? resolve(process.env.NOTEAPP_WORKSPACE_REGISTRY_OUTPUT)
+  : defaultWorkspaceRegistryPath;
 const initialVaultRoot = process.env.NOTEAPP_VAULT_ROOT || '';
-let selectedVaultRoot = readPersistedWorkspaceRoot() || initialVaultRoot;
+const initialWorkspaceState = readInitialWorkspaceState();
+let workspaceRegistry = initialWorkspaceState.registry;
+let activeWorkspaceId = initialWorkspaceState.activeWorkspaceId;
+let selectedVaultRoot = initialWorkspaceState.selectedVaultRoot;
 const maxRequestBodyBytes = 5_000_000;
 
 const args = new Set(process.argv.slice(2));
@@ -61,6 +68,8 @@ Environment:
                                   Output JSON path, default public/fixtures/local-settings-snapshot.json
   NOTEAPP_WORKSPACE_FILES_OUTPUT  Output JSON path, default public/fixtures/workspace-files.json
   NOTEAPP_WORKSPACE_ROOT_OUTPUT   Selected workspace root JSON path, default public/fixtures/workspace-root.json
+  NOTEAPP_WORKSPACE_REGISTRY_OUTPUT
+                                  Workspace registry JSON path, default public/fixtures/workspace-registry.json
 
 It forwards to:
   GET  /api/sync/snapshot        npm run sync:snapshot equivalent
@@ -93,6 +102,14 @@ It forwards to:
   POST /api/workspace/root       Validate and switch selected workspace root
   POST /api/workspace/select-folder
                                   Open a native folder picker and switch selected workspace root
+  GET  /api/workspaces           Read registered workspaces and active workspace
+  POST /api/workspaces           Register a workspace by path
+  POST /api/workspaces/select-folder
+                                  Open a native folder picker and register/activate workspace
+  PATCH /api/workspaces/:id      Rename a registered workspace
+  DELETE /api/workspaces/:id     Remove a registered workspace
+  POST /api/workspaces/:id/activate
+                                  Activate a registered workspace
   POST /api/ai/wiki/compile      Compile deterministic local AI Wiki pages
   POST /api/ai/ask               Answer from local AI Wiki citations
   POST /api/ai/context-task      Run an AI task with selected workspace context
@@ -163,6 +180,109 @@ function readPersistedWorkspaceRoot() {
   }
 }
 
+function emptyWorkspaceRegistry() {
+  return {
+    schema_version: 'v1',
+    active_workspace_id: null,
+    workspaces: [],
+  };
+}
+
+function normalizeRegisteredWorkspace(workspace) {
+  if (!workspace || typeof workspace !== 'object') {
+    return null;
+  }
+  const id = typeof workspace.id === 'string' && workspace.id.trim()
+    ? workspace.id.trim()
+    : `ws_${Date.now()}_${randomUUID().slice(0, 8)}`;
+  const vaultRoot = typeof workspace.vault_root === 'string' ? workspace.vault_root.trim() : '';
+  if (!vaultRoot) {
+    return null;
+  }
+  const createdAt = Number.isFinite(Number(workspace.created_at_ms))
+    ? Number(workspace.created_at_ms)
+    : Date.now();
+  const lastOpenedAt = Number.isFinite(Number(workspace.last_opened_at_ms))
+    ? Number(workspace.last_opened_at_ms)
+    : createdAt;
+  return {
+    id,
+    name: normalizeWorkspaceName(workspace.name, vaultRoot),
+    vault_root: vaultRoot,
+    created_at_ms: createdAt,
+    last_opened_at_ms: lastOpenedAt,
+  };
+}
+
+function normalizeWorkspaceRegistry(payload) {
+  const registry = emptyWorkspaceRegistry();
+  if (!payload || typeof payload !== 'object') {
+    return registry;
+  }
+  const workspaces = Array.isArray(payload.workspaces)
+    ? payload.workspaces.map(normalizeRegisteredWorkspace).filter(Boolean)
+    : [];
+  const activeWorkspaceIdCandidate = typeof payload.active_workspace_id === 'string'
+    ? payload.active_workspace_id
+    : null;
+  registry.workspaces = workspaces;
+  registry.active_workspace_id = workspaces.some((workspace) => workspace.id === activeWorkspaceIdCandidate)
+    ? activeWorkspaceIdCandidate
+    : (workspaces[0]?.id ?? null);
+  return registry;
+}
+
+function normalizeWorkspaceName(name, vaultRoot) {
+  if (typeof name === 'string' && name.trim()) {
+    return name.trim().slice(0, 80);
+  }
+  return basename(vaultRoot.replace(/[\\/]+$/, '')) || vaultRoot;
+}
+
+function readInitialWorkspaceState() {
+  if (existsSync(workspaceRegistryPath)) {
+    try {
+      const registry = normalizeWorkspaceRegistry(JSON.parse(readFileSync(workspaceRegistryPath, 'utf8')));
+      const activeWorkspace = registry.workspaces.find((workspace) => workspace.id === registry.active_workspace_id) ?? null;
+      return {
+        registry,
+        activeWorkspaceId: activeWorkspace?.id ?? null,
+        selectedVaultRoot: activeWorkspace?.vault_root ?? '',
+      };
+    } catch {
+      // Fall through to compatibility migration.
+    }
+  }
+
+  const legacyWorkspaceRoot = readPersistedWorkspaceRoot() || initialVaultRoot;
+  if (legacyWorkspaceRoot) {
+    const registry = emptyWorkspaceRegistry();
+    const workspace = normalizeRegisteredWorkspace({
+      id: `ws_${Date.now()}_${randomUUID().slice(0, 8)}`,
+      name: normalizeWorkspaceName('', legacyWorkspaceRoot),
+      vault_root: legacyWorkspaceRoot,
+      created_at_ms: Date.now(),
+      last_opened_at_ms: Date.now(),
+    });
+    if (workspace) {
+      registry.workspaces = [workspace];
+      registry.active_workspace_id = workspace.id;
+    }
+    persistWorkspaceRegistry(registry);
+    return {
+      registry,
+      activeWorkspaceId: registry.active_workspace_id,
+      selectedVaultRoot: workspace?.vault_root ?? '',
+    };
+  }
+
+  return {
+    registry: emptyWorkspaceRegistry(),
+    activeWorkspaceId: null,
+    selectedVaultRoot: '',
+  };
+}
+
 function persistWorkspaceRoot(vaultRoot) {
   mkdirSync(resolve(workspaceRootPath, '..'), { recursive: true });
   writeFileSync(
@@ -180,11 +300,156 @@ function persistWorkspaceRoot(vaultRoot) {
   );
 }
 
+function persistWorkspaceRegistry(registry = workspaceRegistry) {
+  mkdirSync(resolve(workspaceRegistryPath, '..'), { recursive: true });
+  writeFileSync(workspaceRegistryPath, `${JSON.stringify(registry, null, 2)}\n`, 'utf8');
+}
+
 function requireWorkspaceRoot() {
   if (!selectedVaultRoot || !selectedVaultRoot.trim()) {
     throw new Error('workspace root is not configured');
   }
   return selectedVaultRoot;
+}
+
+function findWorkspaceById(workspaceId) {
+  return workspaceRegistry.workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
+}
+
+function findWorkspaceByRoot(vaultRoot) {
+  return workspaceRegistry.workspaces.find((workspace) => workspace.vault_root === vaultRoot) ?? null;
+}
+
+function workspaceRegistrationSummary(workspace) {
+  const exists = existsSync(workspace.vault_root);
+  const initialized = exists && existsSync(resolve(workspace.vault_root, '.noteapp', 'filemap.json'));
+  return {
+    ...workspace,
+    exists,
+    initialized,
+    is_active: workspace.id === activeWorkspaceId,
+  };
+}
+
+function workspaceRegistryPayload() {
+  return {
+    schema_version: 'v1',
+    active_workspace_id: activeWorkspaceId,
+    config_path: workspaceRegistryPath,
+    workspaces: workspaceRegistry.workspaces.map(workspaceRegistrationSummary),
+  };
+}
+
+function refreshWorkspaceArtifacts() {
+  if (!selectedVaultRoot || !selectedVaultRoot.trim()) {
+    return;
+  }
+  ensureWorkspaceInitialized();
+  runScript('write-local-settings-snapshot.mjs', {
+    NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
+  });
+  runScript('write-workspace-files.mjs', {
+    NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+  });
+  runScript('write-live-sync-shell.mjs', {
+    NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
+  });
+}
+
+function activateWorkspaceById(workspaceId, options = {}) {
+  const workspace = findWorkspaceById(workspaceId);
+  if (!workspace) {
+    throw Object.assign(new Error('workspace was not found'), { statusCode: 404 });
+  }
+  activeWorkspaceId = workspace.id;
+  selectedVaultRoot = workspace.vault_root;
+  workspaceRegistry = {
+    ...workspaceRegistry,
+    active_workspace_id: workspace.id,
+    workspaces: workspaceRegistry.workspaces.map((item) => (
+      item.id === workspace.id
+        ? { ...item, last_opened_at_ms: Date.now() }
+        : item
+    )),
+  };
+  persistWorkspaceRegistry();
+  persistWorkspaceRoot(selectedVaultRoot);
+  if (options.refreshArtifacts !== false) {
+    refreshWorkspaceArtifacts();
+  }
+  return workspaceRegistryPayload();
+}
+
+function registerWorkspace(vaultRoot, options = {}) {
+  const normalizedVaultRoot = normalizeWorkspaceRootPath(vaultRoot);
+  const existingWorkspace = findWorkspaceByRoot(normalizedVaultRoot);
+  if (existingWorkspace) {
+    if (options.activate !== false) {
+      activateWorkspaceById(existingWorkspace.id, options);
+    }
+    return findWorkspaceById(existingWorkspace.id);
+  }
+  const workspace = normalizeRegisteredWorkspace({
+    id: `ws_${Date.now()}_${randomUUID().slice(0, 8)}`,
+    name: options.name,
+    vault_root: normalizedVaultRoot,
+    created_at_ms: Date.now(),
+    last_opened_at_ms: Date.now(),
+  });
+  workspaceRegistry = {
+    ...workspaceRegistry,
+    workspaces: [...workspaceRegistry.workspaces, workspace],
+    active_workspace_id: options.activate === false
+      ? workspaceRegistry.active_workspace_id
+      : workspace.id,
+  };
+  persistWorkspaceRegistry();
+  if (options.activate === false) {
+    return workspace;
+  }
+  activateWorkspaceById(workspace.id, options);
+  return findWorkspaceById(workspace.id);
+}
+
+function renameWorkspaceRegistration(workspaceId, name) {
+  const workspace = findWorkspaceById(workspaceId);
+  if (!workspace) {
+    throw Object.assign(new Error('workspace was not found'), { statusCode: 404 });
+  }
+  workspaceRegistry = {
+    ...workspaceRegistry,
+    workspaces: workspaceRegistry.workspaces.map((item) => (
+      item.id === workspaceId
+        ? { ...item, name: normalizeWorkspaceName(name, item.vault_root) }
+        : item
+    )),
+  };
+  persistWorkspaceRegistry();
+  return workspaceRegistryPayload();
+}
+
+function deleteWorkspaceRegistration(workspaceId) {
+  const workspace = findWorkspaceById(workspaceId);
+  if (!workspace) {
+    throw Object.assign(new Error('workspace was not found'), { statusCode: 404 });
+  }
+  const remainingWorkspaces = workspaceRegistry.workspaces.filter((item) => item.id !== workspaceId);
+  const nextActiveWorkspaceId = activeWorkspaceId === workspaceId
+    ? (remainingWorkspaces[0]?.id ?? null)
+    : activeWorkspaceId;
+  workspaceRegistry = {
+    ...workspaceRegistry,
+    active_workspace_id: nextActiveWorkspaceId,
+    workspaces: remainingWorkspaces,
+  };
+  activeWorkspaceId = nextActiveWorkspaceId;
+  selectedVaultRoot = nextActiveWorkspaceId ? (findWorkspaceById(nextActiveWorkspaceId)?.vault_root ?? '') : '';
+  persistWorkspaceRegistry();
+  persistWorkspaceRoot(selectedVaultRoot);
+  if (nextActiveWorkspaceId) {
+    refreshWorkspaceArtifacts();
+  }
+  return workspaceRegistryPayload();
 }
 
 function aiChatRootPath() {
@@ -306,8 +571,10 @@ function deleteAiChatSession(sessionId) {
 }
 
 function bridgeEnv(extraEnv = {}) {
+  const derivedEnv = deriveBridgeRuntimeEnv();
   return {
     ...process.env,
+    ...derivedEnv,
     NOTEAPP_VAULT_ROOT: selectedVaultRoot,
     PYTHONIOENCODING: 'utf-8',
     PYTHONUTF8: '1',
@@ -393,11 +660,69 @@ function runDesktopCli(commandArgs) {
 }
 
 function requireBridgeEnv(name) {
-  const value = process.env[name];
+  const derivedEnv = deriveBridgeRuntimeEnv();
+  const value = process.env[name] || derivedEnv[name];
   if (!value || !value.trim()) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value;
+}
+
+function readWorkspaceSettingsFile() {
+  if (!selectedVaultRoot || !selectedVaultRoot.trim()) {
+    return null;
+  }
+  const path = resolve(selectedVaultRoot, '.noteapp', 'settings.json');
+  if (!existsSync(path)) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(readFileSync(path, 'utf8'));
+    return payload && typeof payload === 'object' ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function readPersistedSettingsSnapshot() {
+  if (!existsSync(settingsSnapshotPath)) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(readFileSync(settingsSnapshotPath, 'utf8'));
+    return payload && typeof payload === 'object' ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function deriveBridgeRuntimeEnv() {
+  const settings = readWorkspaceSettingsFile();
+  const snapshot = readPersistedSettingsSnapshot();
+  const snapshotMatchesWorkspace = snapshot
+    && typeof snapshot === 'object'
+    && typeof snapshot.vault_root === 'string'
+    && snapshot.vault_root === selectedVaultRoot;
+  const sync = settings && typeof settings === 'object' && settings.sync && typeof settings.sync === 'object'
+    ? settings.sync
+    : (snapshot && snapshot.sync && typeof snapshot.sync === 'object' ? snapshot.sync : null);
+  const derivedEnv = {};
+  if (!process.env.NOTEAPP_SYNC_BASE_URL && sync && typeof sync.base_url === 'string' && sync.base_url.trim()) {
+    derivedEnv.NOTEAPP_SYNC_BASE_URL = sync.base_url.trim();
+  }
+  const vaultId = settings && typeof settings === 'object' && typeof settings.vault_id === 'string'
+    ? settings.vault_id
+    : (snapshot && typeof snapshot.vault_id === 'string' ? snapshot.vault_id : '');
+  if (!process.env.NOTEAPP_VAULT_ID && vaultId && vaultId.trim()) {
+    derivedEnv.NOTEAPP_VAULT_ID = vaultId.trim();
+  }
+  const deviceId = settings && typeof settings === 'object' && typeof settings.device_id === 'string'
+    ? settings.device_id
+    : (snapshot && typeof snapshot.device_id === 'string' ? snapshot.device_id : '');
+  if (!process.env.NOTEAPP_DEVICE_ID && deviceId && deviceId.trim()) {
+    derivedEnv.NOTEAPP_DEVICE_ID = deviceId.trim();
+  }
+  return derivedEnv;
 }
 
 function buildPythonPath() {
@@ -427,11 +752,13 @@ function workspaceRootPayload() {
   const initialized = exists && existsSync(resolve(selectedVaultRoot, '.noteapp', 'filemap.json'));
   return {
     schema_version: 'v1',
+    workspace_id: activeWorkspaceId,
     vault_root: selectedVaultRoot,
     source: selectedVaultRoot === initialVaultRoot ? 'environment' : 'runtime',
     exists,
     initialized,
     config_path: workspaceRootPath,
+    registry_path: workspaceRegistryPath,
   };
 }
 
@@ -506,18 +833,7 @@ function selectWorkspaceRootWithDialog() {
 }
 
 function applyWorkspaceRoot(vaultRoot) {
-  selectedVaultRoot = vaultRoot;
-  persistWorkspaceRoot(selectedVaultRoot);
-  ensureWorkspaceInitialized();
-  runScript('write-local-settings-snapshot.mjs', {
-    NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
-  });
-  runScript('write-workspace-files.mjs', {
-    NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
-  });
-  runScript('write-live-sync-shell.mjs', {
-    NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
-  });
+  registerWorkspace(vaultRoot, { activate: true });
   return readSettingsSnapshot();
 }
 
@@ -658,11 +974,12 @@ function errorPayload(error) {
     message.includes('request body is too large')
     || message.includes('Unexpected end of JSON input')
     || message.includes('workspace root')
+    || message.includes('workspace folder selection was cancelled')
   ) {
     return {
       statusCode: 400,
       payload: {
-        code: 'invalid_request',
+        code: message.includes('workspace folder selection was cancelled') ? 'request_cancelled' : 'invalid_request',
         message,
       },
     };
@@ -745,6 +1062,8 @@ const server = createServer(async (request, response) => {
         settingsSnapshotPath,
         workspaceFilesPath,
         workspaceRootPath,
+        workspaceRegistryPath,
+        activeWorkspaceId,
         vaultRoot: selectedVaultRoot,
         allowedOrigin,
       });
@@ -803,6 +1122,54 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/api/workspace/root') {
       jsonResponse(request, response, 200, workspaceRootPayload());
       return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/workspaces') {
+      jsonResponse(request, response, 200, workspaceRegistryPayload());
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/workspaces') {
+      const rawBody = await readRequestBody(request);
+      const payload = rawBody ? JSON.parse(rawBody) : {};
+      const workspace = registerWorkspace(payload?.vault_root, {
+        name: payload?.name,
+        activate: payload?.activate !== false,
+      });
+      jsonResponse(request, response, 200, {
+        workspace: workspace ? workspaceRegistrationSummary(workspace) : null,
+        registry: workspaceRegistryPayload(),
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/workspaces/select-folder') {
+      const workspace = registerWorkspace(selectWorkspaceRootWithDialog(), { activate: true });
+      jsonResponse(request, response, 200, {
+        workspace: workspace ? workspaceRegistrationSummary(workspace) : null,
+        registry: workspaceRegistryPayload(),
+      });
+      return;
+    }
+
+    const workspaceRegistryPrefix = '/api/workspaces/';
+    if (routePathname.startsWith(workspaceRegistryPrefix)) {
+      const tail = routePathname.slice(workspaceRegistryPrefix.length);
+      const parts = tail.split('/').filter(Boolean);
+      if (parts.length === 1 && request.method === 'PATCH') {
+        const rawBody = await readRequestBody(request);
+        const payload = rawBody ? JSON.parse(rawBody) : {};
+        jsonResponse(request, response, 200, renameWorkspaceRegistration(decodeURIComponent(parts[0]), payload?.name));
+        return;
+      }
+      if (parts.length === 1 && request.method === 'DELETE') {
+        jsonResponse(request, response, 200, deleteWorkspaceRegistration(decodeURIComponent(parts[0])));
+        return;
+      }
+      if (parts.length === 2 && parts[1] === 'activate' && request.method === 'POST') {
+        jsonResponse(request, response, 200, activateWorkspaceById(decodeURIComponent(parts[0])));
+        return;
+      }
     }
 
     if (request.method === 'POST' && url.pathname === '/api/workspace/root') {

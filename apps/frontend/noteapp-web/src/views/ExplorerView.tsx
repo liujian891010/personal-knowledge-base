@@ -1081,7 +1081,7 @@ export default function ExplorerView({
                 <div
                   key={row.id}
                   className="flex w-full items-center gap-2 py-1.5 pr-2 text-left text-slate-300 transition-colors hover:bg-[#1f2b4a] hover:text-slate-100"
-                  style={{ paddingLeft: `${16 + row.depth * 14}px` }}
+                  style={{ paddingLeft: '10px' }}
                 >
                   <button
                     type="button"
@@ -1089,6 +1089,11 @@ export default function ExplorerView({
                     className="flex min-w-0 flex-1 items-center gap-2 py-0.5 text-left"
                     title={`${collapsedFolders.has(row.path) ? '展开目录' : '折叠目录'}：${row.path || summary.vaultRoot || rootName}`}
                   >
+                    <span
+                      aria-hidden="true"
+                      className="flex-shrink-0"
+                      style={{ width: `${row.depth * 18}px` }}
+                    />
                     {collapsedFolders.has(row.path) ? (
                       <ChevronRight size={14} className="text-slate-500" />
                     ) : (
@@ -1110,7 +1115,7 @@ export default function ExplorerView({
               ) : (
                 <div
                   key={row.id}
-                  style={{ paddingLeft: `${24 + row.depth * 14}px` }}
+                  style={{ paddingLeft: '10px' }}
                   className={`flex w-full items-center gap-2 py-2 pr-4 text-[13px] font-sans truncate text-left transition-colors ${
                     selectedFileId === row.file.file_id
                       ? 'bg-[#1f2b4a] text-[#e3e2e6] border-r-2 border-[#e94560]'
@@ -1136,6 +1141,11 @@ export default function ExplorerView({
                     title={row.file.path}
                     className="flex min-w-0 flex-1 items-center gap-2 text-left"
                   >
+                    <span
+                      aria-hidden="true"
+                      className="flex-shrink-0"
+                      style={{ width: `${12 + row.depth * 18}px` }}
+                    />
                     <MarkdownFileIcon size={14} tone={row.file.exists_on_disk ? 'normal' : 'danger'} />
                     <span className="truncate">{fileName(row.file.path)}</span>
                   </button>
