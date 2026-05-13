@@ -11,19 +11,21 @@
 
 ### 开发模式
 
-先启动前端 dev server：
+直接启动桌面端即可，桌面壳会自动拉起：
 
-```powershell
-cd apps\frontend\noteapp-web
-npm.cmd run dev
-```
-
-再启动桌面端：
+1. 本地 bridge
+2. 前端 dev server（当 dist 不存在时）
 
 ```powershell
 cd apps\desktop\noteapp-desktop
-$env:NOTEAPP_DESKTOP_WEB_URL='http://127.0.0.1:3000'
 npm.cmd run dev
+```
+
+也可以从前端目录直接启动：
+
+```powershell
+cd apps\frontend\noteapp-web
+npm.cmd run desktop:dev
 ```
 
 ### 生产模式

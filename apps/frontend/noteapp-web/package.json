@@ -21,7 +21,9 @@
     "workspace:content": "node scripts/write-workspace-file-content.mjs",
     "workspace:write": "node scripts/write-workspace-file-content-update.mjs",
     "sync:action": "node scripts/execute-sync-action.mjs",
-    "sync:bridge": "node scripts/sync-shell-bridge.mjs"
+    "sync:bridge": "node scripts/sync-shell-bridge.mjs",
+    "desktop:dev": "npm.cmd --prefix ..\\..\\desktop\\noteapp-desktop run dev",
+    "desktop:start": "npm.cmd --prefix ..\\..\\desktop\\noteapp-desktop run start"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
