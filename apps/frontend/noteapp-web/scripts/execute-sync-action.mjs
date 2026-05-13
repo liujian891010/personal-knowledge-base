@@ -143,6 +143,7 @@ try {
     cwd: repoRoot,
     env,
     stdio: 'inherit',
+    windowsHide: true,
   });
 
   if (result.error) {

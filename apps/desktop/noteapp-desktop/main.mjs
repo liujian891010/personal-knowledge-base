@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const preloadPath = path.resolve(__dirname, 'preload.mjs');
+const preloadPath = path.resolve(__dirname, 'preload.cjs');
 const bridgeHost = process.env.NOTEAPP_SYNC_BRIDGE_HOST || '127.0.0.1';
 const bridgePort = Number(process.env.NOTEAPP_SYNC_BRIDGE_PORT || 3187);
 const bridgeBaseUrl = `http://${bridgeHost}:${bridgePort}`;
@@ -22,6 +22,7 @@ let mainWindow = null;
 let bridgeProcess = null;
 let rendererProcess = null;
 let isQuitting = false;
+let ownsBridgeProcess = false;
 
 function bridgeStatePath(fileName) {
   return path.join(app.getPath('userData'), 'bridge-state', fileName);
@@ -60,7 +61,7 @@ function frontendDistPath() {
 }
 
 function desktopEnv() {
-  return {
+  const env = {
     ...process.env,
     ELECTRON_RUN_AS_NODE: '1',
     NOTEAPP_REPO_ROOT: runtimeRoot(),
@@ -69,8 +70,6 @@ function desktopEnv() {
     NOTEAPP_SYNC_BRIDGE_ALLOW_REMOTE: 'false',
     NOTEAPP_SYNC_BRIDGE_ORIGIN: devRendererUrl || '*',
     NOTEAPP_SYNC_BASE_URL: process.env.NOTEAPP_SYNC_BASE_URL || 'http://127.0.0.1:8000',
-    NOTEAPP_VAULT_ID: process.env.NOTEAPP_VAULT_ID || 'vault-local',
-    NOTEAPP_DEVICE_ID: process.env.NOTEAPP_DEVICE_ID || 'desktop-local',
     NOTEAPP_SYNC_SNAPSHOT_OUTPUT: process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT || bridgeStatePath('live-sync-shell.json'),
     NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: process.env.NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT || bridgeStatePath('local-settings-snapshot.json'),
     NOTEAPP_AUTH_SESSION_OUTPUT: process.env.NOTEAPP_AUTH_SESSION_OUTPUT || bridgeStatePath('auth-session.json'),
@@ -78,6 +77,13 @@ function desktopEnv() {
     NOTEAPP_WORKSPACE_ROOT_OUTPUT: process.env.NOTEAPP_WORKSPACE_ROOT_OUTPUT || bridgeStatePath('workspace-root.json'),
     NOTEAPP_WORKSPACE_REGISTRY_OUTPUT: process.env.NOTEAPP_WORKSPACE_REGISTRY_OUTPUT || bridgeStatePath('workspace-registry.json'),
   };
+  if (process.env.NOTEAPP_VAULT_ID) {
+    env.NOTEAPP_VAULT_ID = process.env.NOTEAPP_VAULT_ID;
+  }
+  if (process.env.NOTEAPP_DEVICE_ID) {
+    env.NOTEAPP_DEVICE_ID = process.env.NOTEAPP_DEVICE_ID;
+  }
+  return env;
 }
 
 function createLoadingHtml(message) {
@@ -146,6 +152,19 @@ function createMainWindow() {
     return { action: 'deny' };
   });
 
+  window.webContents.on('before-input-event', (event, input) => {
+    const shouldToggleDevTools = input.type === 'keyDown' && (
+      input.key === 'F12'
+      || (input.control && input.shift && input.alt && input.key.toLowerCase() === 'd')
+    );
+    if (!shouldToggleDevTools) {
+      return;
+    }
+    event.preventDefault();
+    window.webContents.toggleDevTools();
+    writeDesktopLog('devtools toggled from easter egg shortcut');
+  });
+
   window.once('ready-to-show', () => {
     window.show();
   });
@@ -153,11 +172,26 @@ function createMainWindow() {
   return window;
 }
 
-function ensureBridgeProcess() {
+async function probeBridgeHealth() {
+  try {
+    const response = await fetch(`${bridgeBaseUrl}/health`, { cache: 'no-store' });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureBridgeProcess() {
   if (bridgeProcess && !bridgeProcess.killed) {
     return bridgeProcess;
   }
+  if (await probeBridgeHealth()) {
+    ownsBridgeProcess = false;
+    writeDesktopLog(`reusing existing bridge at ${bridgeBaseUrl}`);
+    return null;
+  }
   writeDesktopLog(`starting bridge from ${bridgeScriptPath()}`);
+  ownsBridgeProcess = true;
   bridgeProcess = spawn(process.execPath, [bridgeScriptPath()], {
     cwd: webAppRoot(),
     env: desktopEnv(),
@@ -168,6 +202,7 @@ function ensureBridgeProcess() {
   bridgeProcess.once('exit', (code, signal) => {
     const exitedProcess = bridgeProcess;
     bridgeProcess = null;
+    ownsBridgeProcess = false;
     const reason = signal ? `signal ${signal}` : `exit code ${code ?? 'unknown'}`;
     writeDesktopLog(`bridge exited: ${reason}`);
     if (isQuitting) {
@@ -245,7 +280,7 @@ function dependencyErrorMessage(payload) {
   if (payload.python && payload.python.ok === false) {
     problems.push(`Python 不可用：${payload.python.message || payload.python.command || 'unknown error'}`);
   }
-  if (payload.sync && payload.sync.ok === false) {
+  if (false && payload.sync && payload.sync.ok === false) {
     const missing = Array.isArray(payload.sync.missing_env) ? payload.sync.missing_env.join(', ') : 'unknown';
     problems.push(`同步环境变量不完整：${missing}`);
   }
@@ -307,7 +342,7 @@ async function bootstrap() {
     `data:text/html;charset=utf-8,${encodeURIComponent(createLoadingHtml('正在启动本地服务，请稍候...'))}`,
   );
 
-  ensureBridgeProcess();
+  await ensureBridgeProcess();
   await waitForBridgeHealth();
   const dependencies = await loadBridgeDependencies();
   const dependencyError = dependencyErrorMessage(dependencies);
@@ -322,7 +357,7 @@ async function bootstrap() {
 }
 
 function shutdownBridge() {
-  if (!bridgeProcess || bridgeProcess.killed) {
+  if (!ownsBridgeProcess || !bridgeProcess || bridgeProcess.killed) {
     return;
   }
   bridgeProcess.kill();
@@ -342,9 +377,9 @@ ipcMain.handle('noteapp:select-workspace-folder', async () => {
     properties: ['openDirectory', 'createDirectory'],
   });
   if (result.canceled) {
-    return null;
+    return { canceled: true, path: null };
   }
-  return result.filePaths[0] ?? null;
+  return { canceled: false, path: result.filePaths[0] ?? null };
 });
 
 app.on('window-all-closed', () => {

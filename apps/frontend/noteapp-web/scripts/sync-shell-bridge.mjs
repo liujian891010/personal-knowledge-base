@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const appRoot = resolve(scriptPath, '..', '..');
@@ -368,6 +368,17 @@ function refreshWorkspaceArtifacts() {
   });
 }
 
+function refreshWorkspaceArtifactsBestEffort() {
+  try {
+    refreshWorkspaceArtifacts();
+    return null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[workspace-artifacts] ${message}`);
+    return message;
+  }
+}
+
 function activateWorkspaceById(workspaceId, options = {}) {
   const workspace = findWorkspaceById(workspaceId);
   if (!workspace) {
@@ -387,7 +398,15 @@ function activateWorkspaceById(workspaceId, options = {}) {
   persistWorkspaceRegistry();
   persistWorkspaceRoot(selectedVaultRoot);
   if (options.refreshArtifacts !== false) {
-    refreshWorkspaceArtifacts();
+    const refreshError = options.bestEffortArtifacts
+      ? refreshWorkspaceArtifactsBestEffort()
+      : (refreshWorkspaceArtifacts(), null);
+    if (refreshError) {
+      return {
+        ...workspaceRegistryPayload(),
+        warning: refreshError,
+      };
+    }
   }
   return workspaceRegistryPayload();
 }
@@ -611,6 +630,7 @@ function runScript(scriptName, extraEnv = {}) {
     encoding: 'utf8',
     stdout: 'pipe',
     stderr: 'pipe',
+    windowsHide: true,
   });
 
   if (result.error) {
@@ -658,6 +678,7 @@ function runDesktopCli(commandArgs) {
       encoding: 'utf8',
       stdout: 'pipe',
       stderr: 'pipe',
+      windowsHide: true,
     },
   );
 
@@ -680,7 +701,7 @@ function runDesktopCli(commandArgs) {
 
 function requireBridgeEnv(name) {
   const derivedEnv = deriveBridgeRuntimeEnv();
-  const value = process.env[name] || derivedEnv[name];
+  const value = derivedEnv[name] || process.env[name];
   if (!value || !value.trim()) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
@@ -715,6 +736,34 @@ function readPersistedSettingsSnapshot() {
   }
 }
 
+function readWorkspaceFilemapVaultId() {
+  if (!selectedVaultRoot || !selectedVaultRoot.trim()) {
+    return '';
+  }
+  const path = resolve(selectedVaultRoot, '.noteapp', 'filemap.json');
+  if (!existsSync(path)) {
+    return '';
+  }
+  try {
+    const payload = JSON.parse(readFileSync(path, 'utf8'));
+    return payload && typeof payload.vault_id === 'string' ? payload.vault_id.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+function fallbackWorkspaceVaultId() {
+  if (!selectedVaultRoot || !selectedVaultRoot.trim()) {
+    return '';
+  }
+  const normalizedRoot = normalizeWorkspaceRootPath(selectedVaultRoot);
+  const stableHash = createHash('sha1')
+    .update(process.platform === 'win32' ? normalizedRoot.toLowerCase() : normalizedRoot)
+    .digest('hex')
+    .slice(0, 16);
+  return `vault-local-${stableHash}`;
+}
+
 function deriveBridgeRuntimeEnv() {
   const settings = readWorkspaceSettingsFile();
   const snapshot = readPersistedSettingsSnapshot();
@@ -726,18 +775,31 @@ function deriveBridgeRuntimeEnv() {
     ? settings.sync
     : (snapshot && snapshot.sync && typeof snapshot.sync === 'object' ? snapshot.sync : null);
   const derivedEnv = {};
-  if (!process.env.NOTEAPP_SYNC_BASE_URL && sync && typeof sync.base_url === 'string' && sync.base_url.trim()) {
-    derivedEnv.NOTEAPP_SYNC_BASE_URL = sync.base_url.trim();
+  const baseUrl = sync && typeof sync.base_url === 'string' && sync.base_url.trim()
+    ? sync.base_url.trim()
+    : 'http://127.0.0.1:8000';
+  if (!process.env.NOTEAPP_SYNC_BASE_URL && baseUrl) {
+    derivedEnv.NOTEAPP_SYNC_BASE_URL = baseUrl;
   }
   const vaultId = settings && typeof settings === 'object' && typeof settings.vault_id === 'string'
     ? settings.vault_id
-    : (snapshot && typeof snapshot.vault_id === 'string' ? snapshot.vault_id : '');
+    : (
+      readWorkspaceFilemapVaultId()
+      || (snapshotMatchesWorkspace && snapshot && typeof snapshot.vault_id === 'string'
+        ? snapshot.vault_id
+        : '')
+      || fallbackWorkspaceVaultId()
+    );
   if (!process.env.NOTEAPP_VAULT_ID && vaultId && vaultId.trim()) {
     derivedEnv.NOTEAPP_VAULT_ID = vaultId.trim();
   }
   const deviceId = settings && typeof settings === 'object' && typeof settings.device_id === 'string'
     ? settings.device_id
-    : (snapshot && typeof snapshot.device_id === 'string' ? snapshot.device_id : '');
+    : (
+      snapshotMatchesWorkspace && snapshot && typeof snapshot.device_id === 'string'
+        ? snapshot.device_id
+        : 'desktop-local'
+    );
   if (!process.env.NOTEAPP_DEVICE_ID && deviceId && deviceId.trim()) {
     derivedEnv.NOTEAPP_DEVICE_ID = deviceId.trim();
   }
@@ -829,6 +891,7 @@ function selectWorkspaceRootWithDialog() {
     encoding: 'utf8',
     stdout: 'pipe',
     stderr: 'pipe',
+    windowsHide: true,
   });
   if (result.error) {
     throw result.error;
@@ -851,7 +914,7 @@ function selectWorkspaceRootWithDialog() {
 }
 
 function applyWorkspaceRoot(vaultRoot) {
-  registerWorkspace(vaultRoot, { activate: true });
+  registerWorkspace(vaultRoot, { activate: true, bestEffortArtifacts: true });
   return readSettingsSnapshot();
 }
 
@@ -902,6 +965,7 @@ function detectPythonHealth() {
     encoding: 'utf8',
     stdout: 'pipe',
     stderr: 'pipe',
+    windowsHide: true,
   });
   if (result.error) {
     return {
@@ -947,9 +1011,9 @@ function detectWorkspaceHealth() {
 
 function detectSyncRuntimeHealth() {
   const derivedEnv = deriveBridgeRuntimeEnv();
-  const baseUrl = process.env.NOTEAPP_SYNC_BASE_URL || derivedEnv.NOTEAPP_SYNC_BASE_URL || '';
-  const vaultId = process.env.NOTEAPP_VAULT_ID || derivedEnv.NOTEAPP_VAULT_ID || '';
-  const deviceId = process.env.NOTEAPP_DEVICE_ID || derivedEnv.NOTEAPP_DEVICE_ID || '';
+  const baseUrl = derivedEnv.NOTEAPP_SYNC_BASE_URL || process.env.NOTEAPP_SYNC_BASE_URL || '';
+  const vaultId = derivedEnv.NOTEAPP_VAULT_ID || process.env.NOTEAPP_VAULT_ID || '';
+  const deviceId = derivedEnv.NOTEAPP_DEVICE_ID || process.env.NOTEAPP_DEVICE_ID || '';
   const missing = [
     !baseUrl ? 'NOTEAPP_SYNC_BASE_URL' : null,
     !vaultId ? 'NOTEAPP_VAULT_ID' : null,
@@ -969,7 +1033,7 @@ function dependencyHealthPayload() {
   const workspace = detectWorkspaceHealth();
   const sync = detectSyncRuntimeHealth();
   const authSession = readAuthSession();
-  const ok = python.ok && sync.ok && (!workspace.configured || workspace.exists);
+  const ok = python.ok && (!workspace.configured || workspace.exists);
   return {
     ok,
     python,
@@ -994,6 +1058,29 @@ function dependencyHealthPayload() {
       workspace_registry_path: workspaceRegistryPath,
     },
   };
+}
+
+function shouldRefreshSettingsSnapshot() {
+  if (!selectedVaultRoot || !selectedVaultRoot.trim()) {
+    return !existsSync(settingsSnapshotPath);
+  }
+  if (!existsSync(settingsSnapshotPath)) {
+    return true;
+  }
+  try {
+    const payload = JSON.parse(readFileSync(settingsSnapshotPath, 'utf8'));
+    if (!payload || typeof payload !== 'object') {
+      return true;
+    }
+    const derivedEnv = deriveBridgeRuntimeEnv();
+    const nextVaultId = derivedEnv.NOTEAPP_VAULT_ID || process.env.NOTEAPP_VAULT_ID || '';
+    const nextDeviceId = derivedEnv.NOTEAPP_DEVICE_ID || process.env.NOTEAPP_DEVICE_ID || '';
+    return payload.vault_root !== selectedVaultRoot
+      || payload.vault_id !== nextVaultId
+      || payload.device_id !== nextDeviceId;
+  } catch {
+    return true;
+  }
 }
 
 function persistAuthSession(userInfo) {
@@ -1260,9 +1347,11 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'GET' && url.pathname === '/api/settings/snapshot') {
-      runScript('write-local-settings-snapshot.mjs', {
-        NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
-      });
+      if (shouldRefreshSettingsSnapshot()) {
+        runScript('write-local-settings-snapshot.mjs', {
+          NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
+        });
+      }
       jsonResponse(request, response, 200, readSettingsSnapshot());
       return;
     }
@@ -1321,6 +1410,7 @@ const server = createServer(async (request, response) => {
       const workspace = registerWorkspace(payload?.vault_root, {
         name: payload?.name,
         activate: payload?.activate !== false,
+        bestEffortArtifacts: true,
       });
       jsonResponse(request, response, 200, {
         workspace: workspace ? workspaceRegistrationSummary(workspace) : null,
@@ -1330,7 +1420,10 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'POST' && url.pathname === '/api/workspaces/select-folder') {
-      const workspace = registerWorkspace(selectWorkspaceRootWithDialog(), { activate: true });
+      const workspace = registerWorkspace(selectWorkspaceRootWithDialog(), {
+        activate: true,
+        bestEffortArtifacts: true,
+      });
       jsonResponse(request, response, 200, {
         workspace: workspace ? workspaceRegistrationSummary(workspace) : null,
         registry: workspaceRegistryPayload(),
@@ -1353,7 +1446,9 @@ const server = createServer(async (request, response) => {
         return;
       }
       if (parts.length === 2 && parts[1] === 'activate' && request.method === 'POST') {
-        jsonResponse(request, response, 200, activateWorkspaceById(decodeURIComponent(parts[0])));
+        jsonResponse(request, response, 200, activateWorkspaceById(decodeURIComponent(parts[0]), {
+          bestEffortArtifacts: true,
+        }));
         return;
       }
     }

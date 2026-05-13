@@ -123,6 +123,7 @@ try {
     encoding: 'utf8',
     stdout: 'pipe',
     stderr: 'inherit',
+    windowsHide: true,
   });
 
   if (result.error) {
