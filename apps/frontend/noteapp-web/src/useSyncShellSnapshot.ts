@@ -54,6 +54,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function canUseLiveFixtureFallback(): boolean {
+  return typeof window !== 'undefined' && window.location.protocol !== 'file:';
+}
+
 function latestActionActivity(action: SyncShellAction, snapshot: SyncShellSnapshot) {
   return [...snapshot.activity_feed.records]
     .reverse()
@@ -197,8 +201,16 @@ async function loadSnapshot(): Promise<SnapshotLoadResult> {
     bridgeError = `同步桥接不可用：${errorMessage(error)}`;
   }
 
+  if (!canUseLiveFixtureFallback()) {
+    return {
+      snapshot: fallbackSnapshot,
+      source: 'example',
+      error: bridgeError,
+    };
+  }
+
   try {
-    const fixtureResponse = await fetch('/fixtures/live-sync-shell.json', { cache: 'no-store' });
+    const fixtureResponse = await fetch('./fixtures/live-sync-shell.json', { cache: 'no-store' });
     if (fixtureResponse.ok) {
       return {
         snapshot: parseSyncShellSnapshot(await fixtureResponse.json()),
@@ -235,7 +247,7 @@ function confirmAction(action: SyncShellAction): boolean {
   return window.confirm('确定执行此同步操作吗？');
 }
 
-export function useSyncShellController(): SyncShellController {
+export function useSyncShellController(enabled = true): SyncShellController {
   const [snapshot, setSnapshot] = useState<SyncShellSnapshot>(fallbackSnapshot);
   const [source, setSource] = useState<SyncShellSource>('example');
   const [lastError, setLastError] = useState<string | null>(null);
@@ -245,6 +257,13 @@ export function useSyncShellController(): SyncShellController {
   const [executingActionId, setExecutingActionId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!enabled) {
+      setIsRefreshing(false);
+      setLastError(null);
+      setLastActionNotice(null);
+      return;
+    }
+
     let cancelled = false;
 
     setIsRefreshing(true);
@@ -266,9 +285,13 @@ export function useSyncShellController(): SyncShellController {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [enabled]);
 
   const refresh = async () => {
+    if (!enabled) {
+      setIsRefreshing(false);
+      return;
+    }
     setIsRefreshing(true);
     try {
       const result = await loadSnapshot();
@@ -282,6 +305,9 @@ export function useSyncShellController(): SyncShellController {
   };
 
   const executeSyncAction = async (action: SyncShellAction) => {
+    if (!enabled) {
+      return;
+    }
     if (!action.enabled || isExecuting) {
       return;
     }

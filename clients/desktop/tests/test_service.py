@@ -533,6 +533,28 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(meta_by_path["Assets/photo.png"]["mime_type"], "image/png")
             self.assertEqual(meta_by_path["Docs/manual.pdf"]["mime_type"], "application/pdf")
 
+    def test_import_existing_workspace_files_if_empty_appends_untracked_files_to_existing_filemap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            added_path = root / "Notes" / "Added.md"
+            added_payload = b"# Added\n"
+            added_path.write_bytes(added_payload)
+
+            snapshot = service.import_existing_workspace_files_if_empty()
+
+            self.assertEqual(snapshot.total_count, 2)
+            self.assertEqual([item.path for item in snapshot.files], ["Notes/Added.md", "Notes/Live.md"])
+            added_entry = next(item for item in snapshot.files if item.path == "Notes/Added.md")
+            self.assertEqual(added_entry.type, "note")
+            self.assertTrue(added_entry.exists_on_disk)
+            self.assertEqual(added_entry.size_bytes, len(added_payload))
+            document = load_filemap(service.workspace.paths.filemap_path)
+            self.assertEqual(
+                sorted(record.path for record in document.files if record.status == "active"),
+                ["Notes/Added.md", "Notes/Live.md"],
+            )
+
     def test_create_workspace_attachment_writes_filemap_and_preview_blob(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

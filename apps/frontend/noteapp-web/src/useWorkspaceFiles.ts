@@ -44,6 +44,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function canUseLiveFixtureFallback(): boolean {
+  return typeof window !== 'undefined' && window.location.protocol !== 'file:';
+}
+
 function isErrorPayload(payload: unknown): payload is { code?: string; message?: string } {
   return typeof payload === 'object' && payload !== null;
 }
@@ -79,8 +83,16 @@ async function loadSnapshot(): Promise<WorkspaceFilesLoadResult> {
     bridgeError = `workspace bridge unavailable: ${errorMessage(error)}`;
   }
 
+  if (!canUseLiveFixtureFallback()) {
+    return {
+      snapshot: fallbackSnapshot,
+      source: 'example',
+      error: bridgeError,
+    };
+  }
+
   try {
-    const fixtureResponse = await fetch('/fixtures/workspace-files.json', { cache: 'no-store' });
+    const fixtureResponse = await fetch('./fixtures/workspace-files.json', { cache: 'no-store' });
     if (fixtureResponse.ok) {
       return {
         snapshot: parseWorkspaceFilesSnapshot(await fixtureResponse.json()),
@@ -137,7 +149,7 @@ async function mutateWorkspace(
   return parseMutationPayload(await response.json());
 }
 
-export function useWorkspaceFilesController(): WorkspaceFilesController {
+export function useWorkspaceFilesController(enabled = true): WorkspaceFilesController {
   const [snapshot, setSnapshot] = useState<WorkspaceFilesSnapshot>(
     () => cachedLoadResult?.snapshot ?? fallbackSnapshot,
   );
@@ -148,6 +160,11 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
+    if (!enabled) {
+      setIsRefreshing(false);
+      setLastError(null);
+      return;
+    }
     if (cachedLoadResult) {
       return;
     }
@@ -173,9 +190,13 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [enabled]);
 
   const refresh = useCallback(async () => {
+    if (!enabled) {
+      setIsRefreshing(false);
+      return;
+    }
     setIsRefreshing(true);
     try {
       const result = await loadSnapshot();
@@ -186,9 +207,12 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     } finally {
       setIsRefreshing(false);
     }
-  }, []);
+  }, [enabled]);
 
   const createNote = useCallback(async (path: string, text = '') => {
+    if (!enabled) {
+      throw new Error('workspace is not available');
+    }
     setIsRefreshing(true);
     try {
       const result = await mutateWorkspace(
@@ -215,9 +239,12 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     } finally {
       setIsRefreshing(false);
     }
-  }, []);
+  }, [enabled]);
 
   const renameNote = useCallback(async (fileId: string, path: string) => {
+    if (!enabled) {
+      throw new Error('workspace is not available');
+    }
     setIsRefreshing(true);
     try {
       const result = await mutateWorkspace(
@@ -244,9 +271,12 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     } finally {
       setIsRefreshing(false);
     }
-  }, []);
+  }, [enabled]);
 
   const deleteNote = useCallback(async (fileId: string) => {
+    if (!enabled) {
+      throw new Error('workspace is not available');
+    }
     setIsRefreshing(true);
     try {
       const result = await mutateWorkspace(
@@ -272,7 +302,7 @@ export function useWorkspaceFilesController(): WorkspaceFilesController {
     } finally {
       setIsRefreshing(false);
     }
-  }, []);
+  }, [enabled]);
 
   const summary = useMemo(() => summarizeWorkspaceFilesSnapshot(snapshot), [snapshot]);
   return {

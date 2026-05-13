@@ -781,15 +781,14 @@ function deriveBridgeRuntimeEnv() {
   if (!process.env.NOTEAPP_SYNC_BASE_URL && baseUrl) {
     derivedEnv.NOTEAPP_SYNC_BASE_URL = baseUrl;
   }
-  const vaultId = settings && typeof settings === 'object' && typeof settings.vault_id === 'string'
+  const filemapVaultId = readWorkspaceFilemapVaultId();
+  const settingsVaultId = settings && typeof settings === 'object' && typeof settings.vault_id === 'string'
     ? settings.vault_id
-    : (
-      readWorkspaceFilemapVaultId()
-      || (snapshotMatchesWorkspace && snapshot && typeof snapshot.vault_id === 'string'
-        ? snapshot.vault_id
-        : '')
-      || fallbackWorkspaceVaultId()
-    );
+    : '';
+  const snapshotVaultId = snapshotMatchesWorkspace && snapshot && typeof snapshot.vault_id === 'string'
+    ? snapshot.vault_id
+    : '';
+  const vaultId = filemapVaultId || settingsVaultId || snapshotVaultId || fallbackWorkspaceVaultId();
   if (!process.env.NOTEAPP_VAULT_ID && vaultId && vaultId.trim()) {
     derivedEnv.NOTEAPP_VAULT_ID = vaultId.trim();
   }

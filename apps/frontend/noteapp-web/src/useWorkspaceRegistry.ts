@@ -158,9 +158,13 @@ export function useWorkspaceRegistryController(enabled = true): WorkspaceRegistr
   const selectWorkspaceFolder = useCallback(async () => {
     setIsMutating(true);
     try {
-      const desktopPath = await selectDesktopWorkspaceFolder();
-      const payload = desktopPath
-        ? await registerWorkspaceByPath(desktopPath)
+      const desktopSelection = await selectDesktopWorkspaceFolder();
+      if (desktopSelection?.canceled) {
+        setLastError(null);
+        return null;
+      }
+      const payload = desktopSelection?.path
+        ? await registerWorkspaceByPath(desktopSelection.path)
         : await fetchWorkspaceRegistry('/api/workspaces/select-folder', {
             method: 'POST',
           });

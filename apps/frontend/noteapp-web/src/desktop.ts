@@ -1,7 +1,7 @@
 export interface NoteappDesktopApi {
   isDesktop: boolean;
   platform: string;
-  selectWorkspaceFolder: () => Promise<string | null>;
+  selectWorkspaceFolder: () => Promise<{ canceled: boolean; path: string | null }>;
 }
 
 declare global {
@@ -21,7 +21,7 @@ export function getDesktopApi(): NoteappDesktopApi | null {
   return api;
 }
 
-export async function selectDesktopWorkspaceFolder(): Promise<string | null> {
+export async function selectDesktopWorkspaceFolder(): Promise<{ canceled: boolean; path: string | null } | null> {
   const api = getDesktopApi();
   if (!api) {
     return null;

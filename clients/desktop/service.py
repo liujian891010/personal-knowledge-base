@@ -1588,6 +1588,48 @@ class DesktopSyncService:
         )
         import_paths = [relative_path for relative_path, _ in importable_files]
         if not _should_replace_local_import_filemap(snapshot.document, import_paths):
+            change_set = detect_local_workspace_changes(
+                self.workspace.vault_root,
+                snapshot.document,
+            )
+            untracked_changes = [change for change in change_set.changes if change.kind == "untracked"]
+            if not untracked_changes:
+                return self.list_workspace_files()
+
+            records = list(snapshot.document.files)
+            existing_file_ids = {record.file_id for record in records}
+            latest_updated_at = snapshot.document.updated_at
+            for change in untracked_changes:
+                relative_path = change.path
+                file_id = self.file_id_builder(relative_path)
+                while file_id in existing_file_ids:
+                    file_id = str(uuid4())
+                existing_file_ids.add(file_id)
+                disk_path = _resolve_workspace_file_path(self.workspace.vault_root, relative_path)
+                payload_size = disk_path.stat().st_size
+                mtime_ms = disk_path.stat().st_mtime_ns // 1_000_000
+                latest_updated_at = max(latest_updated_at, mtime_ms)
+                mime_type = _infer_imported_workspace_mime_type(relative_path)
+                records.append(
+                    FileRecord(
+                        file_id=file_id,
+                        path=relative_path,
+                        type=change.file_type,
+                        status="active",
+                        updated_at=mtime_ms,
+                        meta={
+                            "size": payload_size,
+                            "mtime": mtime_ms,
+                            **({} if mime_type is None else {"mime_type": mime_type}),
+                        },
+                    )
+                )
+
+            write_filemap_atomic(
+                self.workspace.paths.filemap_path,
+                snapshot.document.replace_files(records, updated_at=latest_updated_at),
+            )
+            self.rebuild_workspace_search_index()
             return self.list_workspace_files()
 
         records: list[FileRecord] = []

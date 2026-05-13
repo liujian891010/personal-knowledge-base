@@ -55,6 +55,21 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
   return nodes;
 }
 
+function isMarkdownTableDelimiter(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.includes('-')) {
+    return false;
+  }
+  const normalized = trimmed.replace(/^\|/, '').replace(/\|$/, '');
+  const cells = normalized.split('|').map((cell) => cell.trim());
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function splitMarkdownTableRow(line: string): string[] {
+  const normalized = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  return normalized.split('|').map((cell) => cell.trim());
+}
+
 function MarkdownPreview({ markdown }: { markdown: string }) {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n');
   const nodes: React.ReactNode[] = [];
@@ -93,8 +108,72 @@ function MarkdownPreview({ markdown }: { markdown: string }) {
       nodes.push(<ul key={index} className="list-disc space-y-1 pl-6">{items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item)}</li>)}</ul>);
       continue;
     }
+    if (
+      index + 1 < lines.length
+      && lines[index].includes('|')
+      && isMarkdownTableDelimiter(lines[index + 1])
+    ) {
+      const headers = splitMarkdownTableRow(lines[index]);
+      const alignments = splitMarkdownTableRow(lines[index + 1]).map((cell) => {
+        if (cell.startsWith(':') && cell.endsWith(':')) {
+          return 'center';
+        }
+        if (cell.endsWith(':')) {
+          return 'right';
+        }
+        return 'left';
+      });
+      const rows: string[][] = [];
+      index += 2;
+      while (index < lines.length && lines[index].trim() && lines[index].includes('|')) {
+        rows.push(splitMarkdownTableRow(lines[index]));
+        index += 1;
+      }
+      nodes.push(
+        <div key={`table-${index}`} className="overflow-x-auto rounded-lg border border-[#0f3460]">
+          <table className="min-w-full border-collapse text-left text-[13px] leading-6">
+            <thead className="bg-[#0f3460]/35 text-[#f3f4f6]">
+              <tr>
+                {headers.map((header, headerIndex) => (
+                  <th
+                    key={headerIndex}
+                    className="border-b border-[#0f3460] px-3 py-2 font-semibold"
+                    style={{ textAlign: alignments[headerIndex] ?? 'left' }}
+                  >
+                    {renderInlineMarkdown(header)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rowIndex) => (
+                <tr key={rowIndex} className="border-t border-[#0f3460]/70">
+                  {headers.map((_, cellIndex) => (
+                    <td
+                      key={cellIndex}
+                      className="px-3 py-2 align-top text-slate-300"
+                      style={{ textAlign: alignments[cellIndex] ?? 'left' }}
+                    >
+                      {renderInlineMarkdown(row[cellIndex] ?? '')}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      continue;
+    }
     const paragraph: string[] = [];
-    while (index < lines.length && lines[index].trim() && !/^(#{1,6})\s+/.test(lines[index]) && !/^\s*[-*+]\s+/.test(lines[index]) && !/^```/.test(lines[index])) {
+    while (
+      index < lines.length
+      && lines[index].trim()
+      && !/^(#{1,6})\s+/.test(lines[index])
+      && !/^\s*[-*+]\s+/.test(lines[index])
+      && !/^```/.test(lines[index])
+      && !(index + 1 < lines.length && lines[index].includes('|') && isMarkdownTableDelimiter(lines[index + 1]))
+    ) {
       paragraph.push(lines[index].trim());
       index += 1;
     }
@@ -248,6 +327,8 @@ export default function AiChatView({
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const skipNextAutoSaveRef = React.useRef(false);
+  const messageListRef = React.useRef<HTMLDivElement | null>(null);
+  const messageListBottomRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -305,6 +386,19 @@ export default function AiChatView({
     setError(null);
     onClearInitialContext();
   }, [initialContext, isSessionLoading, onClearInitialContext]);
+
+  React.useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      if (messageListBottomRef.current) {
+        messageListBottomRef.current.scrollIntoView({ block: 'end' });
+        return;
+      }
+      if (messageListRef.current) {
+        messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, isRunning, activeSessionId]);
 
   React.useEffect(() => {
     if (!activeSessionId || isSessionLoading) {
@@ -658,7 +752,7 @@ export default function AiChatView({
       </aside>
 
       <main className="flex min-h-0 flex-col bg-[#121316]">
-        <div className="flex-1 overflow-y-auto p-5 md:p-8">
+        <div ref={messageListRef} className="flex-1 overflow-y-auto p-5 md:p-8">
           {!activeSessionId && !context ? (
             <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center text-center">
               <div className="rounded-2xl border border-[#0f3460] bg-[#16213e] p-5 text-[#a9c8fc]">
@@ -722,6 +816,7 @@ export default function AiChatView({
                   </div>
                 </div>
               )}
+              <div ref={messageListBottomRef} aria-hidden="true" />
             </div>
           )}
         </div>

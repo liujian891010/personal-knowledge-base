@@ -53,6 +53,10 @@ function isErrorPayload(payload: unknown): payload is { code?: string; message?:
   return typeof payload === 'object' && payload !== null;
 }
 
+function canUseLiveFixtureFallback(): boolean {
+  return typeof window !== 'undefined' && window.location.protocol !== 'file:';
+}
+
 async function responseErrorMessage(response: Response, source: string): Promise<string> {
   try {
     const payload: unknown = await response.json();
@@ -84,8 +88,16 @@ async function loadSnapshot(): Promise<SettingsSnapshotLoadResult> {
     bridgeError = `settings bridge unavailable: ${errorMessage(error)}`;
   }
 
+  if (!canUseLiveFixtureFallback()) {
+    return {
+      snapshot: fallbackSnapshot,
+      source: 'example',
+      error: bridgeError,
+    };
+  }
+
   try {
-    const fixtureResponse = await fetch('/fixtures/local-settings-snapshot.json', { cache: 'no-store' });
+    const fixtureResponse = await fetch('./fixtures/local-settings-snapshot.json', { cache: 'no-store' });
     if (fixtureResponse.ok) {
       return {
         snapshot: parseLocalSettingsSnapshot(await fixtureResponse.json()),
@@ -228,9 +240,13 @@ export function useLocalSettingsController(): LocalSettingsController {
   const selectWorkspaceRoot = async () => {
     setIsSaving(true);
     try {
-      const desktopPath = await selectDesktopWorkspaceFolder();
-      const nextSnapshot = desktopPath
-        ? await saveBridgeWorkspaceRoot(desktopPath)
+      const desktopSelection = await selectDesktopWorkspaceFolder();
+      if (desktopSelection?.canceled) {
+        setLastError(null);
+        return;
+      }
+      const nextSnapshot = desktopSelection?.path
+        ? await saveBridgeWorkspaceRoot(desktopSelection.path)
         : await selectBridgeWorkspaceRoot();
       cachedSnapshot = nextSnapshot;
       cachedSource = 'bridge';

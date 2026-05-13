@@ -338,7 +338,7 @@ export default function SettingsView({
     refresh: refreshSync,
     executePrimaryAction,
     executeSyncAction,
-  } = useSyncShellController();
+  } = useSyncShellController(activeTab === 'sync' && Boolean(activeWorkspace));
   const {
     summary: settingsSummary,
     source: settingsSource,

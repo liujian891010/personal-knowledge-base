@@ -1,0 +1,357 @@
+from __future__ import annotations
+
+import unittest
+
+from clients.desktop.runner import DesktopSyncRunner
+
+
+class FakeService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int | None]] = []
+        self.skip_detected_submit = False
+        self.commit_recovery_result = None
+        self.pull_apply_recovery_result = None
+
+    def ensure_initialized(self, *, now_ms=None):
+        self.calls.append(("init", now_ms))
+        return {"step": "init", "now_ms": now_ms}
+
+    def resume_commit_recovery(self, *, normalized_at: int):
+        self.calls.append(("recover", normalized_at))
+        if self.commit_recovery_result is not None:
+            return self.commit_recovery_result
+        return {"step": "recover", "normalized_at": normalized_at}
+
+    def resume_pull_apply_recovery(self, *, normalized_at: int):
+        self.calls.append(("recover-pull-apply", normalized_at))
+        if self.pull_apply_recovery_result is not None:
+            return self.pull_apply_recovery_result
+        return {"step": "recover-pull-apply", "normalized_at": normalized_at}
+
+    def pull_and_apply(self, *, rewritten_at: int):
+        self.calls.append(("pull-and-apply", rewritten_at))
+        return {"step": "pull-and-apply", "rewritten_at": rewritten_at}
+
+    def submit_workspace_commit(
+        self,
+        *,
+        created_at: int,
+        file_ids,
+        encrypted_blob_by_file_id,
+        commit_intent_id=None,
+        cleanup_normalized_at=None,
+    ):
+        self.calls.append(
+            (
+                "submit",
+                created_at,
+                list(file_ids),
+                encrypted_blob_by_file_id,
+                commit_intent_id,
+                cleanup_normalized_at,
+            )
+        )
+        return {
+            "step": "submit",
+            "created_at": created_at,
+            "file_ids": list(file_ids),
+            "encrypted_blob_sizes": (
+                None
+                if encrypted_blob_by_file_id is None
+                else {
+                    key: len(value) for key, value in encrypted_blob_by_file_id.items()
+                }
+            ),
+            "commit_intent_id": commit_intent_id,
+            "cleanup_normalized_at": cleanup_normalized_at,
+        }
+
+    def submit_detected_changes(
+        self,
+        *,
+        created_at: int,
+        commit_intent_id=None,
+        cleanup_normalized_at=None,
+    ):
+        self.calls.append(
+            (
+                "submit-detected",
+                created_at,
+                commit_intent_id,
+                cleanup_normalized_at,
+            )
+        )
+        return {
+            "step": "submit-detected",
+            "created_at": created_at,
+            "commit_intent_id": commit_intent_id,
+            "cleanup_normalized_at": cleanup_normalized_at,
+        }
+
+    def submit_detected_changes_if_needed(
+        self,
+        *,
+        created_at: int,
+        commit_intent_id=None,
+        cleanup_normalized_at=None,
+    ):
+        self.calls.append(
+            (
+                "submit-detected",
+                created_at,
+                commit_intent_id,
+                cleanup_normalized_at,
+            )
+        )
+        if self.skip_detected_submit:
+            return None
+        return {
+            "step": "submit-detected",
+            "created_at": created_at,
+            "commit_intent_id": commit_intent_id,
+            "cleanup_normalized_at": cleanup_normalized_at,
+        }
+
+    def load_snapshot(self):
+        self.calls.append(("status", None))
+        return {"step": "status"}
+
+
+class DesktopSyncRunnerTests(unittest.TestCase):
+    def test_run_once_executes_recovery_then_pull_then_final_snapshot(self) -> None:
+        service = FakeService()
+
+        result = DesktopSyncRunner(service).run_once(
+            init_now_ms=1770000050000,
+            recovery_normalized_at=1770000050100,
+            pull_rewritten_at=1770000050200,
+        )
+
+        self.assertEqual(
+            result.initialized,
+            {"step": "init", "now_ms": 1770000050000},
+        )
+        self.assertEqual(
+            result.recovery,
+            {"step": "recover", "normalized_at": 1770000050100},
+        )
+        self.assertEqual(
+            result.pull_apply_recovery,
+            {"step": "recover-pull-apply", "normalized_at": 1770000050100},
+        )
+        self.assertEqual(
+            result.pull,
+            {"step": "pull-and-apply", "rewritten_at": 1770000050200},
+        )
+        self.assertEqual(result.final_snapshot, {"step": "status"})
+        self.assertEqual(
+            service.calls,
+            [
+                ("init", 1770000050000),
+                ("recover", 1770000050100),
+                ("recover-pull-apply", 1770000050100),
+                ("pull-and-apply", 1770000050200),
+                ("status", None),
+            ],
+        )
+
+    def test_run_cycle_submits_workspace_commit_before_pull(self) -> None:
+        service = FakeService()
+
+        result = DesktopSyncRunner(service).run_cycle(
+            init_now_ms=1770000051000,
+            recovery_normalized_at=1770000051010,
+            submit_created_at=1770000051020,
+            submit_file_ids=["file-a"],
+            encrypted_blob_by_file_id={"file-a": b"blob-a"},
+            commit_intent_id="intent-003",
+            cleanup_normalized_at=1770000051021,
+            pull_rewritten_at=1770000051030,
+        )
+
+        self.assertEqual(
+            result.submitted,
+            {
+                "step": "submit",
+                "created_at": 1770000051020,
+                "file_ids": ["file-a"],
+                "encrypted_blob_sizes": {"file-a": 6},
+                "commit_intent_id": "intent-003",
+                "cleanup_normalized_at": 1770000051021,
+            },
+        )
+        self.assertEqual(
+            service.calls,
+            [
+                ("init", 1770000051000),
+                ("recover", 1770000051010),
+                ("recover-pull-apply", 1770000051010),
+                (
+                    "submit",
+                    1770000051020,
+                    ["file-a"],
+                    {"file-a": b"blob-a"},
+                    "intent-003",
+                    1770000051021,
+                ),
+                ("pull-and-apply", 1770000051030),
+                ("status", None),
+            ],
+        )
+
+    def test_run_cycle_allows_submit_without_explicit_encrypted_payloads(self) -> None:
+        service = FakeService()
+
+        result = DesktopSyncRunner(service).run_cycle(
+            init_now_ms=1770000051100,
+            recovery_normalized_at=1770000051110,
+            submit_created_at=1770000051120,
+            submit_file_ids=["file-a"],
+            pull_rewritten_at=1770000051130,
+        )
+
+        self.assertEqual(result.submitted["file_ids"], ["file-a"])
+        self.assertEqual(
+            service.calls,
+            [
+                ("init", 1770000051100),
+                ("recover", 1770000051110),
+                ("recover-pull-apply", 1770000051110),
+                ("submit", 1770000051120, ["file-a"], None, None, None),
+                ("pull-and-apply", 1770000051130),
+                ("status", None),
+            ],
+        )
+
+    def test_run_cycle_can_submit_detected_changes_before_pull(self) -> None:
+        service = FakeService()
+
+        result = DesktopSyncRunner(service).run_cycle(
+            init_now_ms=1770000051200,
+            recovery_normalized_at=1770000051210,
+            submit_created_at=1770000051220,
+            submit_detected=True,
+            commit_intent_id="intent-detected-001",
+            cleanup_normalized_at=1770000051221,
+            pull_rewritten_at=1770000051230,
+        )
+
+        self.assertEqual(
+            result.submitted,
+            {
+                "step": "submit-detected",
+                "created_at": 1770000051220,
+                "commit_intent_id": "intent-detected-001",
+                "cleanup_normalized_at": 1770000051221,
+            },
+        )
+        self.assertEqual(
+            service.calls,
+            [
+                ("init", 1770000051200),
+                ("recover", 1770000051210),
+                ("recover-pull-apply", 1770000051210),
+                ("submit-detected", 1770000051220, "intent-detected-001", 1770000051221),
+                ("pull-and-apply", 1770000051230),
+                ("status", None),
+            ],
+        )
+
+    def test_run_cycle_keeps_pulling_when_detected_submit_is_a_noop(self) -> None:
+        service = FakeService()
+        service.skip_detected_submit = True
+
+        result = DesktopSyncRunner(service).run_cycle(
+            init_now_ms=1770000051300,
+            recovery_normalized_at=1770000051310,
+            submit_created_at=1770000051320,
+            submit_detected=True,
+            pull_rewritten_at=1770000051330,
+        )
+
+        self.assertIsNone(result.submitted)
+        self.assertEqual(
+            service.calls,
+            [
+                ("init", 1770000051300),
+                ("recover", 1770000051310),
+                ("recover-pull-apply", 1770000051310),
+                ("submit-detected", 1770000051320, None, None),
+                ("pull-and-apply", 1770000051330),
+                ("status", None),
+            ],
+        )
+
+    def test_run_cycle_pulls_before_submit_when_recovery_requires_full_pull(self) -> None:
+        service = FakeService()
+        service.pull_apply_recovery_result = {
+            "step": "recover-pull-apply",
+            "normalized_at": 1770000051410,
+            "mode": "degraded",
+            "requires_full_pull": True,
+            "state": {
+                "last_manifest_summary_status": "stale",
+            },
+        }
+
+        result = DesktopSyncRunner(service).run_cycle(
+            init_now_ms=1770000051400,
+            recovery_normalized_at=1770000051410,
+            submit_created_at=1770000051420,
+            submit_file_ids=["file-a"],
+            pull_rewritten_at=1770000051430,
+        )
+
+        self.assertEqual(result.pull["step"], "pull-and-apply")
+        self.assertEqual(
+            service.calls,
+            [
+                ("init", 1770000051400),
+                ("recover", 1770000051410),
+                ("recover-pull-apply", 1770000051410),
+                ("pull-and-apply", 1770000051430),
+                ("submit", 1770000051431, ["file-a"], None, None, None),
+                ("status", None),
+            ],
+        )
+
+    def test_run_cycle_pulls_before_submit_when_commit_recovery_requires_full_pull(self) -> None:
+        service = FakeService()
+        service.commit_recovery_result = {
+            "mode": "submitted_confirmation",
+            "requires_full_pull": True,
+            "submitted": {
+                "recovery": {
+                    "requires_full_pull": True,
+                    "state": {
+                        "last_manifest_summary_status": "stale",
+                    },
+                },
+            },
+        }
+
+        result = DesktopSyncRunner(service).run_cycle(
+            init_now_ms=1770000051500,
+            recovery_normalized_at=1770000051510,
+            submit_created_at=1770000051520,
+            submit_file_ids=["file-a"],
+            cleanup_normalized_at=1770000051521,
+            pull_rewritten_at=1770000051530,
+        )
+
+        self.assertEqual(result.pull["step"], "pull-and-apply")
+        self.assertEqual(
+            service.calls,
+            [
+                ("init", 1770000051500),
+                ("recover", 1770000051510),
+                ("recover-pull-apply", 1770000051510),
+                ("pull-and-apply", 1770000051530),
+                ("submit", 1770000051531, ["file-a"], None, None, 1770000051532),
+                ("status", None),
+            ],
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
