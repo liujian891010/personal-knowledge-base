@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Bot,
@@ -28,6 +28,10 @@ type AppView = 'explorer' | 'conflicts' | 'trash' | 'ai-chat' | 'ai-wiki' | 'set
 
 const loginSessionStorageKey = 'userInfo';
 const loginCheckUrl = 'https://sg-al-cwork-web.mediportal.com.cn/user/login/appkey';
+const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
+const syncBridgeUrl = (
+  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
+).replace(/\/+$/, '');
 
 interface NavItem {
   id: AppView;
@@ -43,14 +47,55 @@ const navItems: NavItem[] = [
 ];
 
 function readLoginSession(): unknown | null {
+  return null;
+}
+
+async function responseErrorMessage(response: Response, source: string): Promise<string> {
   try {
-    const rawValue = window.sessionStorage.getItem(loginSessionStorageKey);
-    if (!rawValue) {
-      return null;
+    const payload: unknown = await response.json();
+    if (typeof payload === 'object' && payload !== null && 'message' in payload && typeof payload.message === 'string') {
+      return `${source} returned ${response.status}: ${payload.message}`;
     }
-    return JSON.parse(rawValue);
   } catch {
+    // Ignore and fall back to the HTTP status.
+  }
+  return `${source} returned ${response.status}`;
+}
+
+async function loadStoredLoginSession(): Promise<unknown | null> {
+  const response = await fetch(`${syncBridgeUrl}/api/auth/session`, {
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, 'auth session load'));
+  }
+  const payload: unknown = await response.json();
+  if (typeof payload !== 'object' || payload === null) {
     return null;
+  }
+  const record = payload as Record<string, unknown>;
+  return record.authenticated ? (record.user_info ?? null) : null;
+}
+
+async function persistLoginSession(userInfo: unknown): Promise<void> {
+  const response = await fetch(`${syncBridgeUrl}/api/auth/session`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ userInfo }),
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, 'auth session save'));
+  }
+}
+
+async function clearLoginSession(): Promise<void> {
+  const response = await fetch(`${syncBridgeUrl}/api/auth/session`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw new Error(await responseErrorMessage(response, 'auth session clear'));
   }
 }
 
@@ -89,7 +134,7 @@ async function verifyAppKey(appKey: string): Promise<unknown> {
   return payload.data ?? null;
 }
 
-function LoginGate({ onLogin }: { onLogin: (userInfo: unknown) => void }) {
+function LoginGate({ onLogin }: { onLogin: (userInfo: unknown) => Promise<void> | void }) {
   const [appKey, setAppKey] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -101,12 +146,11 @@ function LoginGate({ onLogin }: { onLogin: (userInfo: unknown) => void }) {
       setError('请输入 appKey。');
       return;
     }
-    setIsSubmitting(true);
+      setIsSubmitting(true);
     setError(null);
     try {
       const userInfo = await verifyAppKey(normalizedAppKey);
-      window.sessionStorage.setItem(loginSessionStorageKey, JSON.stringify(userInfo));
-      onLogin(userInfo);
+      await onLogin(userInfo);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
@@ -490,6 +534,7 @@ export default function App() {
   const [initialExplorerContextFileIds, setInitialExplorerContextFileIds] = useState<string[] | null>(null);
   const [initialAiContext, setInitialAiContext] = useState<AiContextDraft | null>(null);
   const [userInfo, setUserInfo] = useState<unknown | null>(() => readLoginSession());
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [workspaceReloadVersion, setWorkspaceReloadVersion] = useState(0);
   const [isWorkspaceSwitching, setIsWorkspaceSwitching] = useState(false);
   const {
@@ -504,6 +549,29 @@ export default function App() {
     selectWorkspaceFolder,
     removeWorkspace,
   } = useWorkspaceRegistryController();
+
+  useEffect(() => {
+    let cancelled = false;
+    loadStoredLoginSession()
+      .then((nextUserInfo) => {
+        if (!cancelled) {
+          setUserInfo(nextUserInfo);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setUserInfo(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsAuthLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function openWorkspacePath(path: string) {
     setInitialExplorerPath(path);
@@ -520,8 +588,13 @@ export default function App() {
     setCurrentView('explorer');
   }
 
-  function logout() {
-    window.sessionStorage.removeItem(loginSessionStorageKey);
+  async function handleLogin(nextUserInfo: unknown) {
+    await persistLoginSession(nextUserInfo);
+    setUserInfo(nextUserInfo);
+  }
+
+  async function logout() {
+    await clearLoginSession();
     setUserInfo(null);
   }
 
@@ -560,7 +633,15 @@ export default function App() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#1a1a2e] font-sans text-[#e3e2e6]">
-      {!userInfo && <LoginGate onLogin={setUserInfo} />}
+      {isAuthLoading && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#080a12]/96 text-[#e3e2e6]">
+          <div className="flex items-center gap-3 rounded-2xl border border-[#0f3460] bg-[#121316] px-5 py-4 shadow-2xl shadow-black/40">
+            <Loader2 size={18} className="animate-spin text-[#a9c8fc]" />
+            <span className="text-[14px] font-semibold">正在恢复登录状态...</span>
+          </div>
+        </div>
+      )}
+      {!isAuthLoading && !userInfo && <LoginGate onLogin={handleLogin} />}
       <Sidebar currentView={currentView} setView={setCurrentView} />
 
       <div className="relative flex h-screen min-w-0 flex-1 flex-col overflow-hidden bg-[#1a1a2e]">
@@ -575,7 +656,7 @@ export default function App() {
           onActivateWorkspace={handleActivateWorkspace}
           onDeleteWorkspace={(workspaceId) => void handleDeleteWorkspace(workspaceId)}
           userInfo={userInfo}
-          onLogout={logout}
+          onLogout={() => void logout()}
         />
 
         <div className="relative flex-1 overflow-hidden">
