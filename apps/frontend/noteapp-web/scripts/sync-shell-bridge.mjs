@@ -21,6 +21,7 @@ const scriptPath = fileURLToPath(import.meta.url);
 const appRoot = resolve(scriptPath, '..', '..');
 const defaultSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'live-sync-shell.json');
 const defaultSettingsSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'local-settings-snapshot.json');
+const defaultAuthSessionPath = resolve(appRoot, 'public', 'fixtures', 'auth-session.json');
 const defaultWorkspaceFilesPath = resolve(appRoot, 'public', 'fixtures', 'workspace-files.json');
 const defaultWorkspaceRootPath = resolve(appRoot, 'public', 'fixtures', 'workspace-root.json');
 const defaultWorkspaceRegistryPath = resolve(appRoot, 'public', 'fixtures', 'workspace-registry.json');
@@ -34,6 +35,9 @@ const snapshotPath = process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT
 const settingsSnapshotPath = process.env.NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT
   ? resolve(process.env.NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT)
   : defaultSettingsSnapshotPath;
+const authSessionPath = process.env.NOTEAPP_AUTH_SESSION_OUTPUT
+  ? resolve(process.env.NOTEAPP_AUTH_SESSION_OUTPUT)
+  : defaultAuthSessionPath;
 const workspaceFilesPath = process.env.NOTEAPP_WORKSPACE_FILES_OUTPUT
   ? resolve(process.env.NOTEAPP_WORKSPACE_FILES_OUTPUT)
   : defaultWorkspaceFilesPath;
@@ -66,6 +70,7 @@ Environment:
   NOTEAPP_SYNC_SNAPSHOT_OUTPUT   Output JSON path, default public/fixtures/live-sync-shell.json
   NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT
                                   Output JSON path, default public/fixtures/local-settings-snapshot.json
+  NOTEAPP_AUTH_SESSION_OUTPUT     Auth session JSON path, default public/fixtures/auth-session.json
   NOTEAPP_WORKSPACE_FILES_OUTPUT  Output JSON path, default public/fixtures/workspace-files.json
   NOTEAPP_WORKSPACE_ROOT_OUTPUT   Selected workspace root JSON path, default public/fixtures/workspace-root.json
   NOTEAPP_WORKSPACE_REGISTRY_OUTPUT
@@ -78,6 +83,9 @@ It forwards to:
   GET  /api/settings/snapshot    npm run settings:snapshot equivalent
   POST /api/settings/snapshot    npm run settings:write equivalent
   GET  /api/settings/live        Read current settings snapshot without running CLI
+  GET  /api/auth/session         Read persisted local login session
+  POST /api/auth/session         Persist local login session
+  DELETE /api/auth/session       Clear local login session
   GET  /api/workspace/files      npm run workspace:files equivalent
   POST /api/workspace/files      Create a local Markdown note
   POST /api/workspace/attachments
@@ -851,6 +859,49 @@ function readSettingsSnapshot() {
   return JSON.parse(readFileSync(settingsSnapshotPath, 'utf8'));
 }
 
+function authSessionPayload(userInfo = null, updatedAtMs = null) {
+  return {
+    schema_version: 'v1',
+    authenticated: userInfo !== null,
+    user_info: userInfo,
+    updated_at_ms: updatedAtMs,
+  };
+}
+
+function readAuthSession() {
+  if (!existsSync(authSessionPath)) {
+    return authSessionPayload();
+  }
+  try {
+    const payload = JSON.parse(readFileSync(authSessionPath, 'utf8'));
+    const userInfo = payload && typeof payload === 'object' && 'user_info' in payload
+      ? payload.user_info ?? null
+      : null;
+    const updatedAtMs = payload && typeof payload === 'object' && Number.isFinite(Number(payload.updated_at_ms))
+      ? Number(payload.updated_at_ms)
+      : null;
+    return authSessionPayload(userInfo, updatedAtMs);
+  } catch {
+    return authSessionPayload();
+  }
+}
+
+function persistAuthSession(userInfo) {
+  mkdirSync(resolve(authSessionPath, '..'), { recursive: true });
+  const payload = authSessionPayload(userInfo, Date.now());
+  const tempPath = `${authSessionPath}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  renameSync(tempPath, authSessionPath);
+  return payload;
+}
+
+function clearAuthSession() {
+  if (existsSync(authSessionPath)) {
+    unlinkSync(authSessionPath);
+  }
+  return authSessionPayload();
+}
+
 function readWorkspaceFiles() {
   if (!existsSync(workspaceFilesPath)) {
     throw new Error(`workspace files snapshot was not found: ${workspaceFilesPath}`);
@@ -1088,11 +1139,31 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === 'GET' && url.pathname === '/api/auth/session') {
+      jsonResponse(request, response, 200, readAuthSession());
+      return;
+    }
+
     if (request.method === 'GET' && url.pathname === '/api/settings/snapshot') {
       runScript('write-local-settings-snapshot.mjs', {
         NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
       });
       jsonResponse(request, response, 200, readSettingsSnapshot());
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/auth/session') {
+      const rawBody = await readRequestBody(request);
+      const payload = rawBody ? JSON.parse(rawBody) : {};
+      if (!payload || typeof payload !== 'object' || !('userInfo' in payload)) {
+        throw new Error('auth session request must include userInfo');
+      }
+      jsonResponse(request, response, 200, persistAuthSession(payload.userInfo ?? null));
+      return;
+    }
+
+    if (request.method === 'DELETE' && url.pathname === '/api/auth/session') {
+      jsonResponse(request, response, 200, clearAuthSession());
       return;
     }
 
