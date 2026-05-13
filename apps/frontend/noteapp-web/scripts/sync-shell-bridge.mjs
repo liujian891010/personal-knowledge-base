@@ -129,6 +129,7 @@ It forwards to:
                                   Delete a local AI document session
   POST /api/ai/provider/health   Test configured AI provider
   GET  /health                   Health check
+  GET  /health/dependencies      Dependency health summary
 `);
 }
 
@@ -886,6 +887,106 @@ function readAuthSession() {
   }
 }
 
+function detectPythonHealth() {
+  const python = process.env.PYTHON || 'python';
+  const result = spawnSync(python, ['--version'], {
+    encoding: 'utf8',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  if (result.error) {
+    return {
+      ok: false,
+      command: python,
+      message: result.error.message,
+    };
+  }
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      command: python,
+      message: [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join('\n') || `exit code ${result.status}`,
+    };
+  }
+  return {
+    ok: true,
+    command: python,
+    version: result.stdout.trim() || result.stderr.trim() || null,
+  };
+}
+
+function detectWorkspaceHealth() {
+  if (!selectedVaultRoot || !selectedVaultRoot.trim()) {
+    return {
+      configured: false,
+      exists: false,
+      initialized: false,
+      active_workspace_id: activeWorkspaceId,
+      vault_root: '',
+    };
+  }
+  const exists = existsSync(selectedVaultRoot);
+  const initialized = exists && existsSync(resolve(selectedVaultRoot, '.noteapp', 'filemap.json'));
+  return {
+    configured: true,
+    exists,
+    initialized,
+    active_workspace_id: activeWorkspaceId,
+    vault_root: selectedVaultRoot,
+  };
+}
+
+function detectSyncRuntimeHealth() {
+  const derivedEnv = deriveBridgeRuntimeEnv();
+  const baseUrl = process.env.NOTEAPP_SYNC_BASE_URL || derivedEnv.NOTEAPP_SYNC_BASE_URL || '';
+  const vaultId = process.env.NOTEAPP_VAULT_ID || derivedEnv.NOTEAPP_VAULT_ID || '';
+  const deviceId = process.env.NOTEAPP_DEVICE_ID || derivedEnv.NOTEAPP_DEVICE_ID || '';
+  const missing = [
+    !baseUrl ? 'NOTEAPP_SYNC_BASE_URL' : null,
+    !vaultId ? 'NOTEAPP_VAULT_ID' : null,
+    !deviceId ? 'NOTEAPP_DEVICE_ID' : null,
+  ].filter(Boolean);
+  return {
+    ok: missing.length === 0,
+    base_url: baseUrl || null,
+    vault_id: vaultId || null,
+    device_id: deviceId || null,
+    missing_env: missing,
+  };
+}
+
+function dependencyHealthPayload() {
+  const python = detectPythonHealth();
+  const workspace = detectWorkspaceHealth();
+  const sync = detectSyncRuntimeHealth();
+  const authSession = readAuthSession();
+  const ok = python.ok && sync.ok && (!workspace.configured || workspace.exists);
+  return {
+    ok,
+    python,
+    sync,
+    workspace,
+    auth: {
+      authenticated: authSession.authenticated,
+      updated_at_ms: authSession.updated_at_ms,
+    },
+    bridge: {
+      host,
+      port,
+      allow_remote_host: allowRemoteHost,
+      allowed_origin: allowedOrigin,
+    },
+    paths: {
+      snapshot_path: snapshotPath,
+      settings_snapshot_path: settingsSnapshotPath,
+      auth_session_path: authSessionPath,
+      workspace_files_path: workspaceFilesPath,
+      workspace_root_path: workspaceRootPath,
+      workspace_registry_path: workspaceRegistryPath,
+    },
+  };
+}
+
 function persistAuthSession(userInfo) {
   mkdirSync(resolve(authSessionPath, '..'), { recursive: true });
   const payload = authSessionPayload(userInfo, Date.now());
@@ -1118,6 +1219,11 @@ const server = createServer(async (request, response) => {
         vaultRoot: selectedVaultRoot,
         allowedOrigin,
       });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/health/dependencies') {
+      jsonResponse(request, response, 200, dependencyHealthPayload());
       return;
     }
 
