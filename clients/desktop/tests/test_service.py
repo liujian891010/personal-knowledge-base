@@ -774,6 +774,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertFalse((root / "Notes" / "Renamed Note.md").exists())
             trash_path = root / ".noteapp" / "trash" / f"1770000033000-{created_file_id}.md"
             self.assertTrue(trash_path.exists())
+
             self.assertEqual(trash_path.read_text(encoding="utf-8"), "# New\n")
             self.assertEqual(load_tombstone_ledger(service.workspace.paths.ledger_path)[-1].file_id, created_file_id)
             self.assertEqual(service.load_snapshot().state.local_delete_sequence, 2)
@@ -802,6 +803,21 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(purged_record.status, "deleted")
             self.assertIn("trash_purged_at", purged_record.meta or {})
             self.assertEqual(load_tombstone_ledger(service.workspace.paths.ledger_path)[-1].file_id, created_file_id)
+
+    def test_create_workspace_note_allows_workspace_root_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+
+            created = service.create_workspace_note(
+                "Root Note.md",
+                text="# Root\n",
+                now_ms=1770000034000,
+            )
+
+            self.assertEqual(created.operation, "create")
+            self.assertTrue((root / "Root Note.md").exists())
+            self.assertEqual(created.file.path, "Root Note.md")
 
     def test_rename_workspace_note_rejects_folder_moves(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
