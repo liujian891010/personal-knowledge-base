@@ -1,21 +1,17 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '..', '..', '..');
-const webAppRoot = path.resolve(repoRoot, 'apps', 'frontend', 'noteapp-web');
-const bridgeScriptPath = path.resolve(webAppRoot, 'scripts', 'sync-shell-bridge.mjs');
 const preloadPath = path.resolve(__dirname, 'preload.mjs');
 const bridgeHost = process.env.NOTEAPP_SYNC_BRIDGE_HOST || '127.0.0.1';
 const bridgePort = Number(process.env.NOTEAPP_SYNC_BRIDGE_PORT || 3187);
 const bridgeBaseUrl = `http://${bridgeHost}:${bridgePort}`;
 const devRendererUrl = process.env.NOTEAPP_DESKTOP_WEB_URL || '';
-const prodRendererPath = path.resolve(webAppRoot, 'dist', 'index.html');
 const healthTimeoutMs = 20_000;
 const healthPollIntervalMs = 500;
 const rendererHost = '127.0.0.1';
@@ -31,9 +27,43 @@ function bridgeStatePath(fileName) {
   return path.join(app.getPath('userData'), 'bridge-state', fileName);
 }
 
+function desktopLogPath() {
+  return path.join(app.getPath('userData'), 'desktop-runtime.log');
+}
+
+function writeDesktopLog(message) {
+  try {
+    const targetPath = desktopLogPath();
+    mkdirSync(path.dirname(targetPath), { recursive: true });
+    appendFileSync(targetPath, `[${new Date().toISOString()}] ${message}\n`, 'utf8');
+  } catch {
+    // Ignore logging failures.
+  }
+}
+
+function runtimeRoot() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'bundle')
+    : path.resolve(__dirname, '..', '..', '..');
+}
+
+function webAppRoot() {
+  return path.join(runtimeRoot(), 'apps', 'frontend', 'noteapp-web');
+}
+
+function bridgeScriptPath() {
+  return path.join(webAppRoot(), 'scripts', 'sync-shell-bridge.mjs');
+}
+
+function frontendDistPath() {
+  return path.join(webAppRoot(), 'dist', 'index.html');
+}
+
 function desktopEnv() {
   return {
     ...process.env,
+    ELECTRON_RUN_AS_NODE: '1',
+    NOTEAPP_REPO_ROOT: runtimeRoot(),
     NOTEAPP_SYNC_BRIDGE_HOST: bridgeHost,
     NOTEAPP_SYNC_BRIDGE_PORT: String(bridgePort),
     NOTEAPP_SYNC_BRIDGE_ALLOW_REMOTE: 'false',
@@ -127,8 +157,9 @@ function ensureBridgeProcess() {
   if (bridgeProcess && !bridgeProcess.killed) {
     return bridgeProcess;
   }
-  bridgeProcess = spawn(process.execPath, [bridgeScriptPath], {
-    cwd: webAppRoot,
+  writeDesktopLog(`starting bridge from ${bridgeScriptPath()}`);
+  bridgeProcess = spawn(process.execPath, [bridgeScriptPath()], {
+    cwd: webAppRoot(),
     env: desktopEnv(),
     stdio: 'inherit',
     windowsHide: true,
@@ -137,10 +168,11 @@ function ensureBridgeProcess() {
   bridgeProcess.once('exit', (code, signal) => {
     const exitedProcess = bridgeProcess;
     bridgeProcess = null;
+    const reason = signal ? `signal ${signal}` : `exit code ${code ?? 'unknown'}`;
+    writeDesktopLog(`bridge exited: ${reason}`);
     if (isQuitting) {
       return;
     }
-    const reason = signal ? `signal ${signal}` : `exit code ${code ?? 'unknown'}`;
     if (mainWindow && !mainWindow.isDestroyed()) {
       const detail = [
         '本地服务已退出，桌面端无法继续工作。',
@@ -165,13 +197,15 @@ function ensureRendererProcess() {
   if (rendererProcess && !rendererProcess.killed) {
     return rendererProcess;
   }
+  writeDesktopLog(`starting renderer dev server in ${webAppRoot()}`);
   rendererProcess = spawn('npm.cmd', ['run', 'dev', '--', '--host', rendererHost, '--port', String(rendererPort)], {
-    cwd: webAppRoot,
+    cwd: webAppRoot(),
     env: process.env,
     stdio: 'inherit',
     windowsHide: true,
   });
   rendererProcess.once('exit', () => {
+    writeDesktopLog('renderer dev server exited');
     rendererProcess = null;
   });
   return rendererProcess;
@@ -231,11 +265,18 @@ async function resolveRendererEntry() {
   if (devRendererUrl) {
     return devRendererUrl;
   }
-  if (!existsSync(prodRendererPath)) {
+  const distPath = frontendDistPath();
+  if (!existsSync(distPath)) {
+    if (app.isPackaged) {
+      throw new Error([
+        '桌面安装包缺少前端构建产物。',
+        `缺少文件：${distPath}`,
+      ].join('\n'));
+    }
     ensureRendererProcess();
     return fallbackRendererDevUrl;
   }
-  return pathToFileURL(prodRendererPath).toString();
+  return pathToFileURL(distPath).toString();
 }
 
 async function waitForRenderer(entryUrl) {
@@ -260,6 +301,7 @@ async function waitForRenderer(entryUrl) {
 }
 
 async function bootstrap() {
+  writeDesktopLog(`bootstrap start: packaged=${app.isPackaged}, runtimeRoot=${runtimeRoot()}, webAppRoot=${webAppRoot()}`);
   mainWindow = createMainWindow();
   await mainWindow.loadURL(
     `data:text/html;charset=utf-8,${encodeURIComponent(createLoadingHtml('正在启动本地服务，请稍候...'))}`,
@@ -273,8 +315,10 @@ async function bootstrap() {
     throw new Error(dependencyError);
   }
   const rendererEntry = await resolveRendererEntry();
+  writeDesktopLog(`renderer entry resolved: ${rendererEntry}`);
   await waitForRenderer(rendererEntry);
   await mainWindow.loadURL(rendererEntry);
+  writeDesktopLog('main window loaded renderer entry');
 }
 
 function shutdownBridge() {
@@ -331,6 +375,7 @@ app.whenReady().then(async () => {
     await bootstrap();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    writeDesktopLog(`bootstrap failed: ${message}`);
     if (mainWindow && !mainWindow.isDestroyed()) {
       await mainWindow.loadURL(
         `data:text/html;charset=utf-8,${encodeURIComponent(createLoadingHtml(message))}`,

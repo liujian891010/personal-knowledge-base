@@ -2,13 +2,81 @@
   "name": "noteapp-desktop",
   "private": true,
   "version": "0.1.0",
+  "description": "NoteAI desktop client shell",
+  "author": "xgjk",
   "type": "module",
   "main": "main.mjs",
   "scripts": {
     "dev": "electron .",
-    "start": "electron ."
+    "start": "electron .",
+    "build:frontend": "node scripts/build-frontend.mjs",
+    "pack:win": "npm.cmd run build:frontend && node scripts/package-win.mjs --dir --win nsis",
+    "dist:win": "npm.cmd run build:frontend && node scripts/package-win.mjs --win nsis"
   },
-  "dependencies": {
-    "electron": "^37.2.0"
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.xgjk.noteapp.desktop",
+    "productName": "NoteAI",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.mjs",
+      "preload.mjs",
+      "scripts/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../frontend/noteapp-web/dist",
+        "to": "bundle/apps/frontend/noteapp-web/dist"
+      },
+      {
+        "from": "../../frontend/noteapp-web/scripts",
+        "to": "bundle/apps/frontend/noteapp-web/scripts"
+      },
+      {
+        "from": "../../../clients",
+        "to": "bundle/clients",
+        "filter": [
+          "desktop/**/*",
+          "__init__.py"
+        ]
+      },
+      {
+        "from": "../../../packages/ai-core",
+        "to": "bundle/packages/ai-core",
+        "filter": [
+          "src/**/*"
+        ]
+      },
+      {
+        "from": "../../../packages/vault-core",
+        "to": "bundle/packages/vault-core",
+        "filter": [
+          "src/**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

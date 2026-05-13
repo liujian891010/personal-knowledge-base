@@ -19,6 +19,9 @@ import { randomUUID } from 'node:crypto';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const appRoot = resolve(scriptPath, '..', '..');
+const repoRoot = process.env.NOTEAPP_REPO_ROOT
+  ? resolve(process.env.NOTEAPP_REPO_ROOT)
+  : resolve(appRoot, '..', '..', '..');
 const defaultSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'live-sync-shell.json');
 const defaultSettingsSnapshotPath = resolve(appRoot, 'public', 'fixtures', 'local-settings-snapshot.json');
 const defaultAuthSessionPath = resolve(appRoot, 'public', 'fixtures', 'auth-session.json');
@@ -641,7 +644,7 @@ function runDesktopCli(commandArgs) {
       ...commandArgs,
     ],
     {
-      cwd: resolve(appRoot, '..', '..', '..'),
+      cwd: repoRoot,
       env: bridgeEnv({
         PYTHONPATH: buildPythonPath(),
       }),
@@ -735,7 +738,6 @@ function deriveBridgeRuntimeEnv() {
 }
 
 function buildPythonPath() {
-  const repoRoot = resolve(appRoot, '..', '..', '..');
   const entries = [
     resolve(repoRoot, 'packages', 'vault-core', 'src'),
     resolve(repoRoot, 'packages', 'ai-core', 'src'),
