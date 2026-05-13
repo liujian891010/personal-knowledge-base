@@ -626,6 +626,10 @@ export default function ExplorerView({
     () => (source === 'bridge' ? files.filter(isVisibleMarkdownFile) : []),
     [files, source],
   );
+  const visibleMissingCount = useMemo(
+    () => visibleFiles.filter((file) => !file.exists_on_disk).length,
+    [visibleFiles],
+  );
   const rootName = useMemo(() => workspaceRootName(summary.vaultRoot), [summary.vaultRoot]);
   const explorerRows = useMemo(() => buildExplorerRows(visibleFiles, rootName), [rootName, visibleFiles]);
   const folderStorageKey = useMemo(() => collapsedFoldersStorageKey(summary.vaultRoot), [summary.vaultRoot]);
@@ -1037,8 +1041,8 @@ export default function ExplorerView({
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">工作区</span>
             <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-slate-500">
               <span>{sourceLabel(source)}</span>
-              <span>{summary.activeCount} 个正常</span>
-              {summary.missingCount > 0 && <span className="text-[#e94560]">{summary.missingCount} 个缺失</span>}
+              <span>{visibleFiles.length} 篇文档</span>
+              {visibleMissingCount > 0 && <span className="text-[#e94560]">{visibleMissingCount} 个缺失</span>}
             </div>
           </div>
           <div className="flex items-center gap-2">
