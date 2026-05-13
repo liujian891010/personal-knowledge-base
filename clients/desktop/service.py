@@ -649,8 +649,6 @@ def _normalize_workspace_note_path(value: str) -> str:
         raise ValueError(f"workspace note path is reserved: {value!r}")
     if path.suffix.lower() not in {".md", ".markdown"}:
         path = path.with_suffix(".md")
-    if len(path.parts) == 1:
-        path = PurePosixPath("Notes") / path
     normalized = path.as_posix()
     if not _is_existing_workspace_import_path(normalized):
         raise ValueError(f"workspace note path is not importable: {value!r}")

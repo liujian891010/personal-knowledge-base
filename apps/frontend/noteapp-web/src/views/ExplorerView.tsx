@@ -47,6 +47,20 @@ function folderPathForFile(path: string): string {
   return parts.slice(0, -1).join('/');
 }
 
+function ensureMarkdownFileName(name: string): string {
+  const trimmed = name.trim().replace(/[\\/]+/g, '');
+  if (!trimmed) {
+    return '';
+  }
+  return /\.(md|markdown)$/i.test(trimmed) ? trimmed : `${trimmed}.md`;
+}
+
+function buildNotePath(directoryPath: string, fileName: string): string {
+  const normalizedDirectory = directoryPath.trim().replace(/^\/+|\/+$/g, '');
+  const normalizedFileName = ensureMarkdownFileName(fileName);
+  return normalizedDirectory ? `${normalizedDirectory}/${normalizedFileName}` : normalizedFileName;
+}
+
 function fileBelongsToFolder(path: string, folderPath: string): boolean {
   const fileFolder = folderPathForFile(path);
   if (!folderPath) {
@@ -121,7 +135,7 @@ type ExplorerRow =
 
 type MarkdownEditorMode = 'edit' | 'preview' | 'split';
 type FileDialogState =
-  | { kind: 'create'; path: string }
+  | { kind: 'create'; path: string; directoryPath: string; fileName: string }
   | { kind: 'rename'; path: string }
   | { kind: 'delete'; path: string };
 function isRowVisible(row: ExplorerRow, collapsedFolders: Set<string>): boolean {
@@ -480,7 +494,7 @@ function buildExplorerRows(files: WorkspaceFileEntry[], rootName: string): Explo
         kind: 'file',
         id: `file:${file.file_id}`,
         file,
-        depth: folderPath === '' ? 1 : folderPath.split('/').length,
+        depth: folderPath === '' ? 0 : folderPath.split('/').length,
       });
     }
   }
@@ -620,6 +634,15 @@ export default function ExplorerView({
   const visibleExplorerRows = useMemo(
     () => explorerRows.filter((row) => isRowVisible(row, collapsedFolders)),
     [collapsedFolders, explorerRows],
+  );
+  const availableDirectoryPaths = useMemo(
+    () => {
+      const paths = explorerRows
+        .filter((row): row is Extract<ExplorerRow, { kind: 'folder' }> => row.kind === 'folder')
+        .map((row) => row.path);
+      return paths.length > 0 ? paths : [''];
+    },
+    [explorerRows],
   );
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
 
@@ -914,7 +937,18 @@ export default function ExplorerView({
   }
 
   function handleCreateNote() {
-    setFileDialog({ kind: 'create', path: 'Notes/Untitled.md' });
+    const preferredDirectory = selectedFile
+      ? folderPathForFile(selectedFile.path)
+      : (availableDirectoryPaths.includes('Notes') ? 'Notes' : '');
+    setFileDialog({
+      kind: 'create',
+      path: buildNotePath(
+        availableDirectoryPaths.includes(preferredDirectory) ? preferredDirectory : '',
+        'Untitled.md',
+      ),
+      directoryPath: availableDirectoryPaths.includes(preferredDirectory) ? preferredDirectory : '',
+      fileName: 'Untitled.md',
+    });
   }
 
   function handleRenameNote() {
@@ -1081,7 +1115,7 @@ export default function ExplorerView({
                 <div
                   key={row.id}
                   className="flex w-full items-center gap-2 py-1.5 pr-2 text-left text-slate-300 transition-colors hover:bg-[#1f2b4a] hover:text-slate-100"
-                  style={{ paddingLeft: '10px' }}
+                  style={{ paddingLeft: `${row.depth * 10}px` }}
                 >
                   <button
                     type="button"
@@ -1092,7 +1126,7 @@ export default function ExplorerView({
                     <span
                       aria-hidden="true"
                       className="flex-shrink-0"
-                      style={{ width: `${row.depth * 18}px` }}
+                      style={{ width: '7px' }}
                     />
                     {collapsedFolders.has(row.path) ? (
                       <ChevronRight size={14} className="text-slate-500" />
@@ -1115,18 +1149,23 @@ export default function ExplorerView({
               ) : (
                 <div
                   key={row.id}
-                  style={{ paddingLeft: '10px' }}
+                  style={{ paddingLeft: '6px' }}
                   className={`flex w-full items-center gap-2 py-2 pr-4 text-[13px] font-sans truncate text-left transition-colors ${
                     selectedFileId === row.file.file_id
                       ? 'bg-[#1f2b4a] text-[#e3e2e6] border-r-2 border-[#e94560]'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-[#1f2b4a]'
                   }`}
                 >
-                  {isAiContextEligibleFile(row.file) && (
-                    <button
+                    <span
+                      aria-hidden="true"
+                      className="flex flex-shrink-0 items-center justify-center"
+                      style={{ width: '16px' }}
+                    >
+                    {isAiContextEligibleFile(row.file) && (
+                      <button
                       type="button"
                       onClick={() => toggleContextFile(row.file.file_id)}
-                      className={`h-4 w-4 flex-shrink-0 rounded border text-[10px] leading-3 ${
+                      className={`h-4 w-4 rounded border text-[10px] leading-3 ${
                         selectedContextFileIds.has(row.file.file_id)
                           ? 'border-[#a9c8fc] bg-[#0f3460] text-white'
                           : 'border-[#0f3460] bg-[#121316] text-transparent'
@@ -1136,15 +1175,17 @@ export default function ExplorerView({
                       ✓
                     </button>
                   )}
+                    </span>
                   <button
                     onClick={() => openWorkspaceFile(row.file.file_id)}
                     title={row.file.path}
                     className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                    style={{ paddingLeft: `${row.depth * 10}px` }}
                   >
                     <span
                       aria-hidden="true"
                       className="flex-shrink-0"
-                      style={{ width: `${12 + row.depth * 18}px` }}
+                      style={{ width: '0px' }}
                     />
                     <MarkdownFileIcon size={14} tone={row.file.exists_on_disk ? 'normal' : 'danger'} />
                     <span className="truncate">{fileName(row.file.path)}</span>
@@ -1618,7 +1659,49 @@ export default function ExplorerView({
                 {fileDialog.kind === 'delete' && `将移出工作区并保留到 .noteapp/trash：${fileName(fileDialog.path)}`}
               </p>
             </div>
-            {fileDialog.kind !== 'delete' && (
+            {fileDialog.kind === 'create' && (
+              <div className="mb-4 space-y-4">
+                <label className="block">
+                  <span className="mb-2 block text-[12px] font-semibold text-slate-300">目录</span>
+                  <select
+                    value={fileDialog.directoryPath}
+                    onChange={(event) => {
+                      const directoryPath = event.target.value;
+                      setFileDialog({
+                        ...fileDialog,
+                        directoryPath,
+                        path: buildNotePath(directoryPath, fileDialog.fileName),
+                      });
+                    }}
+                    className="w-full rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[13px] text-[#e3e2e6] outline-none focus:border-[#a9c8fc]"
+                  >
+                    {availableDirectoryPaths.map((directoryPath) => (
+                      <option key={directoryPath || '__root__'} value={directoryPath}>
+                        {directoryPath || '/'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-2 block text-[12px] font-semibold text-slate-300">文件名</span>
+                  <input
+                    autoFocus
+                    value={fileDialog.fileName}
+                    onChange={(event) => {
+                      const fileNameValue = event.target.value;
+                      setFileDialog({
+                        ...fileDialog,
+                        fileName: fileNameValue,
+                        path: buildNotePath(fileDialog.directoryPath, fileNameValue),
+                      });
+                    }}
+                    className="w-full rounded border border-[#0f3460] bg-[#121316] px-3 py-2 font-mono text-[13px] text-[#e3e2e6] outline-none focus:border-[#a9c8fc]"
+                    placeholder="Untitled.md"
+                  />
+                </label>
+              </div>
+            )}
+            {fileDialog.kind === 'rename' && (
               <label className="mb-4 block">
                 <span className="mb-2 block text-[12px] font-semibold text-slate-300">
                   {fileDialog.kind === 'rename' ? '文件名' : '文档路径'}
@@ -1628,7 +1711,7 @@ export default function ExplorerView({
                   value={fileDialog.path}
                   onChange={(event) => setFileDialog({ ...fileDialog, path: event.target.value })}
                   className="w-full rounded border border-[#0f3460] bg-[#121316] px-3 py-2 font-mono text-[13px] text-[#e3e2e6] outline-none focus:border-[#a9c8fc]"
-                  placeholder={fileDialog.kind === 'rename' ? 'Untitled.md' : 'Notes/Untitled.md'}
+                  placeholder="Untitled.md"
                 />
               </label>
             )}

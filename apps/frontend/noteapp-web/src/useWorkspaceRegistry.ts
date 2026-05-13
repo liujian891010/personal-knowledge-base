@@ -109,9 +109,9 @@ async function registerWorkspaceByPath(vaultRoot: string): Promise<WorkspaceRegi
   });
 }
 
-export function useWorkspaceRegistryController(): WorkspaceRegistryController {
+export function useWorkspaceRegistryController(enabled = true): WorkspaceRegistryController {
   const [registry, setRegistry] = useState<WorkspaceRegistryPayload | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(enabled);
   const [isMutating, setIsMutating] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
 
@@ -129,8 +129,14 @@ export function useWorkspaceRegistryController(): WorkspaceRegistryController {
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      setRegistry(null);
+      setLastError(null);
+      setIsLoading(false);
+      return;
+    }
     void refresh();
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   const activateWorkspace = useCallback(async (workspaceId: string) => {
     setIsMutating(true);

@@ -548,7 +548,7 @@ export default function App() {
     activateWorkspace,
     selectWorkspaceFolder,
     removeWorkspace,
-  } = useWorkspaceRegistryController();
+  } = useWorkspaceRegistryController(Boolean(userInfo) && !isAuthLoading);
 
   useEffect(() => {
     let cancelled = false;
@@ -596,6 +596,21 @@ export default function App() {
   async function logout() {
     await clearLoginSession();
     setUserInfo(null);
+  }
+
+  if (isAuthLoading) {
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#080a12]/96 text-[#e3e2e6]">
+        <div className="flex items-center gap-3 rounded-2xl border border-[#0f3460] bg-[#121316] px-5 py-4 shadow-2xl shadow-black/40">
+          <Loader2 size={18} className="animate-spin text-[#a9c8fc]" />
+          <span className="text-[14px] font-semibold">Loading login session...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!userInfo) {
+    return <LoginGate onLogin={handleLogin} />;
   }
 
   function refreshWorkspaceShell() {
@@ -671,7 +686,7 @@ export default function App() {
               </div>
             </div>
           )}
-          {!activeWorkspace && userInfo ? (
+          {!activeWorkspace ? (
             <WorkspaceGate
               isLoading={isWorkspaceLoading}
               isMutating={isWorkspaceMutating}
