@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { selectDesktopWorkspaceFolder } from './desktop';
+
 const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
 const syncBridgeUrl = (
   import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
@@ -97,6 +99,16 @@ async function fetchWorkspaceRegistry(path: string, init?: RequestInit): Promise
   return parseWorkspaceRegistryPayload(payload);
 }
 
+async function registerWorkspaceByPath(vaultRoot: string): Promise<WorkspaceRegistryPayload> {
+  return fetchWorkspaceRegistry('/api/workspaces', {
+    method: 'POST',
+    body: JSON.stringify({
+      vault_root: vaultRoot,
+      activate: true,
+    }),
+  });
+}
+
 export function useWorkspaceRegistryController(): WorkspaceRegistryController {
   const [registry, setRegistry] = useState<WorkspaceRegistryPayload | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -140,9 +152,12 @@ export function useWorkspaceRegistryController(): WorkspaceRegistryController {
   const selectWorkspaceFolder = useCallback(async () => {
     setIsMutating(true);
     try {
-      const payload = await fetchWorkspaceRegistry('/api/workspaces/select-folder', {
-        method: 'POST',
-      });
+      const desktopPath = await selectDesktopWorkspaceFolder();
+      const payload = desktopPath
+        ? await registerWorkspaceByPath(desktopPath)
+        : await fetchWorkspaceRegistry('/api/workspaces/select-folder', {
+            method: 'POST',
+          });
       setRegistry(payload);
       setLastError(null);
       return payload.active_workspace_id;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import bundledExampleSnapshot from '../fixtures/local-settings-snapshot.example.json';
+import { selectDesktopWorkspaceFolder } from './desktop';
 import {
   parseLocalSettingsSnapshot,
   summarizeLocalSettingsSnapshot,
@@ -227,7 +228,10 @@ export function useLocalSettingsController(): LocalSettingsController {
   const selectWorkspaceRoot = async () => {
     setIsSaving(true);
     try {
-      const nextSnapshot = await selectBridgeWorkspaceRoot();
+      const desktopPath = await selectDesktopWorkspaceFolder();
+      const nextSnapshot = desktopPath
+        ? await saveBridgeWorkspaceRoot(desktopPath)
+        : await selectBridgeWorkspaceRoot();
       cachedSnapshot = nextSnapshot;
       cachedSource = 'bridge';
       setSnapshot(nextSnapshot);
