@@ -27,6 +27,10 @@ let bridgeProcess = null;
 let rendererProcess = null;
 let isQuitting = false;
 
+function bridgeStatePath(fileName) {
+  return path.join(app.getPath('userData'), 'bridge-state', fileName);
+}
+
 function desktopEnv() {
   return {
     ...process.env,
@@ -37,6 +41,12 @@ function desktopEnv() {
     NOTEAPP_SYNC_BASE_URL: process.env.NOTEAPP_SYNC_BASE_URL || 'http://127.0.0.1:8000',
     NOTEAPP_VAULT_ID: process.env.NOTEAPP_VAULT_ID || 'vault-local',
     NOTEAPP_DEVICE_ID: process.env.NOTEAPP_DEVICE_ID || 'desktop-local',
+    NOTEAPP_SYNC_SNAPSHOT_OUTPUT: process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT || bridgeStatePath('live-sync-shell.json'),
+    NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: process.env.NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT || bridgeStatePath('local-settings-snapshot.json'),
+    NOTEAPP_AUTH_SESSION_OUTPUT: process.env.NOTEAPP_AUTH_SESSION_OUTPUT || bridgeStatePath('auth-session.json'),
+    NOTEAPP_WORKSPACE_FILES_OUTPUT: process.env.NOTEAPP_WORKSPACE_FILES_OUTPUT || bridgeStatePath('workspace-files.json'),
+    NOTEAPP_WORKSPACE_ROOT_OUTPUT: process.env.NOTEAPP_WORKSPACE_ROOT_OUTPUT || bridgeStatePath('workspace-root.json'),
+    NOTEAPP_WORKSPACE_REGISTRY_OUTPUT: process.env.NOTEAPP_WORKSPACE_REGISTRY_OUTPUT || bridgeStatePath('workspace-registry.json'),
   };
 }
 
