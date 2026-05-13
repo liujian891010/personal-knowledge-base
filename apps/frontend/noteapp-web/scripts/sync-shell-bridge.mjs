@@ -445,10 +445,17 @@ function deleteWorkspaceRegistration(workspaceId) {
   if (!workspace) {
     throw Object.assign(new Error('workspace was not found'), { statusCode: 404 });
   }
+  const workspaceIndex = workspaceRegistry.workspaces.findIndex((item) => item.id === workspaceId);
   const remainingWorkspaces = workspaceRegistry.workspaces.filter((item) => item.id !== workspaceId);
-  const nextActiveWorkspaceId = activeWorkspaceId === workspaceId
-    ? (remainingWorkspaces[0]?.id ?? null)
-    : activeWorkspaceId;
+  let nextActiveWorkspaceId = activeWorkspaceId;
+  if (activeWorkspaceId === workspaceId) {
+    const nextWorkspace = workspaceIndex >= 0
+      ? (workspaceRegistry.workspaces[workspaceIndex + 1] ?? workspaceRegistry.workspaces[workspaceIndex - 1] ?? null)
+      : null;
+    nextActiveWorkspaceId = nextWorkspace && nextWorkspace.id !== workspaceId
+      ? nextWorkspace.id
+      : (remainingWorkspaces[0]?.id ?? null);
+  }
   workspaceRegistry = {
     ...workspaceRegistry,
     active_workspace_id: nextActiveWorkspaceId,
