@@ -20,3 +20,4 @@ Thumbs.db
 # Runtime artifacts
 *.log
 .tmp/
+apps/desktop/noteapp-desktop/release/
