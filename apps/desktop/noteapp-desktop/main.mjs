@@ -165,6 +165,38 @@ async function waitForBridgeHealth() {
   throw new Error(lastError);
 }
 
+async function loadBridgeDependencies() {
+  const response = await fetch(`${bridgeBaseUrl}/health/dependencies`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`dependency health returned ${response.status}`);
+  }
+  return response.json();
+}
+
+function dependencyErrorMessage(payload) {
+  const problems = [];
+  if (!payload || typeof payload !== 'object') {
+    return '本地服务依赖状态返回无效。';
+  }
+  if (payload.python && payload.python.ok === false) {
+    problems.push(`Python 不可用：${payload.python.message || payload.python.command || 'unknown error'}`);
+  }
+  if (payload.sync && payload.sync.ok === false) {
+    const missing = Array.isArray(payload.sync.missing_env) ? payload.sync.missing_env.join(', ') : 'unknown';
+    problems.push(`同步环境变量不完整：${missing}`);
+  }
+  if (payload.workspace && payload.workspace.configured && payload.workspace.exists === false) {
+    problems.push(`工作区路径不存在：${payload.workspace.vault_root || 'unknown path'}`);
+  }
+  if (problems.length === 0) {
+    return null;
+  }
+  return [
+    '桌面端启动完成，但本地依赖未准备好：',
+    ...problems.map((problem, index) => `${index + 1}. ${problem}`),
+  ].join('\n');
+}
+
 async function resolveRendererEntry() {
   if (devRendererUrl) {
     return devRendererUrl;
@@ -189,6 +221,11 @@ async function bootstrap() {
 
   ensureBridgeProcess();
   await waitForBridgeHealth();
+  const dependencies = await loadBridgeDependencies();
+  const dependencyError = dependencyErrorMessage(dependencies);
+  if (dependencyError) {
+    throw new Error(dependencyError);
+  }
   const rendererEntry = await resolveRendererEntry();
   await mainWindow.loadURL(rendererEntry);
 }
