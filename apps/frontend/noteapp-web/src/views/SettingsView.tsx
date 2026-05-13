@@ -10,15 +10,19 @@ import {
   Eye,
   EyeOff,
   ListChecks,
+  Loader2,
   Palette,
   RefreshCw,
   Save,
   Settings,
+  Trash2,
+  X,
 } from 'lucide-react';
 
 import type { SyncShellAction, SyncShellActionEmphasis, SyncShellLevel } from '../syncShell';
 import { useLocalSettingsController } from '../useLocalSettingsSnapshot';
 import { useSyncShellController } from '../useSyncShellSnapshot';
+import type { RegisteredWorkspace } from '../useWorkspaceRegistry';
 
 const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
 const syncBridgeUrl = (
@@ -29,7 +33,15 @@ type SettingsTab = 'general' | 'sync' | 'appearance' | 'ai';
 
 type SettingsViewProps = {
   initialTab?: SettingsTab;
-  onWorkspaceChanged?: () => void;
+  workspaces?: RegisteredWorkspace[];
+  activeWorkspace?: RegisteredWorkspace | null;
+  isWorkspaceLoading?: boolean;
+  isWorkspaceMutating?: boolean;
+  isWorkspaceSwitching?: boolean;
+  workspaceError?: string | null;
+  onSelectWorkspaceFolder?: () => void | Promise<void>;
+  onActivateWorkspace?: (workspaceId: string) => void | Promise<void>;
+  onDeleteWorkspace?: (workspaceId: string) => void | Promise<void>;
 };
 
 type AiProviderHealthResult = {
@@ -297,7 +309,18 @@ function SettingsDetailRow({
   );
 }
 
-export default function SettingsView({ initialTab = 'sync', onWorkspaceChanged }: SettingsViewProps) {
+export default function SettingsView({
+  initialTab = 'sync',
+  workspaces = [],
+  activeWorkspace = null,
+  isWorkspaceLoading = false,
+  isWorkspaceMutating = false,
+  isWorkspaceSwitching = false,
+  workspaceError = null,
+  onSelectWorkspaceFolder,
+  onActivateWorkspace,
+  onDeleteWorkspace,
+}: SettingsViewProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(
     visibleTabs.some((tab) => tab.id === initialTab) ? initialTab : 'general',
   );
@@ -325,7 +348,6 @@ export default function SettingsView({ initialTab = 'sync', onWorkspaceChanged }
     savedAtMs,
     refresh: refreshSettings,
     saveSettings,
-    selectWorkspaceRoot,
   } = useLocalSettingsController();
   const [themeDraft, setThemeDraft] = useState(settingsSummary.theme);
   const [localModelStatusDraft, setLocalModelStatusDraft] = useState(settingsSummary.localModelStatus);
@@ -338,6 +360,8 @@ export default function SettingsView({ initialTab = 'sync', onWorkspaceChanged }
   const [isAiKeyVisible, setIsAiKeyVisible] = useState(false);
   const [isTestingAiProvider, setIsTestingAiProvider] = useState(false);
   const [aiProviderHealth, setAiProviderHealth] = useState<AiProviderHealthResult | null>(null);
+  const [workspaceToDelete, setWorkspaceToDelete] = useState<RegisteredWorkspace | null>(null);
+  const [workspaceToActivate, setWorkspaceToActivate] = useState<RegisteredWorkspace | null>(null);
 
   useEffect(() => {
     setThemeDraft(settingsSummary.theme);
@@ -413,9 +437,7 @@ export default function SettingsView({ initialTab = 'sync', onWorkspaceChanged }
     }
   };
   const saveWorkspaceFolder = async () => {
-    await selectWorkspaceRoot();
-    await Promise.all([refreshSync(), refreshSettings()]);
-    onWorkspaceChanged?.();
+    await onSelectWorkspaceFolder?.();
   };
   const savedAtLabel = savedAtMs ? `已保存 ${formatActivityTime(savedAtMs)}` : null;
   const localChangesCard = syncCards.find((card) => card.card_id === 'local-changes') ?? null;
@@ -940,6 +962,104 @@ export default function SettingsView({ initialTab = 'sync', onWorkspaceChanged }
                   </button>
                 </div>
                 <div className="mb-5 rounded-lg border border-[#0f3460] bg-[#121316] p-4">
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 text-[#e3e2e6]">
+                        <FolderOpen size={18} className="text-[#a9c8fc]" />
+                        <h3 className="text-[15px] font-bold">工作区</h3>
+                      </div>
+                      <p className="mt-2 text-[12px] leading-relaxed text-slate-400">
+                        工作区切换、添加与移除统一放在这里。移除只会从列表移除，不会删除原始文件。
+                      </p>
+                    </div>
+                    <button
+                      disabled={isWorkspaceLoading || isWorkspaceMutating || isWorkspaceSwitching}
+                      onClick={saveWorkspaceFolder}
+                      className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-4 text-[13px] font-semibold text-[#a9c8fc] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {(isWorkspaceLoading || isWorkspaceMutating) && <Loader2 size={15} className="animate-spin" />}
+                      <FolderOpen size={15} />
+                      添加工作区
+                    </button>
+                  </div>
+                  {workspaceError && (
+                    <div className="mb-3 rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] leading-5 text-[#ffb782]">
+                      {workspaceError}
+                    </div>
+                  )}
+                  <div className="hidden">
+                    <div className="text-[11px] uppercase tracking-wider text-slate-500">当前工作区</div>
+                    <div className="mt-2 truncate text-[13px] font-semibold text-[#e3e2e6]">
+                      {activeWorkspace?.name ?? '未选择工作区'}
+                    </div>
+                    <div className="mt-1 break-all font-mono text-[11px] text-slate-500">
+                      {activeWorkspace?.vault_root ?? settingsSummary.vaultRoot}
+                    </div>
+                  </div>
+                  <div className="grid gap-3">
+                    {workspaces.length === 0 && (
+                      <div className="rounded-lg border border-dashed border-[#0f3460] px-3 py-4 text-[12px] text-slate-500">
+                        暂无工作区，请先添加一个 Markdown 工作区。
+                      </div>
+                    )}
+                    {workspaces.map((workspace) => (
+                      <div
+                        key={workspace.id}
+                        className={`grid grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl border p-4 ${
+                          workspace.is_active
+                            ? 'border-[#e94560]/40 bg-[#0f3460]/30'
+                            : 'border-[#0f3460] bg-[#0d0e11]'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          disabled={isWorkspaceSwitching}
+                          onClick={() => {
+                            if (!workspace.is_active) {
+                              setWorkspaceToActivate(workspace);
+                            }
+                          }}
+                          className="min-w-0 text-left disabled:cursor-not-allowed"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-[13px] font-semibold text-[#e3e2e6]">{workspace.name}</span>
+                            {workspace.is_active && (
+                              <span className="rounded border border-[#e94560]/40 bg-[#e94560]/10 px-2 py-0.5 text-[10px] font-bold text-[#ffb3c0]">
+                                当前
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 break-all font-mono text-[11px] text-slate-500">{workspace.vault_root}</p>
+                          <p className="mt-2 text-[11px] text-slate-500">
+                            {workspace.initialized ? '已初始化' : '待初始化'} · {workspace.exists ? '路径存在' : '路径缺失'}
+                          </p>
+                        </button>
+                        <div className="flex items-center gap-2">
+                          {!workspace.is_active && (
+                            <button
+                              type="button"
+                              disabled={isWorkspaceSwitching}
+                              onClick={() => setWorkspaceToActivate(workspace)}
+                              className="inline-flex h-9 items-center justify-center rounded-lg border border-[#2a5ea3] bg-[#0f3460]/30 px-3 text-[12px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              切换
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            disabled={isWorkspaceMutating || isWorkspaceSwitching}
+                            onClick={() => setWorkspaceToDelete(workspace)}
+                            className="inline-flex h-9 items-center justify-center rounded-lg border border-[#0f3460] bg-[#121316] px-3 text-[12px] text-slate-400 hover:text-[#ffb782] disabled:cursor-not-allowed disabled:opacity-50"
+                            title="移除工作区"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="hidden">
                   <div className="mb-3 flex items-center gap-2 text-[#e3e2e6]">
                     <FolderOpen size={18} className="text-[#a9c8fc]" />
                     <h3 className="text-[15px] font-bold">工作区文件夹</h3>
@@ -974,6 +1094,90 @@ export default function SettingsView({ initialTab = 'sync', onWorkspaceChanged }
                 </div>
                 {settingsError && (
                   <p className="text-[12px] text-[#ffb782] mt-4 line-clamp-3">{settingsError}</p>
+                )}
+                {workspaceToDelete && (
+                  <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+                    <div className="w-full max-w-md rounded-2xl border border-[#0f3460] bg-[#16213e] p-5 shadow-2xl shadow-black/50">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-lg font-bold text-[#e3e2e6]">移除工作区</h3>
+                        <button
+                          type="button"
+                          onClick={() => setWorkspaceToDelete(null)}
+                          className="rounded border border-[#0f3460] bg-[#121316] p-2 text-slate-400 hover:text-white"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                      <p className="mt-3 text-[13px] leading-6 text-slate-400">
+                        将从列表移除：{workspaceToDelete.name}
+                      </p>
+                      <p className="mt-2 break-all font-mono text-[11px] text-slate-500">{workspaceToDelete.vault_root}</p>
+                      <div className="mt-5 flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setWorkspaceToDelete(null)}
+                          className="rounded border border-[#0f3460] bg-[#121316] px-4 py-2 text-[13px] text-slate-300 hover:text-white"
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isWorkspaceMutating || isWorkspaceSwitching}
+                          onClick={() => {
+                            void onDeleteWorkspace?.(workspaceToDelete.id);
+                            setWorkspaceToDelete(null);
+                          }}
+                          className="inline-flex items-center justify-center gap-2 rounded border border-[#e94560]/40 bg-[#e94560]/20 px-4 py-2 text-[13px] font-semibold text-[#ffb3c0] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {(isWorkspaceMutating || isWorkspaceSwitching) && <Loader2 size={14} className="animate-spin" />}
+                          移除
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {workspaceToActivate && (
+                  <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+                    <div className="w-full max-w-md rounded-2xl border border-[#0f3460] bg-[#16213e] p-5 shadow-2xl shadow-black/50">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-lg font-bold text-[#e3e2e6]">切换工作区</h3>
+                        <button
+                          type="button"
+                          disabled={isWorkspaceSwitching}
+                          onClick={() => setWorkspaceToActivate(null)}
+                          className="rounded border border-[#0f3460] bg-[#121316] p-2 text-slate-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                      <p className="mt-3 text-[13px] leading-6 text-slate-400">
+                        确认切换到：{workspaceToActivate.name}
+                      </p>
+                      <p className="mt-2 break-all font-mono text-[11px] text-slate-500">{workspaceToActivate.vault_root}</p>
+                      <div className="mt-5 flex justify-end gap-2">
+                        <button
+                          type="button"
+                          disabled={isWorkspaceSwitching}
+                          onClick={() => setWorkspaceToActivate(null)}
+                          className="rounded border border-[#0f3460] bg-[#121316] px-4 py-2 text-[13px] text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isWorkspaceSwitching}
+                          onClick={() => {
+                            void onActivateWorkspace?.(workspaceToActivate.id);
+                            setWorkspaceToActivate(null);
+                          }}
+                          className="inline-flex items-center justify-center gap-2 rounded border border-[#2a5ea3] bg-[#0f3460]/40 px-4 py-2 text-[13px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isWorkspaceSwitching && <Loader2 size={14} className="animate-spin" />}
+                          确认切换
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 )}
               </section>
             )}

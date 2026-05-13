@@ -22,7 +22,7 @@ import AiChatView from './views/AiChatView';
 import type { AiContextDraft } from './aiContext';
 import { invalidateLocalSettingsCache } from './useLocalSettingsSnapshot';
 import { invalidateWorkspaceFilesCache } from './useWorkspaceFiles';
-import { useWorkspaceRegistryController, type RegisteredWorkspace } from './useWorkspaceRegistry';
+import { useWorkspaceRegistryController } from './useWorkspaceRegistry';
 
 type AppView = 'explorer' | 'conflicts' | 'trash' | 'ai-chat' | 'ai-wiki' | 'settings' | 'sync';
 
@@ -305,39 +305,40 @@ function WorkspaceGate({
 }
 
 function TopBar({
-  activeWorkspace,
-  workspaces,
-  isWorkspaceLoading,
-  isWorkspaceMutating,
-  isWorkspaceSwitching,
-  workspaceError,
-  onSelectWorkspaceFolder,
-  onActivateWorkspace,
-  onDeleteWorkspace,
   userInfo,
   onLogout,
 }: {
-  activeWorkspace: RegisteredWorkspace | null;
-  workspaces: RegisteredWorkspace[];
-  isWorkspaceLoading: boolean;
-  isWorkspaceMutating: boolean;
-  isWorkspaceSwitching: boolean;
-  workspaceError: string | null;
-  onSelectWorkspaceFolder: () => void;
-  onActivateWorkspace: (workspaceId: string) => Promise<void>;
-  onDeleteWorkspace: (workspaceId: string) => void;
   userInfo: unknown;
   onLogout: () => void;
 }) {
   const userName = userNameFromUserInfo(userInfo);
-  const [isWorkspaceDialogOpen, setIsWorkspaceDialogOpen] = useState(false);
-  const [workspaceToDelete, setWorkspaceToDelete] = useState<RegisteredWorkspace | null>(null);
-  const [workspaceToActivate, setWorkspaceToActivate] = useState<RegisteredWorkspace | null>(null);
+  const activeWorkspace = null;
+  const isWorkspaceLoading = false;
+  const isWorkspaceDialogOpen = false;
+  const workspaceError: string | null = null;
+  const workspaces: Array<{
+    id: string;
+    name: string;
+    vault_root: string;
+    initialized: boolean;
+    exists: boolean;
+    is_active: boolean;
+  }> = [];
+  const isWorkspaceMutating = false;
+  const isWorkspaceSwitching = false;
+  const workspaceToDelete = null as null | { id: string; name: string; vault_root: string };
+  const workspaceToActivate = null as null | { id: string; name: string; vault_root: string };
+  const setIsWorkspaceDialogOpen = (_value: boolean) => {};
+  const setWorkspaceToDelete = (_workspace: typeof workspaceToDelete) => {};
+  const setWorkspaceToActivate = (_workspace: typeof workspaceToActivate) => {};
+  const onSelectWorkspaceFolder = () => {};
+  const onDeleteWorkspace = (_workspaceId: string) => {};
+  const onActivateWorkspace = async (_workspaceId: string) => {};
 
   return (
     <>
     <header className="sticky top-0 z-30 flex h-16 w-full flex-shrink-0 items-center justify-between border-b border-[#0f3460] bg-[#16213e]/80 px-4 backdrop-blur-md md:px-6">
-      <div className="min-w-0">
+      <div className="flex-1 opacity-0 pointer-events-none">
         <button
           type="button"
           onClick={() => setIsWorkspaceDialogOpen(true)}
@@ -646,6 +647,8 @@ export default function App() {
     refreshWorkspaceShell();
   }
 
+  const shouldShowWorkspaceGate = !activeWorkspace && currentView !== 'settings';
+
   return (
     <div className="flex h-screen overflow-hidden bg-[#1a1a2e] font-sans text-[#e3e2e6]">
       {isAuthLoading && (
@@ -661,15 +664,6 @@ export default function App() {
 
       <div className="relative flex h-screen min-w-0 flex-1 flex-col overflow-hidden bg-[#1a1a2e]">
         <TopBar
-          activeWorkspace={activeWorkspace}
-          workspaces={workspaces}
-          isWorkspaceLoading={isWorkspaceLoading}
-          isWorkspaceMutating={isWorkspaceMutating}
-          isWorkspaceSwitching={isWorkspaceSwitching}
-          workspaceError={workspaceError}
-          onSelectWorkspaceFolder={() => void handleSelectWorkspaceFolder()}
-          onActivateWorkspace={handleActivateWorkspace}
-          onDeleteWorkspace={(workspaceId) => void handleDeleteWorkspace(workspaceId)}
           userInfo={userInfo}
           onLogout={() => void logout()}
         />
@@ -686,7 +680,7 @@ export default function App() {
               </div>
             </div>
           )}
-          {!activeWorkspace ? (
+          {shouldShowWorkspaceGate ? (
             <WorkspaceGate
               isLoading={isWorkspaceLoading}
               isMutating={isWorkspaceMutating}
@@ -725,19 +719,29 @@ export default function App() {
               {currentView === 'settings' && (
                 <SettingsView
                   initialTab="general"
-                  onWorkspaceChanged={() => {
-                    void refreshWorkspaces();
-                    refreshWorkspaceShell();
-                  }}
+                  workspaces={workspaces}
+                  activeWorkspace={activeWorkspace}
+                  isWorkspaceLoading={isWorkspaceLoading}
+                  isWorkspaceMutating={isWorkspaceMutating}
+                  isWorkspaceSwitching={isWorkspaceSwitching}
+                  workspaceError={workspaceError}
+                  onSelectWorkspaceFolder={() => void handleSelectWorkspaceFolder()}
+                  onActivateWorkspace={handleActivateWorkspace}
+                  onDeleteWorkspace={(workspaceId) => void handleDeleteWorkspace(workspaceId)}
                 />
               )}
               {currentView === 'sync' && (
                 <SettingsView
                   initialTab="sync"
-                  onWorkspaceChanged={() => {
-                    void refreshWorkspaces();
-                    refreshWorkspaceShell();
-                  }}
+                  workspaces={workspaces}
+                  activeWorkspace={activeWorkspace}
+                  isWorkspaceLoading={isWorkspaceLoading}
+                  isWorkspaceMutating={isWorkspaceMutating}
+                  isWorkspaceSwitching={isWorkspaceSwitching}
+                  workspaceError={workspaceError}
+                  onSelectWorkspaceFolder={() => void handleSelectWorkspaceFolder()}
+                  onActivateWorkspace={handleActivateWorkspace}
+                  onDeleteWorkspace={(workspaceId) => void handleDeleteWorkspace(workspaceId)}
                 />
               )}
             </motion.div>

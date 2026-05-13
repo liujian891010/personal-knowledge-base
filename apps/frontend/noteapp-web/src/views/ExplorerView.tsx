@@ -1126,7 +1126,7 @@ export default function ExplorerView({
                     <span
                       aria-hidden="true"
                       className="flex-shrink-0"
-                      style={{ width: '7px' }}
+                      style={{ width: row.path === '' ? '0px' : '7px' }}
                     />
                     {collapsedFolders.has(row.path) ? (
                       <ChevronRight size={14} className="text-slate-500" />
