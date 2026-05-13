@@ -18,9 +18,13 @@ const devRendererUrl = process.env.NOTEAPP_DESKTOP_WEB_URL || '';
 const prodRendererPath = path.resolve(webAppRoot, 'dist', 'index.html');
 const healthTimeoutMs = 20_000;
 const healthPollIntervalMs = 500;
+const rendererHost = '127.0.0.1';
+const rendererPort = Number(process.env.NOTEAPP_DESKTOP_RENDERER_PORT || 3000);
+const fallbackRendererDevUrl = `http://${rendererHost}:${rendererPort}`;
 
 let mainWindow = null;
 let bridgeProcess = null;
+let rendererProcess = null;
 let isQuitting = false;
 
 function desktopEnv() {
@@ -147,6 +151,22 @@ function ensureBridgeProcess() {
   return bridgeProcess;
 }
 
+function ensureRendererProcess() {
+  if (rendererProcess && !rendererProcess.killed) {
+    return rendererProcess;
+  }
+  rendererProcess = spawn('npm.cmd', ['run', 'dev', '--', '--host', rendererHost, '--port', String(rendererPort)], {
+    cwd: webAppRoot,
+    env: process.env,
+    stdio: 'inherit',
+    windowsHide: true,
+  });
+  rendererProcess.once('exit', () => {
+    rendererProcess = null;
+  });
+  return rendererProcess;
+}
+
 async function waitForBridgeHealth() {
   const startedAt = Date.now();
   let lastError = 'bridge is not ready';
@@ -202,15 +222,31 @@ async function resolveRendererEntry() {
     return devRendererUrl;
   }
   if (!existsSync(prodRendererPath)) {
-    throw new Error([
-      '桌面端没有找到前端入口。',
-      `缺少文件：${prodRendererPath}`,
-      '',
-      '开发模式请设置 NOTEAPP_DESKTOP_WEB_URL。',
-      '生产模式请先构建 noteapp-web 的 dist。',
-    ].join('\n'));
+    ensureRendererProcess();
+    return fallbackRendererDevUrl;
   }
   return pathToFileURL(prodRendererPath).toString();
+}
+
+async function waitForRenderer(entryUrl) {
+  if (!entryUrl.startsWith('http://')) {
+    return;
+  }
+  const startedAt = Date.now();
+  let lastError = 'renderer is not ready';
+  while (Date.now() - startedAt < healthTimeoutMs) {
+    try {
+      const response = await fetch(entryUrl, { cache: 'no-store' });
+      if (response.ok) {
+        return;
+      }
+      lastError = `renderer returned ${response.status}`;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, healthPollIntervalMs));
+  }
+  throw new Error(`前端入口启动失败：${lastError}`);
 }
 
 async function bootstrap() {
@@ -227,6 +263,7 @@ async function bootstrap() {
     throw new Error(dependencyError);
   }
   const rendererEntry = await resolveRendererEntry();
+  await waitForRenderer(rendererEntry);
   await mainWindow.loadURL(rendererEntry);
 }
 
@@ -235,6 +272,13 @@ function shutdownBridge() {
     return;
   }
   bridgeProcess.kill();
+}
+
+function shutdownRenderer() {
+  if (!rendererProcess || rendererProcess.killed) {
+    return;
+  }
+  rendererProcess.kill();
 }
 
 ipcMain.handle('noteapp:select-workspace-folder', async () => {
@@ -258,6 +302,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   isQuitting = true;
   shutdownBridge();
+  shutdownRenderer();
 });
 
 app.on('activate', async () => {
