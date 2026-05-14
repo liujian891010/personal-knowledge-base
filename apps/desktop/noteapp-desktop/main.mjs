@@ -233,7 +233,11 @@ function ensureRendererProcess() {
     return rendererProcess;
   }
   writeDesktopLog(`starting renderer dev server in ${webAppRoot()}`);
-  rendererProcess = spawn('npm.cmd', ['run', 'dev', '--', '--host', rendererHost, '--port', String(rendererPort)], {
+  const rendererCommand = process.platform === 'win32' ? 'cmd.exe' : 'npm';
+  const rendererArgs = process.platform === 'win32'
+    ? ['/d', '/s', '/c', `npm.cmd run dev -- --host ${rendererHost} --port ${rendererPort}`]
+    : ['run', 'dev', '--', '--host', rendererHost, '--port', String(rendererPort)];
+  rendererProcess = spawn(rendererCommand, rendererArgs, {
     cwd: webAppRoot(),
     env: process.env,
     stdio: 'inherit',

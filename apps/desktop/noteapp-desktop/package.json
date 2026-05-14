@@ -11,7 +11,9 @@
     "start": "electron .",
     "build:frontend": "node scripts/build-frontend.mjs",
     "pack:win": "npm.cmd run build:frontend && node scripts/package-win.mjs --dir --win nsis",
-    "dist:win": "npm.cmd run build:frontend && node scripts/package-win.mjs --win nsis"
+    "dist:win": "npm.cmd run build:frontend && node scripts/package-win.mjs --win nsis",
+    "pack:mac": "npm run build:frontend && node scripts/package-mac.mjs --dir --mac",
+    "dist:mac": "npm run build:frontend && node scripts/package-mac.mjs --mac dmg zip"
   },
   "devDependencies": {
     "electron": "^37.2.0",
@@ -71,6 +73,28 @@
           ]
         }
       ]
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

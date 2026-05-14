@@ -44,6 +44,29 @@ cd apps\desktop\noteapp-desktop
 npm.cmd run start
 ```
 
+## 打包
+
+### Windows
+
+```powershell
+cd apps\desktop\noteapp-desktop
+npm.cmd run dist:win
+```
+
+产物输出到 `apps/desktop/noteapp-desktop/release/`。
+
+### macOS
+
+macOS 安装包需要在 macOS 主机上构建；Electron Builder 不支持在 Windows 上直接产出 macOS `dmg` / `zip`。
+
+```bash
+cd apps/desktop/noteapp-desktop
+npm install
+npm run dist:mac
+```
+
+未配置 Apple 开发者证书时，脚本默认关闭证书自动发现，可产出未签名本地测试包。正式发布仍需补齐签名与 notarization。
+
 ## 当前依赖的环境变量
 
 如果未传，桌面端会使用默认值：
