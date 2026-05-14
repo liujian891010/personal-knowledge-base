@@ -20,4 +20,7 @@ Thumbs.db
 # Runtime artifacts
 *.log
 .tmp/
-apps/desktop/noteapp-desktop/release/
+# 忽略 Electron 编译输出
+release/
+win-unpacked/
+*.exe
