@@ -10,6 +10,12 @@ from clients.desktop.crypto import (
     build_placeholder_blob_id,
     is_e2ee_crypto_available,
 )
+from clients.desktop.recovery import (
+    RECOVERY_PACKAGE_SCHEMA_VERSION,
+    build_recovery_package,
+    unwrap_recovery_package,
+    validate_recovery_package,
+)
 
 
 class DesktopCryptoTests(unittest.TestCase):
@@ -78,6 +84,56 @@ class DesktopCryptoTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "authentication failed"):
             wrong_provider.decrypt_payload(encrypted, content_hash=content_hash)
+
+    @unittest.skipUnless(is_e2ee_crypto_available(), "PyNaCl is not installed")
+    def test_recovery_package_round_trip_requires_phrase_and_package(self) -> None:
+        vault_key = b"\x09" * 32
+        package = build_recovery_package(
+            vault_id="vault-001",
+            vault_key=vault_key,
+            recovery_phrase="correct horse battery staple",
+            created_at=1770000040000,
+            memory_kib=8,
+            iterations=1,
+            salt=b"\x01" * 16,
+            nonce=b"\x02" * 24,
+        )
+
+        validate_recovery_package(package)
+        recovered = unwrap_recovery_package(
+            package,
+            recovery_phrase="correct horse battery staple",
+            expected_vault_id="vault-001",
+        )
+
+        self.assertEqual(package["schema_version"], RECOVERY_PACKAGE_SCHEMA_VERSION)
+        self.assertNotIn(vault_key.hex(), str(package))
+        self.assertEqual(recovered, vault_key)
+
+    @unittest.skipUnless(is_e2ee_crypto_available(), "PyNaCl is not installed")
+    def test_recovery_package_rejects_wrong_phrase_and_tampering(self) -> None:
+        package = build_recovery_package(
+            vault_id="vault-001",
+            vault_key=b"\x09" * 32,
+            recovery_phrase="correct",
+            created_at=1770000040000,
+            memory_kib=8,
+            iterations=1,
+            salt=b"\x01" * 16,
+            nonce=b"\x02" * 24,
+        )
+
+        with self.assertRaisesRegex(ValueError, "did not decrypt"):
+            unwrap_recovery_package(
+                package,
+                recovery_phrase="wrong",
+                expected_vault_id="vault-001",
+            )
+
+        tampered = dict(package)
+        tampered["vault_id"] = "vault-002"
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            validate_recovery_package(tampered)
 
 
 if __name__ == "__main__":

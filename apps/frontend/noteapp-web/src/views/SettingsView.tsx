@@ -5,6 +5,7 @@ import {
   ChevronRight,
   CheckCircle2,
   Cloud,
+  Copy,
   FolderOpen,
   GitCommitHorizontal,
   Eye,
@@ -22,7 +23,9 @@ import {
 import type { SyncShellAction, SyncShellActionEmphasis, SyncShellLevel } from '../syncShell';
 import { useLocalSettingsController } from '../useLocalSettingsSnapshot';
 import { useSyncShellController } from '../useSyncShellSnapshot';
+import { useWorkspaceDevicesController } from '../useWorkspaceDevices';
 import type { RegisteredWorkspace } from '../useWorkspaceRegistry';
+import type { WorkspaceVaultDeviceRecord } from '../workspaceDevices';
 
 const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
 const syncBridgeUrl = (
@@ -62,10 +65,10 @@ const syncLevelClasses: Record<SyncShellLevel, string> = {
 const tabs: Array<{ id: SettingsTab; label: string; icon: React.ComponentType<{ size?: number }> }> = [
   { id: 'general', label: '通用', icon: Settings },
   { id: 'sync', label: '同步', icon: Cloud },
-  { id: 'appearance', label: '外观', icon: Palette },
+  { id: 'appearance', label: '外观与安全', icon: Palette },
   { id: 'ai', label: 'AI 模型', icon: Bot },
 ];
-const visibleTabs = tabs.filter((tab) => tab.id === 'general' || tab.id === 'ai');
+const visibleTabs = tabs;
 
 const actionButtonClasses: Record<SyncShellActionEmphasis, string> = {
   normal: 'bg-[#121316] border-[#0f3460] text-slate-300 hover:text-white',
@@ -309,6 +312,55 @@ function SettingsDetailRow({
   );
 }
 
+function formatNullableDeviceTime(ms: number | null): string {
+  return ms ? formatActivityTime(ms) : '从未上报';
+}
+
+function formatDeviceInactiveDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return '未配置';
+  }
+  const days = Math.floor(ms / 86_400_000);
+  if (days >= 1) {
+    return `${days} 天`;
+  }
+  const hours = Math.floor(ms / 3_600_000);
+  if (hours >= 1) {
+    return `${hours} 小时`;
+  }
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes >= 1) {
+    return `${minutes} 分钟`;
+  }
+  return `${ms} ms`;
+}
+
+function deviceLifecycleInfo(device: WorkspaceVaultDeviceRecord): {
+  label: string;
+  className: string;
+  description: string;
+} {
+  if (device.is_revoked) {
+    return {
+      label: '已移除',
+      className: 'border-[#e94560]/40 bg-[#e94560]/10 text-[#ffb3c0]',
+      description: '该设备已被撤销同步资格，不再参与新提交或 tombstone 回收判断。',
+    };
+  }
+  if (device.is_inactive_candidate) {
+    return {
+      label: '疑似失活',
+      className: 'border-[#ffb782]/30 bg-[#ffb782]/10 text-[#ffb782]',
+      description: '超过失活阈值未上报 heartbeat，后续可由用户确认移除。',
+    };
+  }
+  return {
+    label: '活跃',
+    className: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300',
+    description: '最近仍在上报 heartbeat，参与同步 ack 与回收安全判断。',
+  };
+}
+
 export default function SettingsView({
   initialTab = 'sync',
   workspaces = [],
@@ -345,10 +397,27 @@ export default function SettingsView({
     lastError: settingsError,
     isRefreshing: isSettingsRefreshing,
     isSaving: isSettingsSaving,
+    isCryptoMutating,
     savedAtMs,
     refresh: refreshSettings,
     saveSettings,
+    unlockCrypto,
+    lockCrypto,
+    exportCryptoRecoveryPackage,
+    importCryptoRecoveryPackage,
   } = useLocalSettingsController();
+  const {
+    deviceList,
+    devices: workspaceDevices,
+    lastHeartbeat: deviceHeartbeat,
+    lastError: deviceLastError,
+    isLoading: isDevicesLoading,
+    isMutating: isDevicesMutating,
+    loadDevices,
+    heartbeatDevice,
+    revokeDevice,
+    clear: clearDevices,
+  } = useWorkspaceDevicesController();
   const [themeDraft, setThemeDraft] = useState(settingsSummary.theme);
   const [localModelStatusDraft, setLocalModelStatusDraft] = useState(settingsSummary.localModelStatus);
   const [embeddingStatusDraft, setEmbeddingStatusDraft] = useState(settingsSummary.embeddingStatus);
@@ -360,8 +429,16 @@ export default function SettingsView({
   const [isAiKeyVisible, setIsAiKeyVisible] = useState(false);
   const [isTestingAiProvider, setIsTestingAiProvider] = useState(false);
   const [aiProviderHealth, setAiProviderHealth] = useState<AiProviderHealthResult | null>(null);
+  const [vaultKeyDraft, setVaultKeyDraft] = useState('');
+  const [isVaultKeyVisible, setIsVaultKeyVisible] = useState(false);
+  const [recoveryPhraseDraft, setRecoveryPhraseDraft] = useState('');
+  const [recoveryPackageDraft, setRecoveryPackageDraft] = useState('');
+  const [exportedRecoveryPackageJson, setExportedRecoveryPackageJson] = useState('');
+  const [cryptoNotice, setCryptoNotice] = useState<string | null>(null);
   const [workspaceToDelete, setWorkspaceToDelete] = useState<RegisteredWorkspace | null>(null);
   const [workspaceToActivate, setWorkspaceToActivate] = useState<RegisteredWorkspace | null>(null);
+  const [deviceToRevoke, setDeviceToRevoke] = useState<WorkspaceVaultDeviceRecord | null>(null);
+  const activeWorkspaceId = activeWorkspace?.id ?? null;
 
   useEffect(() => {
     setThemeDraft(settingsSummary.theme);
@@ -374,6 +451,12 @@ export default function SettingsView({
     setConfirmedAiKeyDraft(settingsSummary.aiKey);
     setIsAiKeyVisible(false);
     setAiProviderHealth(null);
+    setVaultKeyDraft('');
+    setIsVaultKeyVisible(false);
+    setRecoveryPhraseDraft('');
+    setRecoveryPackageDraft('');
+    setExportedRecoveryPackageJson('');
+    setCryptoNotice(null);
   }, [
     settingsSummary.theme,
     settingsSummary.localModelStatus,
@@ -382,7 +465,17 @@ export default function SettingsView({
     settingsSummary.aiBaseUrl,
     settingsSummary.aiModelId,
     settingsSummary.aiKey,
+    settingsSummary.cryptoUnlocked,
   ]);
+
+  useEffect(() => {
+    if (activeTab !== 'sync' || !activeWorkspaceId) {
+      clearDevices();
+      setDeviceToRevoke(null);
+      return;
+    }
+    void loadDevices().catch(() => undefined);
+  }, [activeTab, activeWorkspaceId, clearDevices, loadDevices]);
 
   const saveLocalSettings = async () => {
     await saveSettings({
@@ -440,6 +533,98 @@ export default function SettingsView({
     await onSelectWorkspaceFolder?.();
   };
   const savedAtLabel = savedAtMs ? `已保存 ${formatActivityTime(savedAtMs)}` : null;
+  const normalizeVaultKeyBase64 = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return '';
+    }
+    if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {
+      const bytes = trimmed.match(/.{1,2}/g)?.map((item) => Number.parseInt(item, 16)) ?? [];
+      return btoa(String.fromCharCode(...bytes));
+    }
+    return trimmed;
+  };
+  const unlockVaultKey = async () => {
+    const normalized = normalizeVaultKeyBase64(vaultKeyDraft);
+    if (!normalized) {
+      return;
+    }
+    await unlockCrypto(normalized);
+    setVaultKeyDraft('');
+    setIsVaultKeyVisible(false);
+  };
+  const lockVaultKey = async () => {
+    await lockCrypto();
+    setVaultKeyDraft('');
+    setIsVaultKeyVisible(false);
+  };
+  const exportRecoveryPackage = async () => {
+    if (!recoveryPhraseDraft.trim()) {
+      setCryptoNotice('请输入恢复短语后再生成恢复包。');
+      return;
+    }
+    const recoveryPackageJson = await exportCryptoRecoveryPackage(recoveryPhraseDraft.trim());
+    if (recoveryPackageJson) {
+      setExportedRecoveryPackageJson(recoveryPackageJson);
+      setCryptoNotice('恢复包已生成。请把恢复包 JSON 和恢复短语分开保存。');
+    }
+  };
+  const importRecoveryPackage = async () => {
+    if (!recoveryPhraseDraft.trim()) {
+      setCryptoNotice('请输入恢复短语。');
+      return;
+    }
+    if (!recoveryPackageDraft.trim()) {
+      setCryptoNotice('请提供恢复包文件，或使用一台已解锁设备进行本地配对。');
+      return;
+    }
+    const imported = await importCryptoRecoveryPackage(
+      recoveryPhraseDraft.trim(),
+      recoveryPackageDraft.trim(),
+    );
+    if (imported) {
+      setRecoveryPhraseDraft('');
+      setRecoveryPackageDraft('');
+      setExportedRecoveryPackageJson('');
+      setCryptoNotice('恢复包已导入，本机已解锁 e2ee-v1。');
+    }
+  };
+  const copyExportedRecoveryPackage = async () => {
+    if (!exportedRecoveryPackageJson) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(exportedRecoveryPackageJson);
+      setCryptoNotice('恢复包 JSON 已复制。');
+    } catch {
+      setCryptoNotice('浏览器拒绝剪贴板写入，请手动复制恢复包 JSON。');
+    }
+  };
+  const refreshDevices = async () => {
+    try {
+      await loadDevices();
+    } catch {
+      // Error state is stored in the device controller.
+    }
+  };
+  const sendDeviceHeartbeat = async () => {
+    try {
+      await heartbeatDevice();
+    } catch {
+      // Error state is stored in the device controller.
+    }
+  };
+  const confirmRevokeWorkspaceDevice = async () => {
+    if (!deviceToRevoke || deviceToRevoke.is_current_device || deviceToRevoke.is_revoked) {
+      return;
+    }
+    try {
+      await revokeDevice(deviceToRevoke.device_id);
+      setDeviceToRevoke(null);
+    } catch {
+      // Keep the dialog open and show the controller error.
+    }
+  };
   const localChangesCard = syncCards.find((card) => card.card_id === 'local-changes') ?? null;
   const inspectLocalChangesAction = localChangesCard?.actions.find(
     (action) => action.action_id === 'detect-local-changes',
@@ -586,6 +771,162 @@ export default function SettingsView({
                     </div>
                   </section>
                 )}
+
+                <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-4 md:p-5 shadow-lg shadow-black/20">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 text-[#e3e2e6]">
+                        <Cloud size={18} className="text-[#a9c8fc]" />
+                        <h3 className="text-[15px] font-bold">设备管理</h3>
+                      </div>
+                      <p className="mt-2 text-[12px] leading-relaxed text-slate-400">
+                        设备列表用于解释每台设备的 heartbeat、ack 进度和失活状态；移除只撤销该设备的云端同步资格，不删除本机工作区文件。
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={!activeWorkspace || isDevicesLoading || isDevicesMutating}
+                        onClick={() => void refreshDevices()}
+                        className="inline-flex h-9 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <RefreshCw size={14} className={isDevicesLoading ? 'animate-spin' : ''} />
+                        刷新
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!activeWorkspace || isDevicesLoading || isDevicesMutating}
+                        onClick={() => void sendDeviceHeartbeat()}
+                        className="inline-flex h-9 items-center justify-center gap-2 rounded border border-[#2a5ea3] bg-[#0f3460]/30 px-3 text-[12px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isDevicesMutating ? <Loader2 size={14} className="animate-spin" /> : <Activity size={14} />}
+                        发送心跳
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                    <div className="rounded-lg border border-[#0f3460] bg-[#121316] px-3 py-2">
+                      <div className="text-[11px] uppercase tracking-wider text-slate-500">Vault</div>
+                      <div className="mt-1 truncate font-mono text-[12px] text-[#e3e2e6]" title={deviceList?.vault_id ?? syncSummary.vaultId}>
+                        {deviceList?.vault_id ?? syncSummary.vaultId}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-[#0f3460] bg-[#121316] px-3 py-2">
+                      <div className="text-[11px] uppercase tracking-wider text-slate-500">Head revision</div>
+                      <div className="mt-1 font-mono text-[12px] text-[#e3e2e6]">
+                        {deviceList ? deviceList.head_revision : '-'}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-[#0f3460] bg-[#121316] px-3 py-2">
+                      <div className="text-[11px] uppercase tracking-wider text-slate-500">失活阈值</div>
+                      <div className="mt-1 font-mono text-[12px] text-[#e3e2e6]">
+                        {deviceList ? formatDeviceInactiveDuration(deviceList.inactive_after_ms) : '-'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 rounded-lg border border-[#0f3460] bg-[#0d0e11] p-3 text-[12px] leading-5 text-slate-400">
+                    状态说明：活跃表示设备仍在上报 heartbeat；疑似失活表示超过阈值未上报，可人工移除；已移除表示设备不再参与同步和 tombstone 回收安全判断。当前设备不可从本机移除。
+                  </div>
+
+                  {deviceHeartbeat && (
+                    <div className="mt-3 rounded-lg border border-emerald-400/30 bg-emerald-400/10 p-3 text-[12px] text-emerald-200">
+                      心跳已上报：{deviceHeartbeat.device_id} · ack revision {deviceHeartbeat.acked_revision} · {formatActivityTime(deviceHeartbeat.last_seen_at_ms)}
+                    </div>
+                  )}
+
+                  {deviceLastError && (
+                    <div className="mt-3 rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] leading-5 text-[#ffb782]">
+                      {localizeMessage(deviceLastError)}
+                    </div>
+                  )}
+
+                  {!activeWorkspace && (
+                    <div className="mt-4 rounded-lg border border-dashed border-[#0f3460] px-3 py-4 text-[12px] text-slate-500">
+                      请先在通用设置中添加或切换到一个工作区，再查看设备列表。
+                    </div>
+                  )}
+
+                  {activeWorkspace && isDevicesLoading && workspaceDevices.length === 0 && (
+                    <div className="mt-4 flex items-center gap-2 rounded-lg border border-[#0f3460] bg-[#121316] px-3 py-4 text-[12px] text-slate-400">
+                      <Loader2 size={14} className="animate-spin text-[#a9c8fc]" />
+                      正在读取设备列表...
+                    </div>
+                  )}
+
+                  {activeWorkspace && !isDevicesLoading && workspaceDevices.length === 0 && !deviceLastError && (
+                    <div className="mt-4 rounded-lg border border-dashed border-[#0f3460] px-3 py-4 text-[12px] text-slate-500">
+                      暂无已加入此 vault 的设备。完成一次提交或拉取 ack 后会生成当前设备记录；心跳只刷新已加入设备的在线时间。
+                    </div>
+                  )}
+
+                  {activeWorkspace && workspaceDevices.length > 0 && (
+                    <div className="mt-4 grid grid-cols-1 gap-3">
+                      {workspaceDevices.map((device) => {
+                        const lifecycle = deviceLifecycleInfo(device);
+                        return (
+                          <div
+                            key={device.device_id}
+                            className="rounded-xl border border-[#0f3460] bg-[#121316] p-4"
+                          >
+                            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {device.is_current_device && (
+                                    <span className="rounded border border-[#2a5ea3] bg-[#0f3460]/30 px-2 py-0.5 text-[10px] font-bold text-[#a9c8fc]">
+                                      当前设备
+                                    </span>
+                                  )}
+                                  <span className={`rounded border px-2 py-0.5 text-[10px] font-bold ${lifecycle.className}`}>
+                                    {lifecycle.label}
+                                  </span>
+                                  <span className="font-mono text-[10px] text-slate-500">{device.platform}</span>
+                                </div>
+                                <h4 className="mt-2 truncate text-[14px] font-bold text-[#e3e2e6]" title={device.device_name}>
+                                  {device.device_name}
+                                </h4>
+                                <p className="mt-1 break-all font-mono text-[11px] text-slate-500">{device.device_id}</p>
+                                <p className="mt-2 text-[12px] leading-5 text-slate-400">{lifecycle.description}</p>
+                              </div>
+                              {!device.is_current_device && !device.is_revoked && (
+                                <button
+                                  type="button"
+                                  disabled={isDevicesMutating}
+                                  onClick={() => setDeviceToRevoke(device)}
+                                  className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-[#e94560]/40 bg-[#e94560]/10 px-3 text-[12px] font-semibold text-[#ffb3c0] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <Trash2 size={14} />
+                                  移除
+                                </button>
+                              )}
+                            </div>
+                            <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
+                              <div className="rounded border border-[#0f3460] bg-[#0d0e11] px-3 py-2">
+                                <div className="text-[10px] uppercase tracking-wider text-slate-500">ack revision</div>
+                                <div className="mt-1 font-mono text-[12px] text-[#e3e2e6]">{device.acked_revision}</div>
+                              </div>
+                              <div className="rounded border border-[#0f3460] bg-[#0d0e11] px-3 py-2">
+                                <div className="text-[10px] uppercase tracking-wider text-slate-500">last seen</div>
+                                <div className="mt-1 font-mono text-[12px] text-[#e3e2e6]">{formatNullableDeviceTime(device.last_seen_at_ms)}</div>
+                              </div>
+                              <div className="rounded border border-[#0f3460] bg-[#0d0e11] px-3 py-2">
+                                <div className="text-[10px] uppercase tracking-wider text-slate-500">registered</div>
+                                <div className="mt-1 font-mono text-[12px] text-[#e3e2e6]">{formatNullableDeviceTime(device.registered_at_ms)}</div>
+                              </div>
+                              <div className="rounded border border-[#0f3460] bg-[#0d0e11] px-3 py-2">
+                                <div className="text-[10px] uppercase tracking-wider text-slate-500">version</div>
+                                <div className="mt-1 truncate font-mono text-[12px] text-[#e3e2e6]" title={`${device.app_version ?? 'unknown'} / ${device.protocol_version}`}>
+                                  {device.app_version ?? 'unknown'} / {device.protocol_version}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
 
                 {hasPendingLocalChanges && (
                   <section className="border border-[#0f3460] rounded-xl bg-[#16213e] p-4 md:p-5 shadow-lg shadow-black/20">
@@ -741,6 +1082,53 @@ export default function SettingsView({
                     <p className="text-[12px] text-[#ffb782] mt-4 line-clamp-3">{settingsError}</p>
                   )}
                 </section>
+
+                {deviceToRevoke && (
+                  <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+                    <div className="w-full max-w-md rounded-2xl border border-[#0f3460] bg-[#16213e] p-5 shadow-2xl shadow-black/50">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-lg font-bold text-[#e3e2e6]">移除设备</h3>
+                        <button
+                          type="button"
+                          disabled={isDevicesMutating}
+                          onClick={() => setDeviceToRevoke(null)}
+                          className="rounded border border-[#0f3460] bg-[#121316] p-2 text-slate-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                      <p className="mt-3 text-[13px] leading-6 text-slate-400">
+                        确认移除该设备的云端同步资格：{deviceToRevoke.device_name}
+                      </p>
+                      <p className="mt-2 break-all font-mono text-[11px] text-slate-500">{deviceToRevoke.device_id}</p>
+                      <p className="mt-3 rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] leading-5 text-[#ffb782]">
+                        移除后，该设备不会再计入 ack 和 tombstone 回收判断。若该设备仍在使用，需要重新接入或恢复同步身份。
+                      </p>
+                      {deviceLastError && (
+                        <p className="mt-3 text-[12px] leading-5 text-[#ffb782]">{localizeMessage(deviceLastError)}</p>
+                      )}
+                      <div className="mt-5 flex justify-end gap-2">
+                        <button
+                          type="button"
+                          disabled={isDevicesMutating}
+                          onClick={() => setDeviceToRevoke(null)}
+                          className="rounded border border-[#0f3460] bg-[#121316] px-4 py-2 text-[13px] text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isDevicesMutating || deviceToRevoke.is_current_device || deviceToRevoke.is_revoked}
+                          onClick={() => void confirmRevokeWorkspaceDevice()}
+                          className="inline-flex items-center justify-center gap-2 rounded border border-[#e94560]/40 bg-[#e94560]/20 px-4 py-2 text-[13px] font-semibold text-[#ffb3c0] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isDevicesMutating && <Loader2 size={14} className="animate-spin" />}
+                          确认移除
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </>
             )}
 
@@ -795,6 +1183,143 @@ export default function SettingsView({
                     <SettingsDetailRow label="设置来源" value={settingsSummary.source} mono />
                     <SettingsDetailRow label="快照来源" value={settingsSource} mono />
                     <SettingsDetailRow label="数据结构版本" value={settingsSummary.schemaVersion} mono />
+                  </div>
+                </div>
+                <div className="mt-5 rounded-lg border border-[#0f3460] bg-[#121316] p-4">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`inline-flex rounded border px-2 py-0.5 font-mono text-[11px] font-bold uppercase tracking-wider ${
+                          settingsSummary.cryptoUnlocked
+                            ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+                            : 'border-[#ffb782]/30 bg-[#ffb782]/10 text-[#ffb782]'
+                        }`}
+                        >
+                          {settingsSummary.cryptoUnlocked ? 'E2EE unlocked' : 'E2EE locked'}
+                        </span>
+                        <span className="font-mono text-[11px] text-slate-500">{settingsSummary.cryptoScheme}</span>
+                        <span className="font-mono text-[11px] text-slate-500">{settingsSummary.cryptoStorageProvider}</span>
+                      </div>
+                      <h3 className="mt-2 text-[15px] font-bold text-[#e3e2e6]">同步加密密钥</h3>
+                      <p className="mt-1 text-[12px] leading-relaxed text-slate-400">
+                        vault key 只写入系统安全存储，不写入 .noteapp/settings.json。解锁后同步命令会自动使用 e2ee-v1。
+                      </p>
+                      <p className="mt-2 break-all font-mono text-[11px] text-slate-500">{settingsSummary.cryptoMessage}</p>
+                      {settingsSummary.cryptoError && (
+                        <p className="mt-2 text-[12px] text-[#ffb782]">{settingsSummary.cryptoError}</p>
+                      )}
+                    </div>
+                    <div className="w-full lg:w-[360px]">
+                      <div className="flex overflow-hidden rounded border border-[#0f3460] bg-[#0d0e11] focus-within:border-[#e94560]">
+                        <input
+                          value={vaultKeyDraft}
+                          type={isVaultKeyVisible ? 'text' : 'password'}
+                          autoComplete="off"
+                          placeholder="32-byte vault key: base64 or 64 hex chars"
+                          disabled={isCryptoMutating}
+                          onChange={(event) => setVaultKeyDraft(event.target.value)}
+                          className="min-w-0 flex-1 bg-transparent px-3 py-2 text-[13px] text-[#e3e2e6] placeholder:text-slate-600 disabled:opacity-50 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          disabled={isCryptoMutating || !vaultKeyDraft}
+                          onClick={() => setIsVaultKeyVisible((value) => !value)}
+                          className="inline-flex w-10 items-center justify-center border-l border-[#0f3460] text-slate-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isVaultKeyVisible ? <EyeOff size={15} /> : <Eye size={15} />}
+                        </button>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={isCryptoMutating || !vaultKeyDraft.trim()}
+                          onClick={() => void unlockVaultKey()}
+                          className="inline-flex h-9 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-4 text-[12px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isCryptoMutating && <Loader2 size={14} className="animate-spin" />}
+                          解锁并保存
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isCryptoMutating || !settingsSummary.cryptoKeyAvailable}
+                          onClick={() => void lockVaultKey()}
+                          className="inline-flex h-9 items-center justify-center rounded border border-[#e94560]/40 bg-[#e94560]/10 px-4 text-[12px] font-semibold text-[#ffb3c0] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          锁定本机
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-5 rounded-lg border border-[#0f3460] bg-[#121316] p-4">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="inline-flex rounded border border-[#0f3460] bg-[#0f3460]/30 px-2 py-0.5 font-mono text-[11px] font-bold uppercase tracking-wider text-[#a9c8fc]">
+                        e2ee-recovery-v1
+                      </div>
+                      <h3 className="mt-2 text-[15px] font-bold text-[#e3e2e6]">恢复包与恢复短语</h3>
+                      <p className="mt-1 text-[12px] leading-relaxed text-slate-400">
+                        恢复包是离线 JSON 文件，恢复短语只负责解开恢复包。两者缺一不可；恢复短语不会上传到云端。
+                      </p>
+                      {cryptoNotice && (
+                        <p className="mt-2 text-[12px] text-[#a9c8fc]">{cryptoNotice}</p>
+                      )}
+                    </div>
+                    <div className="w-full lg:w-[460px]">
+                      <input
+                        value={recoveryPhraseDraft}
+                        type="password"
+                        autoComplete="off"
+                        placeholder="恢复短语"
+                        disabled={isCryptoMutating}
+                        onChange={(event) => setRecoveryPhraseDraft(event.target.value)}
+                        className="w-full rounded border border-[#0f3460] bg-[#0d0e11] px-3 py-2 text-[13px] text-[#e3e2e6] placeholder:text-slate-600 disabled:opacity-50 focus:border-[#e94560] focus:outline-none"
+                      />
+                      <textarea
+                        value={recoveryPackageDraft}
+                        placeholder="粘贴恢复包 JSON；只输入恢复短语会被拒绝"
+                        disabled={isCryptoMutating}
+                        onChange={(event) => setRecoveryPackageDraft(event.target.value)}
+                        className="mt-2 h-28 w-full resize-y rounded border border-[#0f3460] bg-[#0d0e11] px-3 py-2 font-mono text-[12px] text-[#e3e2e6] placeholder:text-slate-600 disabled:opacity-50 focus:border-[#e94560] focus:outline-none"
+                      />
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={isCryptoMutating || !settingsSummary.cryptoKeyAvailable || !recoveryPhraseDraft.trim()}
+                          onClick={() => void exportRecoveryPackage()}
+                          className="inline-flex h-9 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-4 text-[12px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isCryptoMutating && <Loader2 size={14} className="animate-spin" />}
+                          生成恢复包
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isCryptoMutating || !recoveryPhraseDraft.trim() || !recoveryPackageDraft.trim()}
+                          onClick={() => void importRecoveryPackage()}
+                          className="inline-flex h-9 items-center justify-center rounded border border-emerald-400/30 bg-emerald-400/10 px-4 text-[12px] font-semibold text-emerald-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          导入并解锁
+                        </button>
+                      </div>
+                      {exportedRecoveryPackageJson && (
+                        <div className="mt-3 rounded border border-[#0f3460] bg-[#0d0e11] p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">恢复包 JSON</span>
+                            <button
+                              type="button"
+                              onClick={() => void copyExportedRecoveryPackage()}
+                              className="inline-flex h-7 items-center justify-center gap-1 rounded border border-[#0f3460] px-2 text-[11px] font-semibold text-[#a9c8fc] hover:text-white"
+                            >
+                              <Copy size={12} />
+                              复制
+                            </button>
+                          </div>
+                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-slate-300">
+                            {exportedRecoveryPackageJson}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
                 {settingsError && (

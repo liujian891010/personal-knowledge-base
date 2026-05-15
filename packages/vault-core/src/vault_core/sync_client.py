@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,10 +19,29 @@ from .sync_api import (
     BlobUploadCapability,
     BlobUploadInitRequestPayload,
     BlobUploadInitResponsePayload,
+    ResumableBlobDownloadCapability,
+    ResumableBlobDownloadInitRequestItem,
+    ResumableBlobDownloadInitRequestPayload,
+    ResumableBlobDownloadInitResponsePayload,
+    ResumableBlobUploadCapability,
+    ResumableBlobUploadCompleteRequestItem,
+    ResumableBlobUploadCompleteRequestPayload,
+    ResumableBlobUploadCompleteResponsePayload,
+    ResumableBlobUploadInitRequestItem,
+    ResumableBlobUploadInitRequestPayload,
+    ResumableBlobUploadInitResponsePayload,
     CommitConflictResponsePayload,
     CreateCommitResponsePayload,
+    FileVersionListRequestPayload,
+    FileVersionListResponsePayload,
+    FileVersionUpdateRequestPayload,
+    FileVersionUpdateResponsePayload,
     ResolveCommitIntentRequestPayload,
     ResolveCommitIntentResponsePayload,
+    TombstoneGcRequestPayload,
+    TombstoneGcResponsePayload,
+    VaultDeviceHeartbeatResponsePayload,
+    VaultDeviceListResponsePayload,
     VaultHeadResponsePayload,
     build_blob_upload_init_request,
     parse_ack_response,
@@ -30,15 +50,29 @@ from .sync_api import (
     parse_blob_upload_init_response,
     parse_commit_conflict_response,
     parse_create_commit_response,
+    parse_file_version_list_response,
+    parse_file_version_update_response,
     parse_manifest_response,
     parse_resolve_commit_intent_response,
+    parse_resumable_blob_upload_complete_response,
+    parse_resumable_blob_download_init_response,
+    parse_resumable_blob_upload_init_response,
+    parse_tombstone_gc_response,
+    parse_vault_device_heartbeat_response,
+    parse_vault_device_list_response,
     parse_vault_head_response,
     serialize_ack_request,
     serialize_blob_download_init_request,
     serialize_blob_check_request,
     serialize_blob_upload_init_request,
     serialize_create_commit_request,
+    serialize_file_version_list_request,
+    serialize_file_version_update_request,
     serialize_resolve_commit_intent_request,
+    serialize_resumable_blob_upload_complete_request,
+    serialize_resumable_blob_download_init_request,
+    serialize_resumable_blob_upload_init_request,
+    serialize_tombstone_gc_request,
 )
 from .sync_plan import plan_pull_reconcile
 from .sync_reconcile import ReconcileResult, execute_pull_reconcile
@@ -80,7 +114,28 @@ class SyncCommitTransport(Protocol):
     ) -> SyncHttpJsonResponse:
         ...
 
+    def post_resumable_blob_upload_init(
+        self,
+        vault_id: str,
+        payload: Mapping[str, object],
+    ) -> SyncHttpJsonResponse:
+        ...
+
+    def post_resumable_blob_upload_complete(
+        self,
+        vault_id: str,
+        payload: Mapping[str, object],
+    ) -> SyncHttpJsonResponse:
+        ...
+
     def post_blob_download_init(
+        self,
+        vault_id: str,
+        payload: Mapping[str, object],
+    ) -> SyncHttpJsonResponse:
+        ...
+
+    def post_resumable_blob_download_init(
         self,
         vault_id: str,
         payload: Mapping[str, object],
@@ -108,9 +163,49 @@ class SyncCommitTransport(Protocol):
     ) -> SyncHttpJsonResponse:
         ...
 
+    def post_file_versions_list(
+        self,
+        vault_id: str,
+        payload: Mapping[str, object],
+    ) -> SyncHttpJsonResponse:
+        ...
+
+    def patch_file_version(
+        self,
+        vault_id: str,
+        version_id: str,
+        payload: Mapping[str, object],
+    ) -> SyncHttpJsonResponse:
+        ...
+
     def get_vault_head(
         self,
         vault_id: str,
+    ) -> SyncHttpJsonResponse:
+        ...
+
+    def get_vault_devices(
+        self,
+        vault_id: str,
+    ) -> SyncHttpJsonResponse:
+        ...
+
+    def post_vault_device_heartbeat(
+        self,
+        vault_id: str,
+    ) -> SyncHttpJsonResponse:
+        ...
+
+    def post_tombstone_gc(
+        self,
+        vault_id: str,
+        payload: Mapping[str, object],
+    ) -> SyncHttpJsonResponse:
+        ...
+
+    def delete_device(
+        self,
+        device_id: str,
     ) -> SyncHttpJsonResponse:
         ...
 
@@ -131,11 +226,35 @@ class SyncBlobUploader(Protocol):
         ...
 
 
+class SyncResumableBlobUploader(Protocol):
+    def upload_blob_chunks(
+        self,
+        upload: BlobUploadPlanEntry,
+        capability: ResumableBlobUploadCapability,
+    ) -> list[str]:
+        ...
+
+
 class SyncBlobDownloader(Protocol):
     def download_blob(
         self,
         capability: BlobDownloadCapability,
     ) -> bytes:
+        ...
+
+
+@dataclass(frozen=True)
+class ResumableBlobDownloadedRange:
+    blob_id: str
+    offset: int
+    payload: bytes
+
+
+class SyncResumableBlobDownloader(Protocol):
+    def download_blob_ranges(
+        self,
+        capability: ResumableBlobDownloadCapability,
+    ) -> list[ResumableBlobDownloadedRange]:
         ...
 
 
@@ -201,6 +320,61 @@ class BlobDownloadSessionResult:
 
 
 @dataclass(frozen=True)
+class ResumableBlobDownloadInitExecutionResult:
+    request: ResumableBlobDownloadInitRequestPayload
+    response: ResumableBlobDownloadInitResponsePayload
+
+
+@dataclass(frozen=True)
+class ResumableBlobDownloadSessionResult:
+    init: ResumableBlobDownloadInitExecutionResult
+    downloaded_ranges_by_blob_id: dict[str, list[ResumableBlobDownloadedRange]]
+    assembled_blobs: dict[str, bytes]
+
+
+@dataclass(frozen=True)
+class ResumableBlobUploadInitExecutionResult:
+    request: ResumableBlobUploadInitRequestPayload
+    response: ResumableBlobUploadInitResponsePayload
+
+
+@dataclass(frozen=True)
+class ResumableBlobUploadSessionResult:
+    init: ResumableBlobUploadInitExecutionResult
+    uploaded_chunk_ids_by_blob_id: dict[str, list[str]]
+    complete_request: ResumableBlobUploadCompleteRequestPayload
+    complete_response: ResumableBlobUploadCompleteResponsePayload
+
+
+@dataclass(frozen=True)
+class FileVersionListExecutionResult:
+    request: FileVersionListRequestPayload
+    response: FileVersionListResponsePayload
+
+
+@dataclass(frozen=True)
+class FileVersionUpdateExecutionResult:
+    request: FileVersionUpdateRequestPayload
+    response: FileVersionUpdateResponsePayload
+
+
+@dataclass(frozen=True)
+class VaultDeviceListExecutionResult:
+    response: VaultDeviceListResponsePayload
+
+
+@dataclass(frozen=True)
+class VaultDeviceHeartbeatExecutionResult:
+    response: VaultDeviceHeartbeatResponsePayload
+
+
+@dataclass(frozen=True)
+class TombstoneGcExecutionResult:
+    request: TombstoneGcRequestPayload
+    response: TombstoneGcResponsePayload
+
+
+@dataclass(frozen=True)
 class PullSyncSessionResult:
     pull: PullReconcileSessionResult
     ack: Optional[AckExecutionResult] = None
@@ -218,7 +392,9 @@ class CommitRecoverySessionResult:
 class VaultSyncSession:
     transport: SyncCommitTransport
     uploader: Optional[SyncBlobUploader] = None
+    resumable_uploader: Optional[SyncResumableBlobUploader] = None
     downloader: Optional[SyncBlobDownloader] = None
+    resumable_downloader: Optional[SyncResumableBlobDownloader] = None
 
     def submit_commit(
         self,
@@ -230,6 +406,7 @@ class VaultSyncSession:
             self.transport,
             submission,
             snapshot_table=snapshot_table,
+            request_upload_capabilities=self.resumable_uploader is None,
         )
         uploaded_blob_ids: list[str] = []
         if preflight.upload_init_response is not None:
@@ -240,6 +417,13 @@ class VaultSyncSession:
                 preflight.network_plan.blob_uploads,
                 preflight.upload_init_response,
             )
+        elif preflight.network_plan.blob_uploads.entries and self.resumable_uploader is not None:
+            resumable_result = execute_resumable_blob_upload_session(
+                self.transport,
+                self.resumable_uploader,
+                preflight.network_plan.blob_uploads,
+            )
+            uploaded_blob_ids = [item.blob_id for item in resumable_result.complete_response.uploads]
         commit = execute_create_commit(
             self.transport,
             preflight.network_plan.request,
@@ -342,6 +526,111 @@ class VaultSyncSession:
             blob_ids=blob_ids,
         )
 
+    def upload_blobs_resumable(
+        self,
+        upload_plan: BlobUploadPlan,
+    ) -> ResumableBlobUploadSessionResult:
+        if self.resumable_uploader is None:
+            raise ValueError("resumable blob uploader is required for resumable blob upload sessions")
+        return execute_resumable_blob_upload_session(
+            self.transport,
+            self.resumable_uploader,
+            upload_plan,
+        )
+
+    def download_blobs_resumable(
+        self,
+        *,
+        vault_id: str,
+        blobs: Iterable[ResumableBlobDownloadInitRequestItem],
+    ) -> ResumableBlobDownloadSessionResult:
+        if self.resumable_downloader is None:
+            raise ValueError("resumable blob downloader is required for resumable blob download sessions")
+        return execute_resumable_blob_download_session(
+            self.transport,
+            self.resumable_downloader,
+            vault_id=vault_id,
+            blobs=blobs,
+        )
+
+    def list_file_versions(
+        self,
+        *,
+        vault_id: str,
+        file_id: str,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+        include_pinned: bool = True,
+    ) -> FileVersionListExecutionResult:
+        return execute_file_version_list(
+            self.transport,
+            vault_id=vault_id,
+            request=FileVersionListRequestPayload(
+                file_id=file_id,
+                limit=limit,
+                cursor=cursor,
+                include_pinned=include_pinned,
+            ),
+        )
+
+    def update_file_version(
+        self,
+        *,
+        vault_id: str,
+        version_id: str,
+        version_label: Optional[str] = None,
+        change_note: Optional[str] = None,
+        is_pinned: Optional[bool] = None,
+    ) -> FileVersionUpdateExecutionResult:
+        return execute_file_version_update(
+            self.transport,
+            vault_id=vault_id,
+            version_id=version_id,
+            request=FileVersionUpdateRequestPayload(
+                version_label=version_label,
+                change_note=change_note,
+                is_pinned=is_pinned,
+            ),
+        )
+
+    def list_vault_devices(
+        self,
+        *,
+        vault_id: str,
+    ) -> VaultDeviceListExecutionResult:
+        return execute_vault_device_list(
+            self.transport,
+            vault_id=vault_id,
+        )
+
+    def heartbeat_vault_device(
+        self,
+        *,
+        vault_id: str,
+    ) -> VaultDeviceHeartbeatExecutionResult:
+        return execute_vault_device_heartbeat(
+            self.transport,
+            vault_id=vault_id,
+        )
+
+    def run_tombstone_gc(
+        self,
+        *,
+        vault_id: str,
+        now_ms: Optional[int] = None,
+        min_retention_ms: Optional[int] = None,
+        inactive_after_ms: Optional[int] = None,
+    ) -> TombstoneGcExecutionResult:
+        return execute_tombstone_gc(
+            self.transport,
+            vault_id=vault_id,
+            request=TombstoneGcRequestPayload(
+                now_ms=now_ms,
+                min_retention_ms=min_retention_ms,
+                inactive_after_ms=inactive_after_ms,
+            ),
+        )
+
     def resume_commit_recovery(
         self,
         connection: sqlite3.Connection,
@@ -402,11 +691,33 @@ def _index_download_capabilities(
     return capability_by_blob_id
 
 
+def _validate_resumable_upload_capabilities(
+    upload_plan: BlobUploadPlan,
+    response: ResumableBlobUploadInitResponsePayload,
+) -> None:
+    expected_blob_ids = {entry.blob_id for entry in upload_plan.entries}
+    returned_blob_ids = {entry.blob_id for entry in response.uploads}
+    if returned_blob_ids != expected_blob_ids:
+        raise ValueError("resumable upload-init response blob_ids do not match upload plan")
+
+
+def _index_resumable_upload_capabilities(
+    response: ResumableBlobUploadInitResponsePayload,
+) -> dict[str, ResumableBlobUploadCapability]:
+    capability_by_blob_id: dict[str, ResumableBlobUploadCapability] = {}
+    for capability in response.uploads:
+        if capability.blob_id in capability_by_blob_id:
+            raise ValueError("resumable upload-init response contains duplicate blob_ids")
+        capability_by_blob_id[capability.blob_id] = capability
+    return capability_by_blob_id
+
+
 def execute_commit_preflight(
     transport: SyncCommitTransport,
     submission: CommitSubmissionBundle,
     *,
     snapshot_table: CommitSnapshotTable,
+    request_upload_capabilities: bool = True,
 ) -> CommitPreflightResult:
     if not snapshot_table.entries:
         return CommitPreflightResult(
@@ -442,6 +753,13 @@ def execute_commit_preflight(
     )
 
     if not network_plan.blob_uploads.entries:
+        return CommitPreflightResult(
+            network_plan=network_plan,
+            upload_init_request=None,
+            upload_init_response=None,
+        )
+
+    if not request_upload_capabilities:
         return CommitPreflightResult(
             network_plan=network_plan,
             upload_init_request=None,
@@ -525,6 +843,317 @@ def execute_blob_download_session(
     return BlobDownloadSessionResult(
         init=init,
         downloaded_blobs=execute_blob_downloads(downloader, init.response),
+    )
+
+
+def execute_resumable_blob_download_init(
+    transport: SyncCommitTransport,
+    vault_id: str,
+    blobs: Iterable[ResumableBlobDownloadInitRequestItem],
+) -> ResumableBlobDownloadInitExecutionResult:
+    request = ResumableBlobDownloadInitRequestPayload(blobs=list(blobs))
+    http_response = transport.post_resumable_blob_download_init(
+        vault_id,
+        serialize_resumable_blob_download_init_request(request),
+    )
+    _require_status(http_response, 200, "blobs/resumable-download-init")
+    return ResumableBlobDownloadInitExecutionResult(
+        request=request,
+        response=parse_resumable_blob_download_init_response(http_response.payload),
+    )
+
+
+def execute_resumable_blob_downloads(
+    downloader: SyncResumableBlobDownloader,
+    download_init_response: ResumableBlobDownloadInitResponsePayload,
+) -> dict[str, list[ResumableBlobDownloadedRange]]:
+    downloaded_ranges_by_blob_id: dict[str, list[ResumableBlobDownloadedRange]] = {}
+    for capability in download_init_response.downloads:
+        downloaded_ranges_by_blob_id[capability.blob_id] = downloader.download_blob_ranges(capability)
+    return downloaded_ranges_by_blob_id
+
+
+def _assemble_complete_resumable_downloads(
+    download_init_response: ResumableBlobDownloadInitResponsePayload,
+    downloaded_ranges_by_blob_id: Mapping[str, list[ResumableBlobDownloadedRange]],
+) -> dict[str, bytes]:
+    assembled: dict[str, bytes] = {}
+    for capability in download_init_response.downloads:
+        if not capability.ranges:
+            if capability.encrypted_size == 0:
+                assembled[capability.blob_id] = b""
+            continue
+        sorted_ranges = sorted(downloaded_ranges_by_blob_id.get(capability.blob_id, []), key=lambda item: item.offset)
+        cursor = 0
+        payload = bytearray()
+        complete = True
+        for item in sorted_ranges:
+            if item.offset != cursor:
+                complete = False
+                break
+            payload.extend(item.payload)
+            cursor += len(item.payload)
+        if complete and cursor == capability.encrypted_size:
+            assembled[capability.blob_id] = bytes(payload)
+    return assembled
+
+
+def execute_resumable_blob_download_session(
+    transport: SyncCommitTransport,
+    downloader: SyncResumableBlobDownloader,
+    *,
+    vault_id: str,
+    blobs: Iterable[ResumableBlobDownloadInitRequestItem],
+) -> ResumableBlobDownloadSessionResult:
+    init = execute_resumable_blob_download_init(transport, vault_id, blobs)
+    downloaded_ranges_by_blob_id = execute_resumable_blob_downloads(downloader, init.response)
+    return ResumableBlobDownloadSessionResult(
+        init=init,
+        downloaded_ranges_by_blob_id=downloaded_ranges_by_blob_id,
+        assembled_blobs=_assemble_complete_resumable_downloads(init.response, downloaded_ranges_by_blob_id),
+    )
+
+
+def _blob_staging_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def build_resumable_blob_upload_init_request(
+    upload_plan: BlobUploadPlan,
+) -> ResumableBlobUploadInitRequestPayload:
+    if not upload_plan.entries:
+        raise ValueError("blob upload plan does not contain any upload entries")
+    return ResumableBlobUploadInitRequestPayload(
+        blobs=[
+            ResumableBlobUploadInitRequestItem(
+                blob_id=entry.blob_id,
+                encrypted_size=entry.encrypted_size,
+                content_hash=entry.content_hash,
+                encrypted_sha256=_blob_staging_sha256(entry.blob_staging_path),
+            )
+            for entry in upload_plan.entries
+        ]
+    )
+
+
+def execute_resumable_blob_upload_init(
+    transport: SyncCommitTransport,
+    upload_plan: BlobUploadPlan,
+) -> ResumableBlobUploadInitExecutionResult:
+    request = build_resumable_blob_upload_init_request(upload_plan)
+    http_response = transport.post_resumable_blob_upload_init(
+        upload_plan.vault_id,
+        serialize_resumable_blob_upload_init_request(request),
+    )
+    _require_status(http_response, 200, "blobs/resumable-upload-init")
+    response = parse_resumable_blob_upload_init_response(http_response.payload)
+    _validate_resumable_upload_capabilities(upload_plan, response)
+    return ResumableBlobUploadInitExecutionResult(
+        request=request,
+        response=response,
+    )
+
+
+def execute_resumable_blob_upload_chunks(
+    uploader: SyncResumableBlobUploader,
+    upload_plan: BlobUploadPlan,
+    upload_init_response: ResumableBlobUploadInitResponsePayload,
+) -> dict[str, list[str]]:
+    if not upload_plan.entries:
+        if upload_init_response.uploads:
+            raise ValueError("resumable upload-init response must be empty when no uploads are planned")
+        return {}
+
+    _validate_resumable_upload_capabilities(upload_plan, upload_init_response)
+    capability_by_blob_id = _index_resumable_upload_capabilities(upload_init_response)
+    uploaded_chunk_ids_by_blob_id: dict[str, list[str]] = {}
+    for upload in upload_plan.entries:
+        uploaded_chunk_ids_by_blob_id[upload.blob_id] = uploader.upload_blob_chunks(
+            upload,
+            capability_by_blob_id[upload.blob_id],
+        )
+    return uploaded_chunk_ids_by_blob_id
+
+
+def build_resumable_blob_upload_complete_request(
+    upload_plan: BlobUploadPlan,
+    upload_init_response: ResumableBlobUploadInitResponsePayload,
+    uploaded_chunk_ids_by_blob_id: Mapping[str, list[str]],
+) -> ResumableBlobUploadCompleteRequestPayload:
+    request_by_blob_id = {
+        item.blob_id: item
+        for item in build_resumable_blob_upload_init_request(upload_plan).blobs
+    }
+    capability_by_blob_id = _index_resumable_upload_capabilities(upload_init_response)
+    uploads: list[ResumableBlobUploadCompleteRequestItem] = []
+    for upload in upload_plan.entries:
+        capability = capability_by_blob_id[upload.blob_id]
+        request_item = request_by_blob_id[upload.blob_id]
+        known_chunk_ids = {
+            chunk.chunk_id
+            for chunk in capability.uploaded_chunks + capability.missing_chunks
+        }
+        uploaded_chunk_ids = list(dict.fromkeys(uploaded_chunk_ids_by_blob_id.get(upload.blob_id, [])))
+        if not uploaded_chunk_ids:
+            raise ValueError("resumable upload complete requires at least one uploaded chunk id")
+        if not set(uploaded_chunk_ids).issubset(known_chunk_ids):
+            raise ValueError("resumable upload complete contains unknown uploaded chunk ids")
+        uploads.append(
+            ResumableBlobUploadCompleteRequestItem(
+                blob_id=upload.blob_id,
+                session_id=capability.session_id,
+                encrypted_size=upload.encrypted_size,
+                encrypted_sha256=request_item.encrypted_sha256,
+                uploaded_chunk_ids=uploaded_chunk_ids,
+            )
+        )
+    return ResumableBlobUploadCompleteRequestPayload(uploads=uploads)
+
+
+def execute_resumable_blob_upload_complete(
+    transport: SyncCommitTransport,
+    vault_id: str,
+    request: ResumableBlobUploadCompleteRequestPayload,
+) -> ResumableBlobUploadCompleteResponsePayload:
+    http_response = transport.post_resumable_blob_upload_complete(
+        vault_id,
+        serialize_resumable_blob_upload_complete_request(request),
+    )
+    _require_status(http_response, 200, "blobs/resumable-upload-complete")
+    return parse_resumable_blob_upload_complete_response(http_response.payload)
+
+
+def execute_resumable_blob_upload_session(
+    transport: SyncCommitTransport,
+    uploader: SyncResumableBlobUploader,
+    upload_plan: BlobUploadPlan,
+) -> ResumableBlobUploadSessionResult:
+    init = execute_resumable_blob_upload_init(transport, upload_plan)
+    uploaded_chunk_ids_by_blob_id = execute_resumable_blob_upload_chunks(
+        uploader,
+        upload_plan,
+        init.response,
+    )
+    complete_request = build_resumable_blob_upload_complete_request(
+        upload_plan,
+        init.response,
+        uploaded_chunk_ids_by_blob_id,
+    )
+    complete_response = execute_resumable_blob_upload_complete(
+        transport,
+        upload_plan.vault_id,
+        complete_request,
+    )
+    incomplete = [item.blob_id for item in complete_response.uploads if item.status == "incomplete"]
+    if incomplete:
+        raise ValueError(f"resumable blob upload incomplete: {', '.join(sorted(incomplete))}")
+    return ResumableBlobUploadSessionResult(
+        init=init,
+        uploaded_chunk_ids_by_blob_id=uploaded_chunk_ids_by_blob_id,
+        complete_request=complete_request,
+        complete_response=complete_response,
+    )
+
+
+def execute_file_version_list(
+    transport: SyncCommitTransport,
+    *,
+    vault_id: str,
+    request: FileVersionListRequestPayload,
+) -> FileVersionListExecutionResult:
+    http_response = transport.post_file_versions_list(
+        vault_id,
+        serialize_file_version_list_request(request),
+    )
+    _require_status(http_response, 200, "file-versions/list")
+    return FileVersionListExecutionResult(
+        request=request,
+        response=parse_file_version_list_response(http_response.payload),
+    )
+
+
+def execute_file_version_update(
+    transport: SyncCommitTransport,
+    *,
+    vault_id: str,
+    version_id: str,
+    request: FileVersionUpdateRequestPayload,
+) -> FileVersionUpdateExecutionResult:
+    if not version_id:
+        raise ValueError("version_id must be non-empty")
+    http_response = transport.patch_file_version(
+        vault_id,
+        version_id,
+        serialize_file_version_update_request(request),
+    )
+    _require_status(http_response, 200, f"file-versions/{version_id}")
+    return FileVersionUpdateExecutionResult(
+        request=request,
+        response=parse_file_version_update_response(http_response.payload),
+    )
+
+
+def execute_vault_device_list(
+    transport: SyncCommitTransport,
+    *,
+    vault_id: str,
+) -> VaultDeviceListExecutionResult:
+    if not vault_id:
+        raise ValueError("vault_id must be non-empty")
+    http_response = transport.get_vault_devices(vault_id)
+    _require_status(http_response, 200, "devices")
+    response = parse_vault_device_list_response(http_response.payload)
+    if response.vault_id != vault_id:
+        raise ValueError("devices response vault_id does not match requested vault")
+    return VaultDeviceListExecutionResult(
+        response=response,
+    )
+
+
+def execute_vault_device_heartbeat(
+    transport: SyncCommitTransport,
+    *,
+    vault_id: str,
+) -> VaultDeviceHeartbeatExecutionResult:
+    if not vault_id:
+        raise ValueError("vault_id must be non-empty")
+    http_response = transport.post_vault_device_heartbeat(vault_id)
+    _require_status(http_response, 200, "devices/heartbeat")
+    response = parse_vault_device_heartbeat_response(http_response.payload)
+    if response.vault_id != vault_id:
+        raise ValueError("device heartbeat response vault_id does not match requested vault")
+    return VaultDeviceHeartbeatExecutionResult(
+        response=response,
+    )
+
+
+def execute_tombstone_gc(
+    transport: SyncCommitTransport,
+    *,
+    vault_id: str,
+    request: Optional[TombstoneGcRequestPayload] = None,
+) -> TombstoneGcExecutionResult:
+    if not vault_id:
+        raise ValueError("vault_id must be non-empty")
+    resolved_request = request or TombstoneGcRequestPayload()
+    http_response = transport.post_tombstone_gc(
+        vault_id,
+        serialize_tombstone_gc_request(resolved_request),
+    )
+    _require_status(http_response, 200, "tombstones/gc")
+    response = parse_tombstone_gc_response(http_response.payload)
+    if response.vault_id != vault_id:
+        raise ValueError("tombstone gc response vault_id does not match requested vault")
+    return TombstoneGcExecutionResult(
+        request=resolved_request,
+        response=response,
     )
 
 

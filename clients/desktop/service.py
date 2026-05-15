@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import difflib
 import json
 import mimetypes
 import os
@@ -25,10 +26,16 @@ from vault_core import (
     CommitSubmissionBundle,
     CommitSubmissionExecutionResult,
     ContentSnapshotMaterializationResult,
+    FileVersionCommitDirective,
+    FileVersionListExecutionResult,
+    FileVersionRecord,
+    FileVersionUpdateExecutionResult,
     PullReconcileSessionResult,
     PullSyncSessionResult,
     SyncApplyJournalRecord,
     TombstoneRecord,
+    VaultDeviceHeartbeatExecutionResult,
+    VaultDeviceListExecutionResult,
     VaultStateRecord,
     add_file,
     apply_manifest_summary_stale,
@@ -86,6 +93,18 @@ from .change_detection import (
     detect_local_workspace_changes,
 )
 from .crypto import DesktopBlobCryptoProvider, build_placeholder_blob_crypto_provider
+from .crypto_store import (
+    DesktopCryptoStatus,
+    load_desktop_crypto_status,
+    load_desktop_vault_key,
+    store_desktop_vault_key,
+)
+from .recovery import (
+    DesktopRecoveryPackageExport,
+    DesktopRecoveryPackageImport,
+    export_recovery_package,
+    import_recovery_package,
+)
 from .sync_runtime import DesktopSyncHttpConfig
 from .worker_state import DesktopSyncWorkerHealth, DesktopSyncWorkerStateRecord
 from .workspace import (
@@ -143,6 +162,15 @@ def _write_bytes_atomic(path: Path, payload: bytes) -> None:
 
 def _compute_content_hash(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _build_source_version_token(
+    *,
+    content_hash: str,
+    size_bytes: int,
+    mtime_ms: int,
+) -> str:
+    return f"mtime:{mtime_ms}:size:{size_bytes}:hash:{content_hash}"
 
 
 def _current_time_ms() -> int:
@@ -978,6 +1006,48 @@ class DesktopPullRequiredBlobResult:
 
 
 @dataclass(frozen=True)
+class DesktopFileVersionContent:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    version: FileVersionRecord
+    size_bytes: int
+    content_hash: str
+    content_base64: str
+    text: Optional[str] = None
+    encoding: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class DesktopFileVersionDiff:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    version: FileVersionRecord
+    current_file_id: str
+    current_path: str
+    current_content_hash: str
+    version_content_hash: str
+    is_binary: bool
+    diff_text: str
+
+
+@dataclass(frozen=True)
+class DesktopFileVersionRestoreResult:
+    schema_version: str
+    vault_id: str
+    device_id: str
+    vault_root: Path
+    version: FileVersionRecord
+    file_id: str
+    path: str
+    restored_content_hash: str
+    commit: DesktopCommitSessionResult
+
+
+@dataclass(frozen=True)
 class DesktopPullApplyStagingResult:
     journal: Optional[SyncApplyJournalRecord]
     written_staging_paths: dict[str, Path]
@@ -1154,6 +1224,33 @@ class DesktopLocalAiSettings:
 
 
 @dataclass(frozen=True)
+class DesktopLocalCryptoSettings:
+    schema_version: str
+    crypto_scheme: str
+    key_epoch: int
+    unlocked: bool
+    key_available: bool
+    storage_provider: str
+    key_ref: str
+    message: str
+    error: Optional[str] = None
+
+
+def _local_crypto_settings_from_status(status: DesktopCryptoStatus) -> DesktopLocalCryptoSettings:
+    return DesktopLocalCryptoSettings(
+        schema_version=status.schema_version,
+        crypto_scheme=status.crypto_scheme,
+        key_epoch=status.key_epoch,
+        unlocked=status.unlocked,
+        key_available=status.key_available,
+        storage_provider=status.storage_provider,
+        key_ref=status.key_ref,
+        message=status.message,
+        error=status.error,
+    )
+
+
+@dataclass(frozen=True)
 class DesktopLocalSettingsSnapshot:
     schema_version: str
     source: str
@@ -1164,6 +1261,13 @@ class DesktopLocalSettingsSnapshot:
     sync: DesktopLocalSyncSettings
     appearance: DesktopLocalAppearanceSettings
     ai: DesktopLocalAiSettings
+    crypto: DesktopLocalCryptoSettings
+
+
+@dataclass(frozen=True)
+class DesktopCryptoRecoveryImportResult:
+    recovery: DesktopRecoveryPackageImport
+    crypto: DesktopLocalCryptoSettings
 
 
 @dataclass(frozen=True)
@@ -3390,6 +3494,12 @@ class DesktopSyncService:
                 api_key_configured=normalized_api_key is not None,
                 api_key=normalized_api_key,
             ),
+            crypto=_local_crypto_settings_from_status(
+                load_desktop_crypto_status(
+                    vault_id=self.vault_id,
+                    vault_root=self.workspace.vault_root,
+                )
+            ),
         )
 
     def write_local_settings(self, payload: Mapping[str, Any]) -> DesktopLocalSettingsSnapshot:
@@ -3404,6 +3514,62 @@ class DesktopSyncService:
                         normalized["ai"]["api_key"] = existing_api_key.strip()
         _write_json_atomic(self.workspace.paths.settings_path, normalized)
         return self.load_local_settings_snapshot()
+
+    def _load_current_vault_key(self) -> Optional[bytes]:
+        vault_key = load_desktop_vault_key(self.vault_id)
+        if vault_key is not None:
+            return vault_key
+        provider_vault_id = getattr(self.blob_crypto_provider, "vault_id", None)
+        provider_vault_key = getattr(self.blob_crypto_provider, "vault_key", None)
+        if provider_vault_id == self.vault_id and isinstance(provider_vault_key, bytes):
+            return provider_vault_key
+        return None
+
+    def export_crypto_recovery_package(
+        self,
+        *,
+        recovery_phrase: str,
+        created_at: Optional[int] = None,
+        memory_kib: Optional[int] = None,
+        iterations: Optional[int] = None,
+    ) -> DesktopRecoveryPackageExport:
+        vault_key = self._load_current_vault_key()
+        if vault_key is None:
+            raise ValueError("recovery package export requires an unlocked e2ee-v1 vault key")
+        kwargs: dict[str, Any] = {}
+        if memory_kib is not None:
+            kwargs["memory_kib"] = memory_kib
+        if iterations is not None:
+            kwargs["iterations"] = iterations
+        return export_recovery_package(
+            vault_id=self.vault_id,
+            vault_key=vault_key,
+            recovery_phrase=recovery_phrase,
+            created_at=_current_time_ms() if created_at is None else created_at,
+            **kwargs,
+        )
+
+    def import_crypto_recovery_package(
+        self,
+        package_payload: Mapping[str, Any],
+        *,
+        recovery_phrase: str,
+    ) -> DesktopCryptoRecoveryImportResult:
+        recovery, vault_key = import_recovery_package(
+            package_payload,
+            recovery_phrase=recovery_phrase,
+            expected_vault_id=self.vault_id,
+        )
+        store_desktop_vault_key(self.vault_id, vault_key)
+        return DesktopCryptoRecoveryImportResult(
+            recovery=recovery,
+            crypto=_local_crypto_settings_from_status(
+                load_desktop_crypto_status(
+                    vault_id=self.vault_id,
+                    vault_root=self.workspace.vault_root,
+                )
+            ),
+        )
 
     def pull_reconcile(self, *, rewritten_at: int) -> PullReconcileSessionResult:
         return self.workspace.pull_reconcile(rewritten_at=rewritten_at)
@@ -3617,6 +3783,251 @@ class DesktopSyncService:
 
     def download_blobs(self, blob_ids: Iterable[str]) -> BlobDownloadSessionResult:
         return self.workspace.download_blobs(blob_ids)
+
+    def list_file_versions(
+        self,
+        *,
+        file_id: str,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+        include_pinned: bool = True,
+    ) -> FileVersionListExecutionResult:
+        return self.workspace.list_file_versions(
+            file_id=file_id,
+            limit=limit,
+            cursor=cursor,
+            include_pinned=include_pinned,
+        )
+
+    def update_file_version(
+        self,
+        *,
+        version_id: str,
+        version_label: Optional[str] = None,
+        change_note: Optional[str] = None,
+        is_pinned: Optional[bool] = None,
+    ) -> FileVersionUpdateExecutionResult:
+        return self.workspace.update_file_version(
+            version_id=version_id,
+            version_label=version_label,
+            change_note=change_note,
+            is_pinned=is_pinned,
+        )
+
+    def list_vault_devices(self) -> VaultDeviceListExecutionResult:
+        return self.workspace.list_vault_devices()
+
+    def heartbeat_vault_device(self) -> VaultDeviceHeartbeatExecutionResult:
+        return self.workspace.heartbeat_vault_device()
+
+    def revoke_device(self, *, device_id: str) -> dict[str, object]:
+        return self.workspace.revoke_device(device_id=device_id)
+
+    def _load_file_version_record(self, *, file_id: str, version_id: str) -> FileVersionRecord:
+        cursor: Optional[str] = None
+        seen_cursors: set[str] = set()
+        while True:
+            result = self.list_file_versions(
+                file_id=file_id,
+                limit=100,
+                cursor=cursor,
+                include_pinned=True,
+            )
+            for version in result.response.versions:
+                if version.version_id == version_id:
+                    if version.file_id != file_id:
+                        raise ValueError(
+                            f"file version {version_id} belongs to file_id {version.file_id}, not {file_id}"
+                        )
+                    return version
+            next_cursor = result.response.next_cursor
+            if next_cursor is None:
+                break
+            if next_cursor in seen_cursors:
+                raise ValueError(f"file version pagination cursor repeated: {next_cursor}")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        raise KeyError(f"file version not found for file_id {file_id}: {version_id}")
+
+    def _download_and_decrypt_file_version_payload(self, version: FileVersionRecord) -> bytes:
+        download = self.download_blobs([version.blob_id])
+        encrypted_payload = download.downloaded_blobs.get(version.blob_id)
+        if encrypted_payload is None:
+            raise KeyError(f"downloaded blob payload not found: {version.blob_id}")
+        payload = self.blob_crypto_provider.decrypt_payload(
+            encrypted_payload,
+            content_hash=version.content_hash,
+        )
+        if len(payload) != version.size:
+            raise ValueError(
+                "file version plaintext size mismatch: "
+                f"expected {version.size}, got {len(payload)}"
+            )
+        return payload
+
+    def load_file_version_content(
+        self,
+        *,
+        file_id: str,
+        version_id: str,
+        include_text: bool = True,
+    ) -> DesktopFileVersionContent:
+        version = self._load_file_version_record(file_id=file_id, version_id=version_id)
+        payload = self._download_and_decrypt_file_version_payload(version)
+        if len(payload) > _WORKSPACE_FILE_BLOB_MAX_BYTES:
+            raise ValueError(f"file version is too large to preview: {version_id}")
+        text = None
+        encoding = None
+        if include_text and len(payload) <= _WORKSPACE_FILE_CONTENT_MAX_BYTES:
+            with suppress(ValueError):
+                text, encoding = _decode_workspace_text(payload, file_id=file_id)
+        return DesktopFileVersionContent(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            version=version,
+            size_bytes=len(payload),
+            content_hash=_compute_content_hash(payload),
+            content_base64=base64.b64encode(payload).decode("ascii"),
+            text=text,
+            encoding=encoding,
+        )
+
+    def diff_file_version_with_current(
+        self,
+        *,
+        file_id: str,
+        version_id: str,
+        context_lines: int = 3,
+    ) -> DesktopFileVersionDiff:
+        if context_lines < 0:
+            raise ValueError("context_lines must be non-negative")
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        if record.status != "active":
+            raise ValueError(f"workspace file is not active: {file_id}")
+        content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+        if not content_path.exists() or not content_path.is_file():
+            raise FileNotFoundError(f"workspace file content not found: {file_id}")
+
+        version = self._load_file_version_record(file_id=file_id, version_id=version_id)
+        version_payload = self._download_and_decrypt_file_version_payload(version)
+        current_payload = content_path.read_bytes()
+        current_hash = _compute_content_hash(current_payload)
+        version_hash = _compute_content_hash(version_payload)
+
+        try:
+            version_text, _ = _decode_workspace_text(version_payload, file_id=file_id)
+            current_text, _ = _decode_workspace_text(current_payload, file_id=file_id)
+        except ValueError:
+            return DesktopFileVersionDiff(
+                schema_version="v1",
+                vault_id=self.vault_id,
+                device_id=self.config.device_id,
+                vault_root=self.workspace.vault_root,
+                version=version,
+                current_file_id=file_id,
+                current_path=record.path,
+                current_content_hash=current_hash,
+                version_content_hash=version_hash,
+                is_binary=True,
+                diff_text="",
+            )
+
+        diff_lines = list(
+            difflib.unified_diff(
+                version_text.splitlines(),
+                current_text.splitlines(),
+                fromfile=f"{version.path_at_revision}@r{version.revision}",
+                tofile=f"{record.path}@current",
+                n=context_lines,
+                lineterm="",
+            )
+        )
+        diff_text = "\n".join(diff_lines)
+        if diff_text:
+            diff_text += "\n"
+        return DesktopFileVersionDiff(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            version=version,
+            current_file_id=file_id,
+            current_path=record.path,
+            current_content_hash=current_hash,
+            version_content_hash=version_hash,
+            is_binary=False,
+            diff_text=diff_text,
+        )
+
+    def restore_file_version(
+        self,
+        *,
+        file_id: str,
+        version_id: str,
+        created_at: int,
+        commit_intent_id: Optional[str] = None,
+        cleanup_normalized_at: Optional[int] = None,
+        version_label: Optional[str] = None,
+        change_note: Optional[str] = None,
+        is_pinned: bool = False,
+    ) -> DesktopFileVersionRestoreResult:
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        if record.status != "active":
+            raise ValueError(f"workspace file is not active: {file_id}")
+
+        version = self._load_file_version_record(file_id=file_id, version_id=version_id)
+        payload = self._download_and_decrypt_file_version_payload(version)
+        content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+        _write_bytes_atomic(content_path, payload)
+        updated_snapshot = self.load_snapshot()
+        updated_document = self._document_with_current_blob_metadata(
+            updated_snapshot.document,
+            content_by_file_id={file_id: payload},
+        )
+        content_by_file_id = self.load_workspace_content_for_document(updated_document)
+        directive_note = change_note or f"restored from {version.version_id} at revision {version.revision}"
+        prepared = self._prepare_commit_with_snapshot(
+            replace(updated_snapshot, document=updated_document),
+            created_at=created_at,
+            content_by_file_id=content_by_file_id,
+            commit_intent_id=commit_intent_id,
+            file_version_directives=[
+                FileVersionCommitDirective(
+                    file_id=file_id,
+                    source="restore",
+                    version_label=version_label,
+                    change_note=directive_note,
+                    is_pinned=is_pinned,
+                )
+            ],
+        )
+        resolved_cleanup_at = created_at if cleanup_normalized_at is None else cleanup_normalized_at
+        commit = self._submit_prepared_commit(
+            prepared,
+            resolved_cleanup_at=resolved_cleanup_at,
+        )
+        if commit.network.commit.status == "committed":
+            self.clear_workspace_file_draft(file_id)
+            self._upsert_workspace_search_index_for_record(record)
+        return DesktopFileVersionRestoreResult(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            version=version,
+            file_id=file_id,
+            path=record.path,
+            restored_content_hash=_compute_content_hash(payload),
+            commit=commit,
+        )
 
     def build_pull_required_blob_plan(
         self,
@@ -5294,6 +5705,61 @@ class DesktopSyncService:
             )
         return content_by_file_id
 
+    def _document_with_current_blob_metadata(
+        self,
+        document: FileMapDocument,
+        *,
+        content_by_file_id: Mapping[str, bytes],
+    ) -> FileMapDocument:
+        updated_files: list[FileRecord] = []
+        latest_updated_at = document.updated_at
+        for record in document.files:
+            payload = content_by_file_id.get(record.file_id)
+            if record.status != "active" or payload is None:
+                updated_files.append(record)
+                continue
+
+            content_hash = _compute_content_hash(payload)
+            content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+            stat = content_path.stat() if content_path.exists() and content_path.is_file() else None
+            size_bytes = len(payload)
+            mtime_ms = stat.st_mtime_ns // 1_000_000 if stat is not None else record.updated_at
+            mime_type = (
+                (record.meta or {}).get("mime_type")
+                if isinstance((record.meta or {}).get("mime_type"), str)
+                else _infer_imported_workspace_mime_type(record.path)
+            )
+            meta = dict(record.meta or {})
+            meta.update(
+                {
+                    "blob_id": self.blob_crypto_provider.build_blob_id(content_hash),
+                    "size": size_bytes,
+                    "mtime": mtime_ms,
+                    "source_version_token": _build_source_version_token(
+                        content_hash=content_hash,
+                        size_bytes=size_bytes,
+                        mtime_ms=mtime_ms,
+                    ),
+                }
+            )
+            if mime_type is not None:
+                meta["mime_type"] = mime_type
+            updated_files.append(
+                FileRecord(
+                    file_id=record.file_id,
+                    path=record.path,
+                    type=record.type,
+                    status=record.status,
+                    updated_at=mtime_ms,
+                    content_hash=content_hash,
+                    last_known_revision=record.last_known_revision,
+                    conflict_source_file_id=record.conflict_source_file_id,
+                    meta=meta,
+                )
+            )
+            latest_updated_at = max(latest_updated_at, mtime_ms)
+        return document.replace_files(updated_files, updated_at=latest_updated_at)
+
     def load_workspace_content_for_document(
         self,
         document: FileMapDocument,
@@ -5413,8 +5879,19 @@ class DesktopSyncService:
         encrypted_blob_by_file_id: Optional[Mapping[str, bytes]] = None,
         commit_intent_id: Optional[str] = None,
     ) -> DesktopPreparedCommit:
+        snapshot = self.load_snapshot()
         return self._prepare_commit_with_snapshot(
-            self.load_snapshot(),
+            (
+                replace(
+                    snapshot,
+                    document=self._document_with_current_blob_metadata(
+                        snapshot.document,
+                        content_by_file_id=content_by_file_id,
+                    ),
+                )
+                if encrypted_blob_by_file_id is None
+                else snapshot
+            ),
             created_at=created_at,
             content_by_file_id=content_by_file_id,
             encrypted_blob_by_file_id=encrypted_blob_by_file_id,
@@ -5429,6 +5906,7 @@ class DesktopSyncService:
         content_by_file_id: Mapping[str, bytes],
         encrypted_blob_by_file_id: Optional[Mapping[str, bytes]] = None,
         commit_intent_id: Optional[str] = None,
+        file_version_directives: Optional[Iterable[FileVersionCommitDirective]] = None,
     ) -> DesktopPreparedCommit:
         snapshot = self._promote_unresolved_conflict_state_if_needed(snapshot)
         resolved_commit_intent_id = commit_intent_id or str(uuid4())
@@ -5449,6 +5927,11 @@ class DesktopSyncService:
                 created_by_device=self.config.device_id,
                 created_at=created_at,
             )
+            if file_version_directives is not None:
+                submission = replace(
+                    submission,
+                    file_version_directives=list(file_version_directives),
+                )
 
             try:
                 snapshot_materialization = materialize_content_snapshot_plan(
@@ -5773,14 +6256,26 @@ class DesktopSyncService:
         encrypted_blob_by_file_id: Optional[Mapping[str, bytes]] = None,
         commit_intent_id: Optional[str] = None,
         cleanup_normalized_at: Optional[int] = None,
+        file_version_directives: Optional[Iterable[FileVersionCommitDirective]] = None,
     ) -> DesktopCommitSessionResult:
         snapshot = self.load_snapshot()
         prepared = self._prepare_commit_with_snapshot(
-            snapshot,
+            (
+                replace(
+                    snapshot,
+                    document=self._document_with_current_blob_metadata(
+                        snapshot.document,
+                        content_by_file_id=content_by_file_id,
+                    ),
+                )
+                if encrypted_blob_by_file_id is None
+                else snapshot
+            ),
             created_at=created_at,
             content_by_file_id=content_by_file_id,
             encrypted_blob_by_file_id=encrypted_blob_by_file_id,
             commit_intent_id=commit_intent_id,
+            file_version_directives=file_version_directives,
         )
         resolved_cleanup_at = created_at if cleanup_normalized_at is None else cleanup_normalized_at
         return self._submit_prepared_commit(
@@ -5796,6 +6291,7 @@ class DesktopSyncService:
         encrypted_blob_by_file_id: Optional[Mapping[str, bytes]] = None,
         commit_intent_id: Optional[str] = None,
         cleanup_normalized_at: Optional[int] = None,
+        file_version_directives: Optional[Iterable[FileVersionCommitDirective]] = None,
     ) -> DesktopCommitSessionResult:
         snapshot = self.load_snapshot()
         requested_file_ids = list(file_ids)
@@ -5810,11 +6306,22 @@ class DesktopSyncService:
             selected_records.append(record)
         content_by_file_id = self._load_workspace_content_for_records(selected_records)
         prepared = self._prepare_commit_with_snapshot(
-            snapshot,
+            (
+                replace(
+                    snapshot,
+                    document=self._document_with_current_blob_metadata(
+                        snapshot.document,
+                        content_by_file_id=content_by_file_id,
+                    ),
+                )
+                if encrypted_blob_by_file_id is None
+                else snapshot
+            ),
             created_at=created_at,
             content_by_file_id=content_by_file_id,
             encrypted_blob_by_file_id=encrypted_blob_by_file_id,
             commit_intent_id=commit_intent_id,
+            file_version_directives=file_version_directives,
         )
         resolved_cleanup_at = created_at if cleanup_normalized_at is None else cleanup_normalized_at
         return self._submit_prepared_commit(

@@ -8,10 +8,14 @@ from typing import Iterable, Optional
 from vault_core import (
     BlobDownloadSessionResult,
     CommitRecoverySessionResult,
+    FileVersionListExecutionResult,
+    FileVersionUpdateExecutionResult,
     FileMapDocument,
     PullReconcileSessionResult,
     PullSyncSessionResult,
     TombstoneRecord,
+    VaultDeviceHeartbeatExecutionResult,
+    VaultDeviceListExecutionResult,
     VaultStateRecord,
     bootstrap_database,
     initialize_vault,
@@ -177,6 +181,55 @@ class DesktopVaultWorkspace:
             vault_id=self.vault_id,
             blob_ids=blob_ids,
         )
+
+    def list_file_versions(
+        self,
+        *,
+        file_id: str,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+        include_pinned: bool = True,
+    ) -> FileVersionListExecutionResult:
+        return self.runtime.session.list_file_versions(
+            vault_id=self.vault_id,
+            file_id=file_id,
+            limit=limit,
+            cursor=cursor,
+            include_pinned=include_pinned,
+        )
+
+    def update_file_version(
+        self,
+        *,
+        version_id: str,
+        version_label: Optional[str] = None,
+        change_note: Optional[str] = None,
+        is_pinned: Optional[bool] = None,
+    ) -> FileVersionUpdateExecutionResult:
+        return self.runtime.session.update_file_version(
+            vault_id=self.vault_id,
+            version_id=version_id,
+            version_label=version_label,
+            change_note=change_note,
+            is_pinned=is_pinned,
+        )
+
+    def list_vault_devices(self) -> VaultDeviceListExecutionResult:
+        return self.runtime.session.list_vault_devices(vault_id=self.vault_id)
+
+    def heartbeat_vault_device(self) -> VaultDeviceHeartbeatExecutionResult:
+        return self.runtime.session.heartbeat_vault_device(vault_id=self.vault_id)
+
+    def revoke_device(self, *, device_id: str) -> dict[str, object]:
+        if not device_id:
+            raise ValueError("device_id must be non-empty")
+        response = self.runtime.transport.delete_device(device_id)
+        if response.status_code != 204:
+            raise ValueError(f"devices/{device_id} returned unexpected status: {response.status_code}")
+        return {
+            "device_id": device_id,
+            "revoked": True,
+        }
 
     def detect_local_changes(self) -> DesktopWorkspaceChangeSet:
         return detect_local_workspace_changes(

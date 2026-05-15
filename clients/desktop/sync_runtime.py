@@ -7,6 +7,8 @@ from vault_core import (
     CapabilityBlobDownloader,
     CapabilityBlobUploader,
     JsonHttpSyncTransport,
+    ResumableCapabilityBlobUploader,
+    ResumableCapabilityBlobDownloader,
     VaultSyncSession,
 )
 from vault_core.sync_http import UrlopenLike
@@ -23,6 +25,8 @@ class DesktopSyncHttpConfig:
     request_timeout_seconds: float = 30.0
     blob_timeout_seconds: float = 60.0
     user_agent: str = "pkb-desktop-sync/0.1"
+    use_resumable_uploads: bool = False
+    use_resumable_downloads: bool = False
 
     def __post_init__(self) -> None:
         if not self.base_url.strip():
@@ -46,7 +50,9 @@ class DesktopSyncRuntime:
     config: DesktopSyncHttpConfig
     transport: JsonHttpSyncTransport
     uploader: CapabilityBlobUploader
+    resumable_uploader: ResumableCapabilityBlobUploader
     downloader: CapabilityBlobDownloader
+    resumable_downloader: ResumableCapabilityBlobDownloader
     session: VaultSyncSession
 
     @property
@@ -84,17 +90,23 @@ def build_desktop_sync_runtime(
 
     transport = JsonHttpSyncTransport(**transport_kwargs)
     uploader = CapabilityBlobUploader(**blob_kwargs)
+    resumable_uploader = ResumableCapabilityBlobUploader(**blob_kwargs)
     downloader = CapabilityBlobDownloader(**blob_kwargs)
+    resumable_downloader = ResumableCapabilityBlobDownloader(**blob_kwargs)
     session = VaultSyncSession(
         transport=transport,
         uploader=uploader,
+        resumable_uploader=resumable_uploader if config.use_resumable_uploads else None,
         downloader=downloader,
+        resumable_downloader=resumable_downloader if config.use_resumable_downloads else None,
     )
     return DesktopSyncRuntime(
         config=config,
         transport=transport,
         uploader=uploader,
+        resumable_uploader=resumable_uploader,
         downloader=downloader,
+        resumable_downloader=resumable_downloader,
         session=session,
     )
 

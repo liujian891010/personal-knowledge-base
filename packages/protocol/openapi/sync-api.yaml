@@ -9,6 +9,7 @@ info:
 tags:
   - name: Devices
   - name: Vault Sync
+  - name: File Versions
   - name: Blobs
 
 paths:
@@ -42,6 +43,75 @@ paths:
       responses:
         '204':
           description: Device removed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/devices:
+    get:
+      tags: [Devices]
+      summary: List devices and per-vault ack state
+      operationId: listVaultDevices
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      responses:
+        '200':
+          description: Device status list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultDeviceListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/devices/heartbeat:
+    post:
+      tags: [Devices]
+      summary: Refresh current device heartbeat for one vault
+      operationId: heartbeatVaultDevice
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      responses:
+        '200':
+          description: Current device heartbeat status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultDeviceHeartbeatResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/tombstones/gc:
+    post:
+      tags: [Vault Sync]
+      summary: Run tombstone garbage collection for one vault
+      operationId: runTombstoneGc
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TombstoneGcRequest'
+      responses:
+        '200':
+          description: Tombstone GC result and audit summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TombstoneGcResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -179,6 +249,68 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /vaults/{vaultId}/file-versions/list:
+    post:
+      tags: [File Versions]
+      summary: List cloud-retained versions for one stable file id
+      description: >
+        File versions are keyed by stable file_id, not by path. A moved or
+        renamed note keeps the same version chain while path_at_revision records
+        where the file lived at each committed revision.
+      operationId: listFileVersions
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileVersionListRequest'
+      responses:
+        '200':
+          description: File version history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileVersionListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/file-versions/{versionId}:
+    patch:
+      tags: [File Versions]
+      summary: Update file version metadata
+      description: >
+        Supports user-facing metadata only: label, note, and pin state. It does
+        not mutate historical blob content.
+      operationId: updateFileVersion
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+        - $ref: '#/components/parameters/VersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileVersionUpdateRequest'
+      responses:
+        '200':
+          description: Updated file version metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileVersionUpdateResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /vaults/{vaultId}/blobs/check:
     post:
       tags: [Blobs]
@@ -233,6 +365,60 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /vaults/{vaultId}/blobs/resumable-upload-init:
+    post:
+      tags: [Blobs]
+      summary: Issue resumable upload capability and current chunk state
+      operationId: initResumableBlobUpload
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResumableUploadInitRequest'
+      responses:
+        '200':
+          description: Resumable upload capability issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResumableUploadInitResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/blobs/resumable-upload-complete:
+    post:
+      tags: [Blobs]
+      summary: Finalize resumable blob uploads after all chunks are present
+      operationId: completeResumableBlobUpload
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResumableUploadCompleteRequest'
+      responses:
+        '200':
+          description: Final upload verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResumableUploadCompleteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /vaults/{vaultId}/blobs/download-init:
     post:
       tags: [Blobs]
@@ -253,6 +439,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DownloadInitResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /vaults/{vaultId}/blobs/resumable-download-init:
+    post:
+      tags: [Blobs]
+      summary: Issue download capability for explicit encrypted byte ranges
+      operationId: initResumableBlobDownload
+      parameters:
+        - $ref: '#/components/parameters/VaultId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResumableDownloadInitRequest'
+      responses:
+        '200':
+          description: Ranged download capability issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResumableDownloadInitResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -289,6 +502,13 @@ components:
       schema:
         type: integer
         minimum: 0
+    VersionId:
+      name: versionId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
 
   responses:
     Unauthorized:
@@ -345,6 +565,287 @@ components:
           type: string
           format: date-time
 
+    VaultDeviceRecord:
+      type: object
+      additionalProperties: false
+      required:
+        - device_id
+        - device_name
+        - platform
+        - protocol_version
+        - acked_revision
+        - is_current_device
+        - is_revoked
+        - is_inactive_candidate
+      properties:
+        device_id:
+          type: string
+          minLength: 1
+        device_name:
+          type: string
+          minLength: 1
+        platform:
+          type: string
+        app_version:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        protocol_version:
+          type: string
+          minLength: 1
+        registered_at_ms:
+          oneOf:
+            - type: integer
+              minimum: 0
+            - type: 'null'
+        last_seen_at_ms:
+          oneOf:
+            - type: integer
+              minimum: 0
+            - type: 'null'
+        acked_revision:
+          type: integer
+          minimum: 0
+        is_current_device:
+          type: boolean
+        is_revoked:
+          type: boolean
+        is_inactive_candidate:
+          type: boolean
+
+    VaultDeviceListResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - vault_id
+        - head_revision
+        - inactive_after_ms
+        - devices
+      properties:
+        vault_id:
+          type: string
+          minLength: 1
+        head_revision:
+          type: integer
+          minimum: 0
+        inactive_after_ms:
+          type: integer
+          minimum: 1
+        devices:
+          type: array
+          items:
+            $ref: '#/components/schemas/VaultDeviceRecord'
+
+    VaultDeviceHeartbeatResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - vault_id
+        - device_id
+        - last_seen_at_ms
+        - acked_revision
+        - head_revision
+      properties:
+        vault_id:
+          type: string
+          minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        last_seen_at_ms:
+          type: integer
+          minimum: 0
+        acked_revision:
+          type: integer
+          minimum: 0
+        head_revision:
+          type: integer
+          minimum: 0
+
+    TombstoneGcRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        now_ms:
+          type: integer
+          minimum: 0
+        min_retention_ms:
+          type: integer
+          minimum: 0
+        inactive_after_ms:
+          type: integer
+          minimum: 1
+
+    TombstoneGcTombstone:
+      type: object
+      additionalProperties: false
+      required:
+        - file_id
+        - deleted_revision
+        - deleted_at
+      properties:
+        file_id:
+          type: string
+          minLength: 1
+        deleted_revision:
+          oneOf:
+            - type: integer
+              minimum: 1
+            - type: 'null'
+        deleted_at:
+          oneOf:
+            - type: integer
+              minimum: 0
+            - type: 'null'
+        last_known_path:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        deleted_by_device:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+
+    TombstoneGcBlockedDevice:
+      type: object
+      additionalProperties: false
+      required:
+        - device_id
+        - acked_revision
+        - required_revision
+      properties:
+        device_id:
+          type: string
+          minLength: 1
+        acked_revision:
+          type: integer
+          minimum: 0
+        required_revision:
+          type: integer
+          minimum: 1
+
+    TombstoneGcBlockedTombstone:
+      type: object
+      additionalProperties: false
+      required:
+        - file_id
+        - deleted_revision
+        - deleted_at
+        - reason
+        - retention_remaining_ms
+        - blocked_by_devices
+      properties:
+        file_id:
+          type: string
+          minLength: 1
+        deleted_revision:
+          oneOf:
+            - type: integer
+              minimum: 1
+            - type: 'null'
+        deleted_at:
+          oneOf:
+            - type: integer
+              minimum: 0
+            - type: 'null'
+        last_known_path:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        deleted_by_device:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        reason:
+          type: string
+          enum:
+            - pending_deleted_revision
+            - waiting_for_ack
+            - retention_window
+            - waiting_for_ack_and_retention
+        retention_remaining_ms:
+          type: integer
+          minimum: 0
+        blocked_by_devices:
+          type: array
+          items:
+            $ref: '#/components/schemas/TombstoneGcBlockedDevice'
+
+    TombstoneGcResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - vault_id
+        - run_id
+        - ran_at_ms
+        - base_revision
+        - head_revision
+        - active_device_ids
+        - active_device_count
+        - min_retention_ms
+        - inactive_after_ms
+        - reclaimed_tombstones
+        - blocked_tombstones
+        - reclaimed_count
+        - reason
+      properties:
+        vault_id:
+          type: string
+          minLength: 1
+        run_id:
+          type: string
+          minLength: 1
+        ran_at_ms:
+          type: integer
+          minimum: 0
+        base_revision:
+          type: integer
+          minimum: 0
+        new_revision:
+          oneOf:
+            - type: integer
+              minimum: 1
+            - type: 'null'
+        head_revision:
+          type: integer
+          minimum: 0
+        active_device_ids:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        active_device_count:
+          type: integer
+          minimum: 0
+        min_retention_ms:
+          type: integer
+          minimum: 0
+        inactive_after_ms:
+          type: integer
+          minimum: 1
+        reclaimed_tombstones:
+          type: array
+          items:
+            $ref: '#/components/schemas/TombstoneGcTombstone'
+        blocked_tombstones:
+          type: array
+          items:
+            $ref: '#/components/schemas/TombstoneGcBlockedTombstone'
+        reclaimed_count:
+          type: integer
+          minimum: 0
+        reason:
+          type: string
+          enum:
+            - no_head_manifest
+            - reclaimed
+            - no_reclaimable_tombstones
+
     VaultHeadResponse:
       type: object
       additionalProperties: false
@@ -394,6 +895,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/BlobRef'
+        file_version_directives:
+          type: array
+          description: >
+            Optional per-file version metadata for this commit. Use
+            manual_meeting_checkpoint for an explicit meeting version. Autosave
+            drafts must not submit this field or create cloud versions.
+          items:
+            $ref: '#/components/schemas/FileVersionCommitDirective'
 
     CreateCommitResponse:
       type: object
@@ -492,6 +1001,173 @@ components:
         - max_acked_revision
       properties:
         max_acked_revision:
+          type: integer
+          minimum: 1
+
+    FileVersionListRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - file_id
+      properties:
+        file_id:
+          type: string
+          minLength: 1
+        limit:
+          type: integer
+          minimum: 1
+          default: 50
+        cursor:
+          type: string
+          minLength: 1
+        include_pinned:
+          type: boolean
+          default: true
+
+    FileVersionListResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - file_id
+        - versions
+      properties:
+        file_id:
+          type: string
+          minLength: 1
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileVersionRecord'
+        next_cursor:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        retention_policy:
+          $ref: '#/components/schemas/FileVersionRetentionPolicy'
+
+    FileVersionUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        version_label:
+          type: string
+          minLength: 1
+        change_note:
+          type: string
+          minLength: 1
+        is_pinned:
+          type: boolean
+
+    FileVersionUpdateResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - version
+      properties:
+        version:
+          $ref: '#/components/schemas/FileVersionRecord'
+
+    FileVersionCommitDirective:
+      type: object
+      additionalProperties: false
+      required:
+        - file_id
+        - source
+      properties:
+        file_id:
+          type: string
+          minLength: 1
+        source:
+          type: string
+          enum: [commit_success, manual_checkpoint, manual_meeting_checkpoint, restore]
+        version_label:
+          type: string
+          minLength: 1
+        change_note:
+          type: string
+          minLength: 1
+        is_pinned:
+          type: boolean
+          default: false
+
+    FileVersionRecord:
+      type: object
+      additionalProperties: false
+      required:
+        - version_id
+        - file_id
+        - path_at_revision
+        - revision
+        - content_hash
+        - blob_id
+        - size
+        - mtime
+        - created_at
+        - created_by_device
+        - source
+        - is_pinned
+      properties:
+        version_id:
+          type: string
+          minLength: 1
+        file_id:
+          type: string
+          minLength: 1
+        path_at_revision:
+          type: string
+          minLength: 1
+        revision:
+          type: integer
+          minimum: 1
+        content_hash:
+          type: string
+          minLength: 1
+        blob_id:
+          type: string
+          minLength: 1
+        size:
+          type: integer
+          minimum: 0
+        mtime:
+          type: integer
+          minimum: 0
+        created_at:
+          type: integer
+          minimum: 0
+        created_by_device:
+          type: string
+          minLength: 1
+        source:
+          type: string
+          enum: [commit_success, manual_checkpoint, manual_meeting_checkpoint, restore]
+        version_label:
+          type: string
+          minLength: 1
+        change_note:
+          type: string
+          minLength: 1
+        is_pinned:
+          type: boolean
+        meta:
+          type: object
+
+    FileVersionRetentionPolicy:
+      type: object
+      additionalProperties: false
+      required:
+        - keep_latest
+        - keep_pinned
+      properties:
+        keep_latest:
+          type: integer
+          minimum: 1
+          default: 50
+        keep_pinned:
+          type: boolean
+          default: true
+        max_age_days:
           type: integer
           minimum: 1
 
@@ -619,6 +1295,200 @@ components:
           type: string
           format: date-time
 
+    BlobChunk:
+      type: object
+      additionalProperties: false
+      required: [chunk_id, offset, size]
+      properties:
+        chunk_id:
+          type: string
+          minLength: 1
+        offset:
+          type: integer
+          minimum: 0
+        size:
+          type: integer
+          minimum: 0
+
+    BlobChunkState:
+      allOf:
+        - $ref: '#/components/schemas/BlobChunk'
+        - type: object
+          additionalProperties: false
+          required: [status]
+          properties:
+            status:
+              type: string
+              enum: [missing, uploaded]
+
+    BlobRange:
+      type: object
+      additionalProperties: false
+      required: [offset, size]
+      properties:
+        offset:
+          type: integer
+          minimum: 0
+        size:
+          type: integer
+          minimum: 1
+
+    ResumableUploadInitRequest:
+      type: object
+      additionalProperties: false
+      required: [blobs]
+      properties:
+        blobs:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ResumableBlobUploadRequestItem'
+
+    ResumableBlobUploadRequestItem:
+      type: object
+      additionalProperties: false
+      required: [blob_id, encrypted_size, content_hash, encrypted_sha256, chunk_size, chunks]
+      properties:
+        blob_id:
+          type: string
+          minLength: 1
+        encrypted_size:
+          type: integer
+          minimum: 0
+        content_hash:
+          type: string
+          minLength: 1
+        encrypted_sha256:
+          type: string
+          minLength: 1
+        chunk_size:
+          type: integer
+          minimum: 1
+        chunks:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/BlobChunk'
+
+    ResumableUploadInitResponse:
+      type: object
+      additionalProperties: false
+      required: [uploads]
+      properties:
+        uploads:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResumableBlobUploadCapability'
+
+    ResumableBlobUploadCapability:
+      type: object
+      additionalProperties: false
+      required:
+        - blob_id
+        - session_id
+        - upload_url
+        - expires_at
+        - chunk_size
+        - encrypted_size
+        - uploaded_chunks
+        - missing_chunks
+      properties:
+        blob_id:
+          type: string
+          minLength: 1
+        session_id:
+          type: string
+          minLength: 1
+        upload_url:
+          type: string
+          format: uri
+        method:
+          type: string
+          default: PUT
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+        chunk_size:
+          type: integer
+          minimum: 1
+        encrypted_size:
+          type: integer
+          minimum: 0
+        uploaded_chunks:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlobChunkState'
+        missing_chunks:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlobChunkState'
+
+    ResumableUploadCompleteRequest:
+      type: object
+      additionalProperties: false
+      required: [uploads]
+      properties:
+        uploads:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ResumableUploadCompleteRequestItem'
+
+    ResumableUploadCompleteRequestItem:
+      type: object
+      additionalProperties: false
+      required: [blob_id, session_id, encrypted_size, encrypted_sha256, uploaded_chunk_ids]
+      properties:
+        blob_id:
+          type: string
+          minLength: 1
+        session_id:
+          type: string
+          minLength: 1
+        encrypted_size:
+          type: integer
+          minimum: 0
+        encrypted_sha256:
+          type: string
+          minLength: 1
+        uploaded_chunk_ids:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+
+    ResumableUploadCompleteResponse:
+      type: object
+      additionalProperties: false
+      required: [uploads]
+      properties:
+        uploads:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResumableUploadCompleteResponseItem'
+
+    ResumableUploadCompleteResponseItem:
+      type: object
+      additionalProperties: false
+      required: [blob_id, status, missing_chunks]
+      properties:
+        blob_id:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum: [accepted, already_exists, incomplete]
+        missing_chunks:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlobChunk'
+
     BlobDownloadCapability:
       type: object
       additionalProperties: false
@@ -636,6 +1506,66 @@ components:
         encrypted_size:
           type: integer
           minimum: 0
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+
+    ResumableDownloadInitRequest:
+      type: object
+      additionalProperties: false
+      required: [blobs]
+      properties:
+        blobs:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ResumableDownloadRequestItem'
+
+    ResumableDownloadRequestItem:
+      type: object
+      additionalProperties: false
+      required: [blob_id]
+      properties:
+        blob_id:
+          type: string
+          minLength: 1
+        ranges:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlobRange'
+
+    ResumableDownloadInitResponse:
+      type: object
+      additionalProperties: false
+      required: [downloads]
+      properties:
+        downloads:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResumableBlobDownloadCapability'
+
+    ResumableBlobDownloadCapability:
+      type: object
+      additionalProperties: false
+      required: [blob_id, download_url, encrypted_size, ranges, expires_at]
+      properties:
+        blob_id:
+          type: string
+          minLength: 1
+        download_url:
+          type: string
+          format: uri
+        encrypted_size:
+          type: integer
+          minimum: 0
+        ranges:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlobRange'
         headers:
           type: object
           additionalProperties:

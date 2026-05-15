@@ -22,6 +22,18 @@ export interface LocalAiSettings {
   api_key?: string;
 }
 
+export interface LocalCryptoSettings {
+  schema_version: string;
+  crypto_scheme: string;
+  key_epoch: number;
+  unlocked: boolean;
+  key_available: boolean;
+  storage_provider: string;
+  key_ref: string;
+  message: string;
+  error?: string | null;
+}
+
 export interface LocalSettingsSnapshot {
   schema_version: string;
   source: LocalSettingsSource;
@@ -32,6 +44,7 @@ export interface LocalSettingsSnapshot {
   sync: LocalSyncSettings;
   appearance: LocalAppearanceSettings;
   ai: LocalAiSettings;
+  crypto: LocalCryptoSettings;
 }
 
 export interface LocalSettingsWritePayload {
@@ -60,6 +73,13 @@ export interface LocalSettingsSummary {
   aiModelId: string;
   aiKeyConfigured: boolean;
   aiKey: string;
+  cryptoScheme: string;
+  cryptoUnlocked: boolean;
+  cryptoKeyAvailable: boolean;
+  cryptoStorageProvider: string;
+  cryptoKeyRef: string;
+  cryptoMessage: string;
+  cryptoError: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -105,6 +125,7 @@ export function parseLocalSettingsSnapshot(payload: unknown): LocalSettingsSnaps
   const sync = requireObject(payload, 'sync');
   const appearance = requireObject(payload, 'appearance');
   const ai = requireObject(payload, 'ai');
+  const crypto = isObject(payload.crypto) ? payload.crypto : {};
 
   return {
     schema_version: requireString(payload, 'schema_version'),
@@ -132,6 +153,17 @@ export function parseLocalSettingsSnapshot(payload: unknown): LocalSettingsSnaps
       api_key_configured: Boolean(ai.api_key_configured),
       api_key: typeof ai.api_key === 'string' ? ai.api_key : '',
     },
+    crypto: {
+      schema_version: typeof crypto.schema_version === 'string' ? crypto.schema_version : 'crypto-v1',
+      crypto_scheme: typeof crypto.crypto_scheme === 'string' ? crypto.crypto_scheme : 'placeholder-v1',
+      key_epoch: typeof crypto.key_epoch === 'number' && Number.isFinite(crypto.key_epoch) ? crypto.key_epoch : 1,
+      unlocked: Boolean(crypto.unlocked),
+      key_available: Boolean(crypto.key_available),
+      storage_provider: typeof crypto.storage_provider === 'string' ? crypto.storage_provider : 'unknown',
+      key_ref: typeof crypto.key_ref === 'string' ? crypto.key_ref : '',
+      message: typeof crypto.message === 'string' ? crypto.message : '',
+      error: typeof crypto.error === 'string' ? crypto.error : null,
+    },
   };
 }
 
@@ -156,5 +188,12 @@ export function summarizeLocalSettingsSnapshot(snapshot: LocalSettingsSnapshot):
     aiModelId: snapshot.ai.model_id,
     aiKeyConfigured: snapshot.ai.api_key_configured,
     aiKey: snapshot.ai.api_key ?? '',
+    cryptoScheme: snapshot.crypto.crypto_scheme,
+    cryptoUnlocked: snapshot.crypto.unlocked,
+    cryptoKeyAvailable: snapshot.crypto.key_available,
+    cryptoStorageProvider: snapshot.crypto.storage_provider,
+    cryptoKeyRef: snapshot.crypto.key_ref,
+    cryptoMessage: snapshot.crypto.message,
+    cryptoError: snapshot.crypto.error ?? '',
   };
 }

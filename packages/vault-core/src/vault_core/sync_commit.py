@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
@@ -12,6 +12,7 @@ from .ledger import rewrite_tombstone_ledger
 from .manifest import compute_intent_manifest_hash, finalize_manifest_revision
 from .models import (
     CommitIntentJournalRecord,
+    FileVersionCommitDirective,
     FileMapDocument,
     FileRecord,
     ManifestFileEntry,
@@ -165,6 +166,7 @@ class CommitSubmissionBundle:
     journal: CommitIntentJournalRecord
     state: VaultStateRecord
     snapshot_plan: Optional[ContentSnapshotPlan] = None
+    file_version_directives: list[FileVersionCommitDirective] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -299,6 +301,7 @@ class CreateCommitRequestPayload:
     intent_delete_seq_upper_bound: Optional[int]
     manifest: ManifestRecord
     blob_refs: list[CreateCommitBlobRef]
+    file_version_directives: list[FileVersionCommitDirective] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -954,6 +957,7 @@ def build_create_commit_request_payload(
         intent_delete_seq_upper_bound=submission.journal.intent_delete_seq_upper_bound,
         manifest=submission.manifest,
         blob_refs=blob_refs,
+        file_version_directives=list(submission.file_version_directives),
     )
 
 
@@ -1182,6 +1186,7 @@ def prepare_commit_submission(
         journal=submitted.journal,
         state=submitted.state,
         snapshot_plan=frozen.snapshot_plan,
+        file_version_directives=submitted.file_version_directives,
     )
 
 

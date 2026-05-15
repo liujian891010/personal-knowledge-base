@@ -68,18 +68,40 @@ class DesktopSyncRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.device_id, "desktop-shanghai")
         self.assertIs(runtime.session.transport, runtime.transport)
         self.assertIs(runtime.session.uploader, runtime.uploader)
+        self.assertIsNone(runtime.session.resumable_uploader)
         self.assertIs(runtime.session.downloader, runtime.downloader)
+        self.assertIsNone(runtime.session.resumable_downloader)
         self.assertEqual(runtime.transport.base_url, "https://sync.example.com/api")
         self.assertEqual(runtime.transport.bearer_token, "token-123")
         self.assertEqual(runtime.transport.timeout_seconds, 12.5)
         self.assertEqual(runtime.transport.user_agent, "pkb-desktop/1.0")
         self.assertIs(runtime.transport.opener, opener)
         self.assertEqual(runtime.uploader.timeout_seconds, 48.0)
+        self.assertEqual(runtime.resumable_uploader.timeout_seconds, 48.0)
         self.assertEqual(runtime.downloader.timeout_seconds, 48.0)
+        self.assertEqual(runtime.resumable_downloader.timeout_seconds, 48.0)
         self.assertEqual(runtime.uploader.user_agent, "pkb-desktop/1.0")
+        self.assertEqual(runtime.resumable_uploader.user_agent, "pkb-desktop/1.0")
         self.assertEqual(runtime.downloader.user_agent, "pkb-desktop/1.0")
+        self.assertEqual(runtime.resumable_downloader.user_agent, "pkb-desktop/1.0")
         self.assertIs(runtime.uploader.opener, opener)
+        self.assertIs(runtime.resumable_uploader.opener, opener)
         self.assertIs(runtime.downloader.opener, opener)
+        self.assertIs(runtime.resumable_downloader.opener, opener)
+
+    def test_can_enable_resumable_uploads_for_session(self) -> None:
+        config = DesktopSyncHttpConfig(
+            base_url="https://sync.example.com/api",
+            vault_id="vault-001",
+            device_id="desktop-shanghai",
+            use_resumable_uploads=True,
+            use_resumable_downloads=True,
+        )
+
+        runtime = build_desktop_sync_runtime(config)
+
+        self.assertIs(runtime.session.resumable_uploader, runtime.resumable_uploader)
+        self.assertIs(runtime.session.resumable_downloader, runtime.resumable_downloader)
 
     def test_allows_distinct_blob_opener(self) -> None:
         config = DesktopSyncHttpConfig(
@@ -102,7 +124,9 @@ class DesktopSyncRuntimeTests(unittest.TestCase):
 
         self.assertIs(runtime.transport.opener, api_opener)
         self.assertIs(runtime.uploader.opener, blob_opener)
+        self.assertIs(runtime.resumable_uploader.opener, blob_opener)
         self.assertIs(runtime.downloader.opener, blob_opener)
+        self.assertIs(runtime.resumable_downloader.opener, blob_opener)
 
     def test_build_desktop_sync_session_returns_wired_session(self) -> None:
         config = DesktopSyncHttpConfig(
@@ -115,7 +139,9 @@ class DesktopSyncRuntimeTests(unittest.TestCase):
 
         self.assertEqual(session.transport.base_url, "https://sync.example.com/api")
         self.assertIsNotNone(session.uploader)
+        self.assertIsNone(session.resumable_uploader)
         self.assertIsNotNone(session.downloader)
+        self.assertIsNone(session.resumable_downloader)
 
 
 if __name__ == "__main__":

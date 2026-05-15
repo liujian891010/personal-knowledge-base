@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,28 +13,71 @@ sys.path.insert(0, str(SERVER_ROOT))
 from sync_store import BlobCapabilityError, CommitConflict, SyncStore  # noqa: E402
 
 
-def _manifest(vault_id: str, *, base_revision: int, blob_id: str = "blob-1") -> dict[str, object]:
+def _manifest(
+    vault_id: str,
+    *,
+    base_revision: int,
+    blob_id: str = "blob-1",
+    content_hash: str = "sha256:plain",
+    path: str = "Notes/hello.md",
+    created_at: int = 1770000000000,
+    created_by_device: str = "device-a",
+) -> dict[str, object]:
     return {
         "schema_version": "v1",
         "vault_id": vault_id,
         "revision": 0,
         "base_revision": base_revision,
-        "created_by_device": "device-a",
-        "created_at": 1770000000000,
+        "created_by_device": created_by_device,
+        "created_at": created_at,
         "files": [
             {
                 "file_id": "file-1",
-                "path": "Notes/hello.md",
+                "path": path,
                 "type": "note",
-                "content_hash": "sha256:plain",
+                "content_hash": content_hash,
                 "blob_id": blob_id,
                 "size": 5,
-                "mtime": 1770000000000,
+                "mtime": created_at,
             }
         ],
         "tombstones": [],
         "summary_hash": "pending",
     }
+
+
+def _deleted_manifest(
+    vault_id: str,
+    *,
+    base_revision: int,
+    deleted_at: int = 1770000000000,
+    created_at: int = 1770000000000,
+    created_by_device: str = "device-a",
+) -> dict[str, object]:
+    return {
+        "schema_version": "v1",
+        "vault_id": vault_id,
+        "revision": 0,
+        "base_revision": base_revision,
+        "created_by_device": created_by_device,
+        "created_at": created_at,
+        "files": [],
+        "tombstones": [
+            {
+                "file_id": "file-1",
+                "deleted_revision": None,
+                "deleted_at": deleted_at,
+                "local_delete_seq": 1,
+                "last_known_path": "Notes/hello.md",
+                "deleted_by_device": created_by_device,
+            }
+        ],
+        "summary_hash": "pending",
+    }
+
+
+def _sha256(payload: bytes) -> str:
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 class SyncStoreTests(unittest.TestCase):
@@ -59,6 +103,101 @@ class SyncStoreTests(unittest.TestCase):
             self.store.device_id_for_token(response["access_token"]),
             response["device_id"],
         )
+
+    def test_list_vault_devices_and_heartbeat_report_ack_and_inactive_state(self) -> None:
+        desktop = self.store.register_device(
+            {
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "app_version": "1.0.43",
+                "protocol_version": "v1",
+            }
+        )
+        mobile = self.store.register_device(
+            {
+                "device_name": "Phone",
+                "platform": "mobile",
+                "protocol_version": "v1",
+            }
+        )
+
+        self.store.get_vault_head("vault-1")
+        state = self.store._load()
+        vault = state["vaults"]["vault-1"]
+        vault["head_revision"] = 8
+        vault["acks"] = {
+            desktop["device_id"]: 8,
+            mobile["device_id"]: 3,
+        }
+        state["devices"][desktop["device_id"]]["last_seen_at_ms"] = 1770000000000
+        state["devices"][mobile["device_id"]]["last_seen_at_ms"] = 1769000000000
+        self.store._save(state)
+
+        listed = self.store.list_vault_devices(
+            "vault-1",
+            current_device_id=desktop["device_id"],
+            now_ms=1770000005000,
+            inactive_after_ms=60_000,
+        )
+
+        self.assertEqual(listed["head_revision"], 8)
+        self.assertEqual(listed["inactive_after_ms"], 60_000)
+        self.assertEqual([item["device_id"] for item in listed["devices"]], [desktop["device_id"], mobile["device_id"]])
+        self.assertTrue(listed["devices"][0]["is_current_device"])
+        self.assertFalse(listed["devices"][0]["is_inactive_candidate"])
+        self.assertEqual(listed["devices"][0]["acked_revision"], 8)
+        self.assertEqual(listed["devices"][0]["app_version"], "1.0.43")
+        self.assertFalse(listed["devices"][0]["is_revoked"])
+        self.assertFalse("access_token" in listed["devices"][0])
+        self.assertTrue(listed["devices"][1]["is_inactive_candidate"])
+        self.assertEqual(listed["devices"][1]["acked_revision"], 3)
+
+        heartbeat = self.store.heartbeat_device(
+            "vault-1",
+            device_id=mobile["device_id"],
+            now_ms=1770000006000,
+        )
+        self.assertEqual(heartbeat["last_seen_at_ms"], 1770000006000)
+        self.assertEqual(heartbeat["acked_revision"], 3)
+        self.assertEqual(heartbeat["head_revision"], 8)
+
+        refreshed = self.store.list_vault_devices(
+            "vault-1",
+            current_device_id=desktop["device_id"],
+            now_ms=1770000006000,
+            inactive_after_ms=60_000,
+        )
+        refreshed_mobile = next(item for item in refreshed["devices"] if item["device_id"] == mobile["device_id"])
+        self.assertFalse(refreshed_mobile["is_inactive_candidate"])
+
+    def test_list_vault_devices_omits_registered_devices_not_joined_to_vault(self) -> None:
+        desktop = self.store.register_device(
+            {
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+            }
+        )
+        phone = self.store.register_device(
+            {
+                "device_name": "Phone",
+                "platform": "mobile",
+                "protocol_version": "v1",
+            }
+        )
+        self.store.get_vault_head("vault-1")
+        state = self.store._load()
+        state["vaults"]["vault-1"]["acks"] = {desktop["device_id"]: 0}
+        self.store._save(state)
+
+        listed = self.store.list_vault_devices(
+            "vault-1",
+            current_device_id=desktop["device_id"],
+            now_ms=1770000005000,
+        )
+
+        self.assertEqual([item["device_id"] for item in listed["devices"]], [desktop["device_id"]])
+        self.assertNotIn(phone["device_id"], [item["device_id"] for item in listed["devices"]])
 
     def test_delete_device_revokes_token_and_device_capabilities(self) -> None:
         registered = self.store.register_device(
@@ -164,6 +303,267 @@ class SyncStoreTests(unittest.TestCase):
         download_token = download["downloads"][0]["download_url"].rsplit("/", 1)[-1]
         self.assertEqual(self.store.read_blob_download(download_token), b"payload")
 
+    def test_resumable_blob_upload_tracks_chunks_and_completes_blob(self) -> None:
+        payload = b"encrypted-payload"
+        init = self.store.init_resumable_blob_upload(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-resumable-1",
+                        "encrypted_size": len(payload),
+                        "content_hash": "sha256:plain",
+                        "encrypted_sha256": _sha256(payload),
+                        "chunk_size": 5,
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id="device-a",
+        )
+        upload = init["uploads"][0]
+        self.assertEqual(upload["uploaded_chunks"], [])
+        self.assertEqual(len(upload["missing_chunks"]), 4)
+
+        first_chunk = upload["missing_chunks"][0]
+        second_chunk = upload["missing_chunks"][1]
+        session_id = upload["session_id"]
+        self.store.put_resumable_blob_chunk(
+            session_id,
+            chunk_id=first_chunk["chunk_id"],
+            offset=first_chunk["offset"],
+            size=first_chunk["size"],
+            payload=payload[first_chunk["offset"] : first_chunk["offset"] + first_chunk["size"]],
+        )
+        self.store.put_resumable_blob_chunk(
+            session_id,
+            chunk_id=second_chunk["chunk_id"],
+            offset=second_chunk["offset"],
+            size=second_chunk["size"],
+            payload=payload[second_chunk["offset"] : second_chunk["offset"] + second_chunk["size"]],
+        )
+
+        resumed = self.store.init_resumable_blob_upload(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-resumable-1",
+                        "encrypted_size": len(payload),
+                        "content_hash": "sha256:plain",
+                        "encrypted_sha256": _sha256(payload),
+                        "chunk_size": 5,
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id="device-a",
+        )
+        resumed_upload = resumed["uploads"][0]
+        self.assertEqual(resumed_upload["session_id"], session_id)
+        self.assertEqual([chunk["status"] for chunk in resumed_upload["uploaded_chunks"]], ["uploaded", "uploaded"])
+        self.assertEqual(len(resumed_upload["missing_chunks"]), 2)
+
+        incomplete = self.store.complete_resumable_blob_upload(
+            "vault-1",
+            {
+                "uploads": [
+                    {
+                        "blob_id": "blob-resumable-1",
+                        "session_id": session_id,
+                        "encrypted_size": len(payload),
+                        "encrypted_sha256": _sha256(payload),
+                        "uploaded_chunk_ids": [chunk["chunk_id"] for chunk in resumed_upload["uploaded_chunks"]],
+                    }
+                ]
+            },
+        )
+        self.assertEqual(incomplete["uploads"][0]["status"], "incomplete")
+        self.assertEqual(len(incomplete["uploads"][0]["missing_chunks"]), 2)
+        self.assertEqual(
+            self.store.check_blobs("vault-1", {"blob_ids": ["blob-resumable-1"]})["missing_blob_ids"],
+            ["blob-resumable-1"],
+        )
+
+        all_chunks = resumed_upload["uploaded_chunks"] + resumed_upload["missing_chunks"]
+        for chunk in resumed_upload["missing_chunks"]:
+            self.store.put_resumable_blob_chunk(
+                session_id,
+                chunk_id=chunk["chunk_id"],
+                offset=chunk["offset"],
+                size=chunk["size"],
+                payload=payload[chunk["offset"] : chunk["offset"] + chunk["size"]],
+            )
+
+        accepted = self.store.complete_resumable_blob_upload(
+            "vault-1",
+            {
+                "uploads": [
+                    {
+                        "blob_id": "blob-resumable-1",
+                        "session_id": session_id,
+                        "encrypted_size": len(payload),
+                        "encrypted_sha256": _sha256(payload),
+                        "uploaded_chunk_ids": [chunk["chunk_id"] for chunk in all_chunks],
+                    }
+                ]
+            },
+        )
+        self.assertEqual(accepted["uploads"][0]["status"], "accepted")
+        self.assertEqual(
+            self.store.check_blobs("vault-1", {"blob_ids": ["blob-resumable-1"]})["existing_blob_ids"],
+            ["blob-resumable-1"],
+        )
+        download = self.store.init_blob_download(
+            "vault-1",
+            {"blob_ids": ["blob-resumable-1"]},
+            request_base_url="http://127.0.0.1:8000/",
+            device_id="device-a",
+        )
+        download_token = download["downloads"][0]["download_url"].rsplit("/", 1)[-1]
+        self.assertEqual(self.store.read_blob_download(download_token), payload)
+
+    def test_resumable_blob_upload_rejects_wrong_chunk_metadata_and_hash(self) -> None:
+        payload = b"encrypted-payload"
+        init = self.store.init_resumable_blob_upload(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-resumable-2",
+                        "encrypted_size": len(payload),
+                        "content_hash": "sha256:plain",
+                        "encrypted_sha256": "sha256:wrong",
+                        "chunk_size": len(payload),
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id="device-a",
+        )
+        upload = init["uploads"][0]
+        chunk = upload["missing_chunks"][0]
+
+        with self.assertRaises(BlobCapabilityError) as context:
+            self.store.put_resumable_blob_chunk(
+                upload["session_id"],
+                chunk_id=chunk["chunk_id"],
+                offset=chunk["offset"] + 1,
+                size=chunk["size"],
+                payload=payload,
+            )
+        self.assertEqual(context.exception.code, "chunk_range_mismatch")
+
+        self.store.put_resumable_blob_chunk(
+            upload["session_id"],
+            chunk_id=chunk["chunk_id"],
+            offset=chunk["offset"],
+            size=chunk["size"],
+            payload=payload,
+        )
+        with self.assertRaisesRegex(ValueError, "encrypted_sha256"):
+            self.store.complete_resumable_blob_upload(
+                "vault-1",
+                {
+                    "uploads": [
+                        {
+                            "blob_id": "blob-resumable-2",
+                            "session_id": upload["session_id"],
+                            "encrypted_size": len(payload),
+                            "encrypted_sha256": "sha256:wrong",
+                            "uploaded_chunk_ids": [chunk["chunk_id"]],
+                        }
+                    ]
+                },
+            )
+
+    def test_resumable_blob_download_returns_authorized_ranges(self) -> None:
+        payload = b"encrypted-payload"
+        upload = self.store.init_blob_upload(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-ranged-download",
+                        "encrypted_size": len(payload),
+                        "content_hash": "sha256:plain",
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id="device-a",
+        )
+        upload_token = upload["uploads"][0]["upload_url"].rsplit("/", 1)[-1]
+        self.store.complete_blob_upload(upload_token, payload)
+
+        download = self.store.init_resumable_blob_download(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-ranged-download",
+                        "ranges": [
+                            {"offset": 0, "size": 5},
+                            {"offset": 5, "size": len(payload) - 5},
+                        ],
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id="device-a",
+        )
+        capability = download["downloads"][0]
+        token = capability["download_url"].rsplit("/", 1)[-1]
+
+        self.assertEqual(capability["encrypted_size"], len(payload))
+        self.assertEqual(capability["ranges"], [{"offset": 0, "size": 5}, {"offset": 5, "size": len(payload) - 5}])
+        self.assertEqual(
+            self.store.read_resumable_blob_download(token, offset=0, size=5),
+            payload[:5],
+        )
+        self.assertEqual(
+            self.store.read_resumable_blob_download(token, offset=5, size=len(payload) - 5),
+            payload[5:],
+        )
+
+        with self.assertRaises(BlobCapabilityError) as context:
+            self.store.read_resumable_blob_download(token, offset=1, size=len(payload))
+        self.assertEqual(context.exception.code, "range_not_authorized")
+
+    def test_resumable_blob_download_rejects_invalid_range_request(self) -> None:
+        payload = b"encrypted-payload"
+        upload = self.store.init_blob_upload(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-ranged-download-invalid",
+                        "encrypted_size": len(payload),
+                        "content_hash": "sha256:plain",
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id="device-a",
+        )
+        upload_token = upload["uploads"][0]["upload_url"].rsplit("/", 1)[-1]
+        self.store.complete_blob_upload(upload_token, payload)
+
+        with self.assertRaisesRegex(ValueError, "exceeds"):
+            self.store.init_resumable_blob_download(
+                "vault-1",
+                {
+                    "blobs": [
+                        {
+                            "blob_id": "blob-ranged-download-invalid",
+                            "ranges": [{"offset": len(payload), "size": 1}],
+                        }
+                    ]
+                },
+                request_base_url="http://127.0.0.1:8000/",
+                device_id="device-a",
+            )
+
     def test_create_commit_advances_head_and_stores_manifest(self) -> None:
         self.store.init_blob_upload(
             "vault-1",
@@ -204,6 +604,407 @@ class SyncStoreTests(unittest.TestCase):
         self.assertEqual(manifest["revision"], 1)
         self.assertEqual(manifest["base_revision"], 0)
         self.assertEqual(manifest["tombstones"], [])
+
+    def test_tombstone_gc_waits_for_all_joined_active_devices_ack(self) -> None:
+        desktop = self.store.register_device(
+            {
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+            }
+        )
+        phone = self.store.register_device(
+            {
+                "device_name": "Phone",
+                "platform": "mobile",
+                "protocol_version": "v1",
+            }
+        )
+        unjoined = self.store.register_device(
+            {
+                "device_name": "Unjoined",
+                "platform": "desktop",
+                "protocol_version": "v1",
+            }
+        )
+        desktop_id = desktop["device_id"]
+        phone_id = phone["device_id"]
+
+        self.store.init_blob_upload(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-1",
+                        "encrypted_size": 7,
+                        "content_hash": "sha256:plain",
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id=desktop_id,
+        )
+        state = self.store._load()
+        capability_token = next(iter(state["capabilities"]))
+        self.store.complete_blob_upload(capability_token, b"payload")
+
+        self.store.create_commit(
+            "vault-1",
+            {
+                "commit_intent_id": "intent-gc-file",
+                "base_revision": 0,
+                "created_by_device": desktop_id,
+                "intent_manifest_hash": "sha256:intent-gc-file",
+                "manifest": _manifest("vault-1", base_revision=0, created_by_device=desktop_id),
+                "blob_refs": [{"blob_id": "blob-1", "file_id": "file-1"}],
+            },
+            auth_device_id=desktop_id,
+        )
+        self.store.ack_revisions("vault-1", {"revisions": [1]}, device_id=phone_id)
+
+        deleted = self.store.create_commit(
+            "vault-1",
+            {
+                "commit_intent_id": "intent-gc-delete",
+                "base_revision": 1,
+                "created_by_device": desktop_id,
+                "intent_manifest_hash": "sha256:intent-gc-delete",
+                "manifest": _deleted_manifest(
+                    "vault-1",
+                    base_revision=1,
+                    deleted_at=1,
+                    created_at=1770000010000,
+                    created_by_device=desktop_id,
+                ),
+                "blob_refs": [],
+            },
+            auth_device_id=desktop_id,
+        )
+        self.assertEqual(deleted["new_revision"], 2)
+
+        blocked = self.store.run_tombstone_gc(
+            "vault-1",
+            now_ms=1770000020000,
+            min_retention_ms=0,
+        )
+
+        self.assertIsNone(blocked["new_revision"])
+        self.assertEqual(blocked["head_revision"], 2)
+        self.assertEqual(blocked["reclaimed_count"], 0)
+        self.assertCountEqual(blocked["active_device_ids"], [desktop_id, phone_id])
+        self.assertNotIn(unjoined["device_id"], blocked["active_device_ids"])
+        self.assertEqual(blocked["blocked_tombstones"][0]["reason"], "waiting_for_ack")
+        self.assertEqual(blocked["blocked_tombstones"][0]["blocked_by_devices"][0]["device_id"], phone_id)
+
+        acked = self.store.ack_revisions("vault-1", {"revisions": [2]}, device_id=phone_id)
+        self.assertEqual(acked["max_acked_revision"], 2)
+        self.assertEqual(self.store.get_vault_head("vault-1")["head_revision"], 3)
+        gc_manifest = self.store.get_manifest("vault-1", 3)
+        self.assertEqual(gc_manifest["base_revision"], 2)
+        self.assertEqual(gc_manifest["tombstones"], [])
+        state = self.store._load()
+        runs = state["vaults"]["vault-1"]["tombstone_gc"]["runs"]
+        self.assertEqual(runs[-1]["reason"], "reclaimed")
+        self.assertEqual(runs[-1]["reclaimed_tombstones"][0]["file_id"], "file-1")
+
+    def test_delete_device_triggers_tombstone_gc_after_blocker_removed(self) -> None:
+        desktop = self.store.register_device(
+            {
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+            }
+        )
+        phone = self.store.register_device(
+            {
+                "device_name": "Phone",
+                "platform": "mobile",
+                "protocol_version": "v1",
+            }
+        )
+        desktop_id = desktop["device_id"]
+        phone_id = phone["device_id"]
+
+        self.store.init_blob_upload(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-1",
+                        "encrypted_size": 7,
+                        "content_hash": "sha256:plain",
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id=desktop_id,
+        )
+        state = self.store._load()
+        capability_token = next(iter(state["capabilities"]))
+        self.store.complete_blob_upload(capability_token, b"payload")
+        self.store.create_commit(
+            "vault-1",
+            {
+                "commit_intent_id": "intent-gc-remove-file",
+                "base_revision": 0,
+                "created_by_device": desktop_id,
+                "intent_manifest_hash": "sha256:intent-gc-remove-file",
+                "manifest": _manifest("vault-1", base_revision=0, created_by_device=desktop_id),
+                "blob_refs": [{"blob_id": "blob-1", "file_id": "file-1"}],
+            },
+            auth_device_id=desktop_id,
+        )
+        self.store.ack_revisions("vault-1", {"revisions": [1]}, device_id=phone_id)
+        self.store.create_commit(
+            "vault-1",
+            {
+                "commit_intent_id": "intent-gc-remove-delete",
+                "base_revision": 1,
+                "created_by_device": desktop_id,
+                "intent_manifest_hash": "sha256:intent-gc-remove-delete",
+                "manifest": _deleted_manifest(
+                    "vault-1",
+                    base_revision=1,
+                    deleted_at=1,
+                    created_at=1770000010000,
+                    created_by_device=desktop_id,
+                ),
+                "blob_refs": [],
+            },
+            auth_device_id=desktop_id,
+        )
+
+        self.assertEqual(self.store.get_vault_head("vault-1")["head_revision"], 2)
+        self.assertTrue(self.store.delete_device(phone_id))
+
+        self.assertEqual(self.store.get_vault_head("vault-1")["head_revision"], 3)
+        gc_manifest = self.store.get_manifest("vault-1", 3)
+        self.assertEqual(gc_manifest["tombstones"], [])
+        listed = self.store.list_vault_devices(
+            "vault-1",
+            current_device_id=desktop_id,
+            now_ms=1770000020000,
+        )
+        self.assertEqual([item["device_id"] for item in listed["devices"]], [desktop_id, phone_id])
+        self.assertTrue(next(item for item in listed["devices"] if item["device_id"] == phone_id)["is_revoked"])
+
+    def test_create_commit_writes_file_versions_by_stable_file_id(self) -> None:
+        self.store.init_blob_upload(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-meeting-v1",
+                        "encrypted_size": 7,
+                        "content_hash": "sha256:meeting-v1",
+                    },
+                    {
+                        "blob_id": "blob-meeting-v2",
+                        "encrypted_size": 7,
+                        "content_hash": "sha256:meeting-v2",
+                    },
+                    {
+                        "blob_id": "blob-meeting-v3",
+                        "encrypted_size": 7,
+                        "content_hash": "sha256:meeting-v3",
+                    },
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id="device-a",
+        )
+        state = self.store._load()
+        for token in list(state["capabilities"]):
+            self.store.complete_blob_upload(token, b"payload")
+
+        first = self.store.create_commit(
+            "vault-1",
+            {
+                "commit_intent_id": "intent-meeting-1",
+                "base_revision": 0,
+                "created_by_device": "device-a",
+                "intent_manifest_hash": "sha256:intent-meeting-1",
+                "manifest": _manifest(
+                    "vault-1",
+                    base_revision=0,
+                    blob_id="blob-meeting-v1",
+                    content_hash="sha256:meeting-v1",
+                    path="Meetings/XXX.md",
+                    created_at=1770000000000,
+                ),
+                "blob_refs": [{"blob_id": "blob-meeting-v1", "file_id": "file-1"}],
+            },
+            auth_device_id="device-a",
+        )
+        self.assertEqual(first["new_revision"], 1)
+
+        second = self.store.create_commit(
+            "vault-1",
+            {
+                "commit_intent_id": "intent-meeting-2",
+                "base_revision": 1,
+                "created_by_device": "device-a",
+                "intent_manifest_hash": "sha256:intent-meeting-2",
+                "manifest": _manifest(
+                    "vault-1",
+                    base_revision=1,
+                    blob_id="blob-meeting-v2",
+                    content_hash="sha256:meeting-v2",
+                    path="Meetings/XXX.md",
+                    created_at=1770000010000,
+                ),
+                "blob_refs": [{"blob_id": "blob-meeting-v2", "file_id": "file-1"}],
+                "file_version_directives": [
+                    {
+                        "file_id": "file-1",
+                        "source": "manual_meeting_checkpoint",
+                        "version_label": "2026-05-15 周会",
+                        "change_note": "会后确认版",
+                        "is_pinned": True,
+                    }
+                ],
+            },
+            auth_device_id="device-a",
+        )
+        self.assertEqual(second["new_revision"], 2)
+
+        moved = self.store.create_commit(
+            "vault-1",
+            {
+                "commit_intent_id": "intent-meeting-3",
+                "base_revision": 2,
+                "created_by_device": "device-a",
+                "intent_manifest_hash": "sha256:intent-meeting-3",
+                "manifest": _manifest(
+                    "vault-1",
+                    base_revision=2,
+                    blob_id="blob-meeting-v3",
+                    content_hash="sha256:meeting-v3",
+                    path="Archive/Meetings/XXX.md",
+                    created_at=1770000020000,
+                ),
+                "blob_refs": [{"blob_id": "blob-meeting-v3", "file_id": "file-1"}],
+            },
+            auth_device_id="device-a",
+        )
+        self.assertEqual(moved["new_revision"], 3)
+
+        listed = self.store.list_file_versions("vault-1", {"file_id": "file-1", "limit": 10})
+        self.assertEqual([item["revision"] for item in listed["versions"]], [3, 2, 1])
+        self.assertEqual([item["file_id"] for item in listed["versions"]], ["file-1", "file-1", "file-1"])
+        self.assertEqual(listed["versions"][0]["path_at_revision"], "Archive/Meetings/XXX.md")
+        self.assertEqual(listed["versions"][1]["source"], "manual_meeting_checkpoint")
+        self.assertEqual(listed["versions"][1]["version_label"], "2026-05-15 周会")
+        self.assertTrue(listed["versions"][1]["is_pinned"])
+
+        updated = self.store.update_file_version(
+            "vault-1",
+            listed["versions"][1]["version_id"],
+            {
+                "version_label": "客户会议复盘",
+                "change_note": "补充行动项",
+                "is_pinned": False,
+            },
+        )
+        self.assertEqual(updated["version"]["version_label"], "客户会议复盘")
+        self.assertEqual(updated["version"]["change_note"], "补充行动项")
+        self.assertFalse(updated["version"]["is_pinned"])
+
+    def test_create_commit_does_not_version_unchanged_blob_ref_without_directive(self) -> None:
+        self.test_create_commit_advances_head_and_stores_manifest()
+
+        self.store.create_commit(
+            "vault-1",
+            {
+                "commit_intent_id": "intent-unchanged",
+                "base_revision": 1,
+                "created_by_device": "device-a",
+                "intent_manifest_hash": "sha256:intent-unchanged",
+                "manifest": _manifest("vault-1", base_revision=1, blob_id="blob-1"),
+                "blob_refs": [{"blob_id": "blob-1", "file_id": "file-1"}],
+            },
+            auth_device_id="device-a",
+        )
+
+        listed = self.store.list_file_versions("vault-1", {"file_id": "file-1", "limit": 10})
+        self.assertEqual([item["revision"] for item in listed["versions"]], [1])
+
+    def test_file_version_retention_keeps_pinned_versions_when_pruning_latest(self) -> None:
+        blobs = [
+            {
+                "blob_id": f"blob-retention-{index}",
+                "encrypted_size": 7,
+                "content_hash": f"sha256:retention-{index}",
+            }
+            for index in range(1, 5)
+        ]
+        self.store.init_blob_upload(
+            "vault-1",
+            {"blobs": blobs},
+            request_base_url="http://127.0.0.1:8000/",
+            device_id="device-a",
+        )
+        state = self.store._load()
+        for token in list(state["capabilities"]):
+            self.store.complete_blob_upload(token, b"payload")
+
+        state = self.store._load()
+        vault = state["vaults"].setdefault(
+            "vault-1",
+            {
+                "head_revision": 0,
+                "manifest_summary": None,
+                "manifests": {},
+                "commits": {},
+                "acks": {},
+                "file_versions": {
+                    "records": {},
+                    "by_file_id": {},
+                    "retention_policy": {"keep_latest": 1, "keep_pinned": True},
+                },
+            },
+        )
+        vault["file_versions"]["retention_policy"] = {"keep_latest": 1, "keep_pinned": True}
+        self.store._save(state)
+
+        for index in range(1, 5):
+            payload: dict[str, object] = {
+                "commit_intent_id": f"intent-retention-{index}",
+                "base_revision": index - 1,
+                "created_by_device": "device-a",
+                "intent_manifest_hash": f"sha256:intent-retention-{index}",
+                "manifest": _manifest(
+                    "vault-1",
+                    base_revision=index - 1,
+                    blob_id=f"blob-retention-{index}",
+                    content_hash=f"sha256:retention-{index}",
+                    path="Meetings/XXX.md",
+                    created_at=1770000100000 + index,
+                ),
+                "blob_refs": [{"blob_id": f"blob-retention-{index}", "file_id": "file-1"}],
+            }
+            if index == 2:
+                payload["file_version_directives"] = [
+                    {
+                        "file_id": "file-1",
+                        "source": "manual_meeting_checkpoint",
+                        "version_label": "Pinned meeting",
+                        "is_pinned": True,
+                    }
+                ]
+            self.store.create_commit("vault-1", payload, auth_device_id="device-a")
+
+        listed = self.store.list_file_versions("vault-1", {"file_id": "file-1", "limit": 10})
+        self.assertEqual([item["revision"] for item in listed["versions"]], [4, 2])
+        self.assertFalse(listed["versions"][0]["is_pinned"])
+        self.assertTrue(listed["versions"][1]["is_pinned"])
+        self.assertEqual(listed["retention_policy"], {"keep_latest": 1, "keep_pinned": True})
+
+        unpinned_only = self.store.list_file_versions(
+            "vault-1",
+            {"file_id": "file-1", "limit": 10, "include_pinned": False},
+        )
+        self.assertEqual([item["revision"] for item in unpinned_only["versions"]], [4])
 
     def test_create_commit_rejects_stale_base_revision(self) -> None:
         self.test_create_commit_advances_head_and_stores_manifest()

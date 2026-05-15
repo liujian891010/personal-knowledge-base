@@ -37,9 +37,14 @@ export interface LocalSettingsController {
   lastError: string | null;
   isRefreshing: boolean;
   isSaving: boolean;
+  isCryptoMutating: boolean;
   savedAtMs: number | null;
   refresh: () => Promise<void>;
   saveSettings: (payload: LocalSettingsWritePayload) => Promise<void>;
+  unlockCrypto: (vaultKeyBase64: string) => Promise<void>;
+  lockCrypto: () => Promise<void>;
+  exportCryptoRecoveryPackage: (recoveryPhrase: string) => Promise<string | null>;
+  importCryptoRecoveryPackage: (recoveryPhrase: string, recoveryPackageJson: string) => Promise<boolean>;
 }
 
 function errorMessage(error: unknown): string {
@@ -134,6 +139,7 @@ export function useLocalSettingsController(): LocalSettingsController {
   const [lastError, setLastError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(!cachedSnapshot);
   const [isSaving, setIsSaving] = useState(false);
+  const [isCryptoMutating, setIsCryptoMutating] = useState(false);
   const [savedAtMs, setSavedAtMs] = useState<number | null>(null);
 
   useEffect(() => {
@@ -193,6 +199,104 @@ export function useLocalSettingsController(): LocalSettingsController {
     }
   };
 
+  const unlockCrypto = async (vaultKeyBase64: string) => {
+    setIsCryptoMutating(true);
+    try {
+      const response = await fetch(`${syncBridgeUrl}/api/crypto/unlock`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ vault_key_base64: vaultKeyBase64 }),
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, 'crypto unlock'));
+      }
+      await refresh();
+      setLastError(null);
+      setSavedAtMs(Date.now());
+    } catch (error) {
+      setLastError(errorMessage(error));
+    } finally {
+      setIsCryptoMutating(false);
+    }
+  };
+
+  const lockCrypto = async () => {
+    setIsCryptoMutating(true);
+    try {
+      const response = await fetch(`${syncBridgeUrl}/api/crypto/lock`, {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, 'crypto lock'));
+      }
+      await refresh();
+      setLastError(null);
+      setSavedAtMs(Date.now());
+    } catch (error) {
+      setLastError(errorMessage(error));
+    } finally {
+      setIsCryptoMutating(false);
+    }
+  };
+
+  const exportCryptoRecoveryPackage = async (recoveryPhrase: string) => {
+    setIsCryptoMutating(true);
+    try {
+      const response = await fetch(`${syncBridgeUrl}/api/crypto/recovery/export`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ recovery_phrase: recoveryPhrase }),
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, 'crypto recovery export'));
+      }
+      const payload = await response.json();
+      if (!payload || typeof payload.recovery_package_json !== 'string') {
+        throw new Error('crypto recovery export returned no recovery_package_json');
+      }
+      setLastError(null);
+      setSavedAtMs(Date.now());
+      return payload.recovery_package_json as string;
+    } catch (error) {
+      setLastError(errorMessage(error));
+      return null;
+    } finally {
+      setIsCryptoMutating(false);
+    }
+  };
+
+  const importCryptoRecoveryPackage = async (recoveryPhrase: string, recoveryPackageJson: string) => {
+    setIsCryptoMutating(true);
+    try {
+      const response = await fetch(`${syncBridgeUrl}/api/crypto/recovery/import`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          recovery_phrase: recoveryPhrase,
+          recovery_package_json: recoveryPackageJson,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, 'crypto recovery import'));
+      }
+      await refresh();
+      setLastError(null);
+      setSavedAtMs(Date.now());
+      return true;
+    } catch (error) {
+      setLastError(errorMessage(error));
+      return false;
+    } finally {
+      setIsCryptoMutating(false);
+    }
+  };
+
   const summary = useMemo(() => summarizeLocalSettingsSnapshot(snapshot), [snapshot]);
   return {
     snapshot,
@@ -201,8 +305,13 @@ export function useLocalSettingsController(): LocalSettingsController {
     lastError,
     isRefreshing,
     isSaving,
+    isCryptoMutating,
     savedAtMs,
     refresh,
     saveSettings,
+    unlockCrypto,
+    lockCrypto,
+    exportCryptoRecoveryPackage,
+    importCryptoRecoveryPackage,
   };
 }

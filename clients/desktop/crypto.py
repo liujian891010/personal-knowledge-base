@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Protocol
 
 
+PLACEHOLDER_CRYPTO_SCHEME = "placeholder-v1"
 E2EE_CRYPTO_SCHEME = "e2ee-v1"
 E2EE_BLOB_ID_PREFIX = "blob-e2ee-v1-"
 E2EE_VAULT_KEY_BYTES = 32

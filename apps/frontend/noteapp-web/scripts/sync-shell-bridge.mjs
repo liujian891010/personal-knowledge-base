@@ -86,9 +86,19 @@ It forwards to:
   GET  /api/settings/snapshot    npm run settings:snapshot equivalent
   POST /api/settings/snapshot    npm run settings:write equivalent
   GET  /api/settings/live        Read current settings snapshot without running CLI
+  GET  /api/crypto/status        Read local E2EE unlock state
+  POST /api/crypto/unlock        Store a local E2EE vault key
+  POST /api/crypto/lock          Remove the local E2EE vault key
+  POST /api/crypto/recovery/export
+                                  Generate an offline E2EE recovery package
+  POST /api/crypto/recovery/import
+                                  Import an offline E2EE recovery package
   GET  /api/auth/session         Read persisted local login session
   POST /api/auth/session         Persist local login session
   DELETE /api/auth/session       Clear local login session
+  GET  /api/devices              List current vault devices and ack state
+  POST /api/devices/heartbeat    Refresh current device heartbeat
+  DELETE /api/devices/:id        Revoke one device
   GET  /api/workspace/files      npm run workspace:files equivalent
   POST /api/workspace/files      Create a local Markdown note
   POST /api/workspace/attachments
@@ -701,6 +711,84 @@ function runDesktopCli(commandArgs) {
   return result.stdout;
 }
 
+function readCryptoStatus() {
+  return JSON.parse(runDesktopCli(['crypto-status']));
+}
+
+function unlockCryptoVault(payload) {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('crypto unlock request must contain an object');
+  }
+  const vaultKeyBase64 = typeof payload.vault_key_base64 === 'string'
+    ? payload.vault_key_base64.trim()
+    : '';
+  const vaultKeyHex = typeof payload.vault_key_hex === 'string'
+    ? payload.vault_key_hex.trim()
+    : '';
+  if (Boolean(vaultKeyBase64) === Boolean(vaultKeyHex)) {
+    throw new Error('crypto unlock requires exactly one of vault_key_base64 or vault_key_hex');
+  }
+  return JSON.parse(runDesktopCli([
+    'crypto-unlock',
+    ...(vaultKeyBase64 ? ['--vault-key-base64', vaultKeyBase64] : ['--vault-key-hex', vaultKeyHex]),
+  ]));
+}
+
+function lockCryptoVault() {
+  return JSON.parse(runDesktopCli(['crypto-lock']));
+}
+
+function requireRecoveryPhrase(payload) {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('crypto recovery request must contain an object');
+  }
+  const recoveryPhrase = typeof payload.recovery_phrase === 'string'
+    ? payload.recovery_phrase.trim()
+    : '';
+  if (!recoveryPhrase) {
+    throw new Error('crypto recovery requires recovery_phrase');
+  }
+  return recoveryPhrase;
+}
+
+function exportCryptoRecoveryPackage(payload) {
+  const recoveryPhrase = requireRecoveryPhrase(payload);
+  return JSON.parse(runDesktopCli([
+    'crypto-recovery-export',
+    '--recovery-phrase',
+    recoveryPhrase,
+  ]));
+}
+
+function importCryptoRecoveryPackage(payload) {
+  const recoveryPhrase = requireRecoveryPhrase(payload);
+  const recoveryPackageJson = typeof payload.recovery_package_json === 'string'
+    ? payload.recovery_package_json.trim()
+    : '';
+  if (!recoveryPackageJson) {
+    throw new Error('请提供恢复包文件，或使用一台已解锁设备进行本地配对');
+  }
+
+  const tempRoot = mkdtempSync(resolve(tmpdir(), 'noteapp-crypto-recovery-'));
+  try {
+    const inputPath = resolve(tempRoot, 'recovery-package.json');
+    writeFileSync(inputPath, `${recoveryPackageJson}\n`, 'utf8');
+    const result = JSON.parse(runDesktopCli([
+      'crypto-recovery-import',
+      '--recovery-phrase',
+      recoveryPhrase,
+      '--input-json',
+      inputPath,
+    ]));
+    runScript('write-local-settings-snapshot.mjs', {
+      NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
+    });
+    return result;
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 function requireBridgeEnv(name) {
   const derivedEnv = deriveBridgeRuntimeEnv();
   const value = derivedEnv[name] || process.env[name];
@@ -1171,6 +1259,59 @@ function workspaceLinksFileIdFromPath(pathname) {
   return decodeURIComponent(encoded);
 }
 
+function workspaceVersionsFileIdFromPath(pathname) {
+  const prefix = '/api/workspace/files/';
+  const suffix = '/versions';
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+    return null;
+  }
+  const encoded = pathname.slice(prefix.length, -suffix.length);
+  if (!encoded || encoded.includes('/')) {
+    return null;
+  }
+  return decodeURIComponent(encoded);
+}
+
+function workspaceVersionRouteFromPath(pathname, suffix) {
+  const prefix = '/api/workspace/files/';
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+    return null;
+  }
+  const encoded = pathname.slice(prefix.length, -suffix.length);
+  const parts = encoded.split('/');
+  if (parts.length !== 3 || parts[1] !== 'versions' || !parts[0] || !parts[2]) {
+    return null;
+  }
+  return {
+    fileId: decodeURIComponent(parts[0]),
+    versionId: decodeURIComponent(parts[2]),
+  };
+}
+
+function workspaceVersionContentFromPath(pathname) {
+  return workspaceVersionRouteFromPath(pathname, '/content');
+}
+
+function workspaceVersionDiffFromPath(pathname) {
+  return workspaceVersionRouteFromPath(pathname, '/diff');
+}
+
+function workspaceVersionRestoreFromPath(pathname) {
+  return workspaceVersionRouteFromPath(pathname, '/restore');
+}
+
+function workspaceFileVersionIdFromPath(pathname) {
+  const prefix = '/api/workspace/file-versions/';
+  if (!pathname.startsWith(prefix)) {
+    return null;
+  }
+  const encoded = pathname.slice(prefix.length);
+  if (!encoded || encoded.includes('/')) {
+    return null;
+  }
+  return decodeURIComponent(encoded);
+}
+
 function workspaceFileIdFromPath(pathname) {
   const prefix = '/api/workspace/files/';
   if (!pathname.startsWith(prefix)) {
@@ -1369,6 +1510,43 @@ const server = createServer(async (request, response) => {
         });
       }
       jsonResponse(request, response, 200, readSettingsSnapshot());
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/crypto/status') {
+      jsonResponse(request, response, 200, readCryptoStatus());
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/crypto/unlock') {
+      const rawBody = await readRequestBody(request);
+      const payload = rawBody ? JSON.parse(rawBody) : {};
+      jsonResponse(request, response, 200, unlockCryptoVault(payload));
+      runScript('write-local-settings-snapshot.mjs', {
+        NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/crypto/lock') {
+      jsonResponse(request, response, 200, lockCryptoVault());
+      runScript('write-local-settings-snapshot.mjs', {
+        NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT: settingsSnapshotPath,
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/crypto/recovery/export') {
+      const rawBody = await readRequestBody(request);
+      const payload = rawBody ? JSON.parse(rawBody) : {};
+      jsonResponse(request, response, 200, exportCryptoRecoveryPackage(payload));
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/crypto/recovery/import') {
+      const rawBody = await readRequestBody(request);
+      const payload = rawBody ? JSON.parse(rawBody) : {};
+      jsonResponse(request, response, 200, importCryptoRecoveryPackage(payload));
       return;
     }
 
@@ -1648,6 +1826,133 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'POST' && routePathname === '/api/ai/provider/health') {
       const stdout = runDesktopCli(['ai-provider-health']);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    if (request.method === 'GET' && routePathname === '/api/devices') {
+      const stdout = runDesktopCli(['vault-devices']);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    if (request.method === 'POST' && routePathname === '/api/devices/heartbeat') {
+      const stdout = runDesktopCli(['heartbeat-vault-device']);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    const deviceRoutePrefix = '/api/devices/';
+    if (request.method === 'DELETE' && routePathname.startsWith(deviceRoutePrefix)) {
+      const deviceId = decodeURIComponent(routePathname.slice(deviceRoutePrefix.length));
+      if (!deviceId || deviceId.includes('/')) {
+        throw new Error('device revoke request must include one device id');
+      }
+      const stdout = runDesktopCli(['revoke-device', '--target-device-id', deviceId]);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    const workspaceVersionsFileId = workspaceVersionsFileIdFromPath(routePathname);
+    if (request.method === 'GET' && workspaceVersionsFileId) {
+      const commandArgs = ['file-versions', '--file-id', workspaceVersionsFileId];
+      const limit = url.searchParams.get('limit');
+      const cursor = url.searchParams.get('cursor');
+      if (limit) {
+        commandArgs.push('--limit', limit);
+      }
+      if (cursor) {
+        commandArgs.push('--cursor', cursor);
+      }
+      const stdout = runDesktopCli(commandArgs);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    const workspaceVersionContentRoute = workspaceVersionContentFromPath(routePathname);
+    if (request.method === 'GET' && workspaceVersionContentRoute) {
+      const stdout = runDesktopCli([
+        'file-version-content',
+        '--file-id',
+        workspaceVersionContentRoute.fileId,
+        '--version-id',
+        workspaceVersionContentRoute.versionId,
+      ]);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    const workspaceVersionDiffRoute = workspaceVersionDiffFromPath(routePathname);
+    if (request.method === 'GET' && workspaceVersionDiffRoute) {
+      const contextLines = url.searchParams.get('context_lines') || url.searchParams.get('contextLines');
+      const commandArgs = [
+        'diff-file-version',
+        '--file-id',
+        workspaceVersionDiffRoute.fileId,
+        '--version-id',
+        workspaceVersionDiffRoute.versionId,
+      ];
+      if (contextLines) {
+        commandArgs.push('--context-lines', contextLines);
+      }
+      const stdout = runDesktopCli(commandArgs);
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    const workspaceVersionRestoreRoute = workspaceVersionRestoreFromPath(routePathname);
+    if (request.method === 'POST' && workspaceVersionRestoreRoute) {
+      const rawBody = await readRequestBody(request);
+      const payload = rawBody ? JSON.parse(rawBody) : {};
+      const commandArgs = [
+        'restore-file-version',
+        '--file-id',
+        workspaceVersionRestoreRoute.fileId,
+        '--version-id',
+        workspaceVersionRestoreRoute.versionId,
+        '--created-at',
+        String(Date.now()),
+      ];
+      if (typeof payload.version_label === 'string' && payload.version_label.trim()) {
+        commandArgs.push('--version-label', payload.version_label.trim());
+      }
+      if (typeof payload.change_note === 'string' && payload.change_note.trim()) {
+        commandArgs.push('--change-note', payload.change_note.trim());
+      }
+      if (payload.is_pinned === true) {
+        commandArgs.push('--pin-version');
+      }
+      const stdout = runDesktopCli(commandArgs);
+      runScript('write-workspace-files.mjs', {
+        NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+      });
+      runScript('write-live-sync-shell.mjs', {
+        NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
+      });
+      jsonResponse(request, response, 200, JSON.parse(stdout));
+      return;
+    }
+
+    const workspaceFileVersionId = workspaceFileVersionIdFromPath(routePathname);
+    if (request.method === 'PATCH' && workspaceFileVersionId) {
+      const rawBody = await readRequestBody(request);
+      const payload = rawBody ? JSON.parse(rawBody) : {};
+      const commandArgs = ['update-file-version', '--version-id', workspaceFileVersionId];
+      if (typeof payload.version_label === 'string' && payload.version_label.trim()) {
+        commandArgs.push('--version-label', payload.version_label.trim());
+      }
+      if (typeof payload.change_note === 'string' && payload.change_note.trim()) {
+        commandArgs.push('--change-note', payload.change_note.trim());
+      }
+      if (payload.is_pinned === true) {
+        commandArgs.push('--pin');
+      } else if (payload.is_pinned === false) {
+        commandArgs.push('--unpin');
+      }
+      if (commandArgs.length === 3) {
+        throw new Error('workspace file version update request must include metadata or pin change');
+      }
+      const stdout = runDesktopCli(commandArgs);
       jsonResponse(request, response, 200, JSON.parse(stdout));
       return;
     }

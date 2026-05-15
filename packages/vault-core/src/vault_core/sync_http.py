@@ -8,10 +8,13 @@ from typing import Callable, Mapping, Optional, Protocol
 from urllib.request import Request, urlopen
 
 from .sync_client import (
+    ResumableBlobDownloadedRange,
     SyncBlobDownloader,
     SyncBlobUploader,
     SyncCommitTransport,
     SyncHttpJsonResponse,
+    SyncResumableBlobDownloader,
+    SyncResumableBlobUploader,
 )
 
 
@@ -107,8 +110,26 @@ class JsonHttpSyncTransport(SyncCommitTransport):
     def get_vault_head(self, vault_id: str) -> SyncHttpJsonResponse:
         return self._json_request("GET", f"/vaults/{vault_id}/head")
 
+    def get_vault_devices(self, vault_id: str) -> SyncHttpJsonResponse:
+        return self._json_request("GET", f"/vaults/{vault_id}/devices")
+
+    def post_vault_device_heartbeat(self, vault_id: str) -> SyncHttpJsonResponse:
+        return self._json_request("POST", f"/vaults/{vault_id}/devices/heartbeat")
+
+    def post_tombstone_gc(self, vault_id: str, payload: Mapping[str, object]) -> SyncHttpJsonResponse:
+        return self._json_request("POST", f"/vaults/{vault_id}/tombstones/gc", payload)
+
+    def delete_device(self, device_id: str) -> SyncHttpJsonResponse:
+        return self._json_request("DELETE", f"/devices/{device_id}")
+
     def get_manifest(self, vault_id: str, revision: int) -> SyncHttpJsonResponse:
         return self._json_request("GET", f"/vaults/{vault_id}/manifests/{revision}")
+
+    def post_file_versions_list(self, vault_id: str, payload: Mapping[str, object]) -> SyncHttpJsonResponse:
+        return self._json_request("POST", f"/vaults/{vault_id}/file-versions/list", payload)
+
+    def patch_file_version(self, vault_id: str, version_id: str, payload: Mapping[str, object]) -> SyncHttpJsonResponse:
+        return self._json_request("PATCH", f"/vaults/{vault_id}/file-versions/{version_id}", payload)
 
     def post_blob_check(self, vault_id: str, payload: Mapping[str, object]) -> SyncHttpJsonResponse:
         return self._json_request("POST", f"/vaults/{vault_id}/blobs/check", payload)
@@ -116,8 +137,17 @@ class JsonHttpSyncTransport(SyncCommitTransport):
     def post_blob_upload_init(self, vault_id: str, payload: Mapping[str, object]) -> SyncHttpJsonResponse:
         return self._json_request("POST", f"/vaults/{vault_id}/blobs/upload-init", payload)
 
+    def post_resumable_blob_upload_init(self, vault_id: str, payload: Mapping[str, object]) -> SyncHttpJsonResponse:
+        return self._json_request("POST", f"/vaults/{vault_id}/blobs/resumable-upload-init", payload)
+
+    def post_resumable_blob_upload_complete(self, vault_id: str, payload: Mapping[str, object]) -> SyncHttpJsonResponse:
+        return self._json_request("POST", f"/vaults/{vault_id}/blobs/resumable-upload-complete", payload)
+
     def post_blob_download_init(self, vault_id: str, payload: Mapping[str, object]) -> SyncHttpJsonResponse:
         return self._json_request("POST", f"/vaults/{vault_id}/blobs/download-init", payload)
+
+    def post_resumable_blob_download_init(self, vault_id: str, payload: Mapping[str, object]) -> SyncHttpJsonResponse:
+        return self._json_request("POST", f"/vaults/{vault_id}/blobs/resumable-download-init", payload)
 
     def post_create_commit(self, vault_id: str, payload: Mapping[str, object]) -> SyncHttpJsonResponse:
         return self._json_request("POST", f"/vaults/{vault_id}/commits", payload)
@@ -157,6 +187,47 @@ class CapabilityBlobUploader(SyncBlobUploader):
 
 
 @dataclass(frozen=True)
+class ResumableCapabilityBlobUploader(SyncResumableBlobUploader):
+    timeout_seconds: float = 60.0
+    opener: UrlopenLike = _default_urlopen
+    user_agent: str = "vault-core-sync-http/0.1"
+
+    def upload_blob_chunks(self, upload, capability) -> list[str]:
+        uploaded_chunk_ids = [chunk.chunk_id for chunk in capability.uploaded_chunks]
+        chunk_ids_seen = set(uploaded_chunk_ids)
+        with Path(upload.blob_staging_path).open("rb") as handle:
+            for chunk in capability.missing_chunks:
+                handle.seek(chunk.offset)
+                payload = handle.read(chunk.size)
+                if len(payload) != chunk.size:
+                    raise ValueError("blob staging file is shorter than resumable upload chunk")
+                headers = _merge_headers(
+                    {
+                        "Content-Length": str(len(payload)),
+                        "User-Agent": self.user_agent,
+                        "X-Noteapp-Chunk-Id": chunk.chunk_id,
+                        "X-Noteapp-Chunk-Offset": str(chunk.offset),
+                        "X-Noteapp-Chunk-Size": str(chunk.size),
+                    },
+                    capability.headers,
+                )
+                request = Request(
+                    capability.upload_url,
+                    data=payload,
+                    headers=headers,
+                    method=capability.method,
+                )
+                with closing(self.opener(request, self.timeout_seconds)) as response:
+                    status_code = response.getcode()
+                    if status_code < 200 or status_code >= 300:
+                        raise ValueError(f"resumable blob chunk upload returned unexpected status: {status_code}")
+                if chunk.chunk_id not in chunk_ids_seen:
+                    uploaded_chunk_ids.append(chunk.chunk_id)
+                    chunk_ids_seen.add(chunk.chunk_id)
+        return uploaded_chunk_ids
+
+
+@dataclass(frozen=True)
 class CapabilityBlobDownloader(SyncBlobDownloader):
     timeout_seconds: float = 60.0
     opener: UrlopenLike = _default_urlopen
@@ -181,3 +252,41 @@ class CapabilityBlobDownloader(SyncBlobDownloader):
         if len(payload) != capability.encrypted_size:
             raise ValueError("blob download size does not match download capability")
         return payload
+
+
+@dataclass(frozen=True)
+class ResumableCapabilityBlobDownloader(SyncResumableBlobDownloader):
+    timeout_seconds: float = 60.0
+    opener: UrlopenLike = _default_urlopen
+    user_agent: str = "vault-core-sync-http/0.1"
+
+    def download_blob_ranges(self, capability) -> list[ResumableBlobDownloadedRange]:
+        downloaded: list[ResumableBlobDownloadedRange] = []
+        for download_range in capability.ranges:
+            request = Request(
+                capability.download_url,
+                headers=_merge_headers(
+                    {
+                        "User-Agent": self.user_agent,
+                        "X-Noteapp-Range-Offset": str(download_range.offset),
+                        "X-Noteapp-Range-Size": str(download_range.size),
+                    },
+                    capability.headers,
+                ),
+                method="GET",
+            )
+            with closing(self.opener(request, self.timeout_seconds)) as response:
+                status_code = response.getcode()
+                if status_code < 200 or status_code >= 300:
+                    raise ValueError(f"resumable blob range download returned unexpected status: {status_code}")
+                payload = response.read()
+            if len(payload) != download_range.size:
+                raise ValueError("blob range download size does not match requested range")
+            downloaded.append(
+                ResumableBlobDownloadedRange(
+                    blob_id=capability.blob_id,
+                    offset=download_range.offset,
+                    payload=payload,
+                )
+            )
+        return downloaded

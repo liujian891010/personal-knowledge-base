@@ -27,6 +27,9 @@ from clients.desktop import (
     build_desktop_sync_service,
 )
 from clients.desktop.crypto import (
+    E2EEDesktopBlobCryptoProvider,
+    POLY1305_TAG_BYTES,
+    is_e2ee_crypto_available,
     build_placeholder_blob_id,
     build_placeholder_encrypted_blob_payload,
     decrypt_placeholder_encrypted_blob_payload,
@@ -48,6 +51,7 @@ from vault_core import (
     BlobDownloadSessionResult,
     FileMapDocument,
     FileRecord,
+    FileVersionCommitDirective,
     ManifestConvergenceResult,
     ManifestFileEntry,
     ManifestRecord,
@@ -86,9 +90,18 @@ class FakeHttpResponse:
 
 
 class RecordingApiOpener:
-    def __init__(self, *, conflict: bool = False, remote_payload: bytes = b"# Live note\n") -> None:
+    def __init__(
+        self,
+        *,
+        conflict: bool = False,
+        remote_payload: bytes = b"# Live note\n",
+        file_versions: Optional[dict[str, list[dict[str, object]]]] = None,
+        encrypted_size_by_blob_id: Optional[dict[str, int]] = None,
+    ) -> None:
         self.conflict = conflict
         self.remote_payload = remote_payload
+        self.file_versions = dict(file_versions or {})
+        self.encrypted_size_by_blob_id = dict(encrypted_size_by_blob_id or {})
         self.calls: list[tuple[str, str, object | None, float]] = []
 
     def __call__(self, request: Request, timeout: float) -> FakeHttpResponse:
@@ -103,6 +116,54 @@ class RecordingApiOpener:
                     "manifest_summary": "sha256:head9",
                 }
             )
+        if request.get_method() == "GET" and request.full_url.endswith("/vaults/vault-001/devices"):
+            return self._json_response(
+                {
+                    "vault_id": "vault-001",
+                    "head_revision": 9,
+                    "inactive_after_ms": 604800000,
+                    "devices": [
+                        {
+                            "device_id": "desktop-shanghai",
+                            "device_name": "Desktop",
+                            "platform": "desktop",
+                            "app_version": "1.0.43",
+                            "protocol_version": "v1",
+                            "registered_at_ms": 1770000000000,
+                            "last_seen_at_ms": 1770000005000,
+                            "acked_revision": 9,
+                            "is_current_device": True,
+                            "is_revoked": False,
+                            "is_inactive_candidate": False,
+                        },
+                        {
+                            "device_id": "dev_phone",
+                            "device_name": "Phone",
+                            "platform": "mobile",
+                            "app_version": None,
+                            "protocol_version": "v1",
+                            "registered_at_ms": 1770000001000,
+                            "last_seen_at_ms": 1769000000000,
+                            "acked_revision": 6,
+                            "is_current_device": False,
+                            "is_revoked": False,
+                            "is_inactive_candidate": True,
+                        },
+                    ],
+                }
+            )
+        if request.get_method() == "POST" and request.full_url.endswith("/vaults/vault-001/devices/heartbeat"):
+            return self._json_response(
+                {
+                    "vault_id": "vault-001",
+                    "device_id": "desktop-shanghai",
+                    "last_seen_at_ms": 1770000006000,
+                    "acked_revision": 9,
+                    "head_revision": 9,
+                }
+            )
+        if request.get_method() == "DELETE" and request.full_url.endswith("/devices/dev_phone"):
+            return FakeHttpResponse(status_code=204, body=b"")
         if request.get_method() == "GET" and request.full_url.endswith("/vaults/vault-001/manifests/9"):
             payload = self.remote_payload
             content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
@@ -156,12 +217,29 @@ class RecordingApiOpener:
                         {
                             "blob_id": blob_id,
                             "download_url": f"https://blob.example.com/download/{blob_id}",
-                            "encrypted_size": len(build_placeholder_encrypted_blob_payload(self.remote_payload)),
+                            "encrypted_size": self.encrypted_size_by_blob_id.get(
+                                blob_id,
+                                len(build_placeholder_encrypted_blob_payload(self.remote_payload)),
+                            ),
                             "expires_at": "2026-05-08T12:00:00Z",
                             "headers": {"x-download-token": "download-1"},
                         }
                         for blob_id in blob_ids
                     ]
+                }
+            )
+        if request.get_method() == "POST" and request.full_url.endswith("/vaults/vault-001/file-versions/list"):
+            file_id = "" if body is None else str(body.get("file_id", ""))
+            versions = list(self.file_versions.get(file_id, []))
+            return self._json_response(
+                {
+                    "file_id": file_id,
+                    "versions": versions,
+                    "next_cursor": None,
+                    "retention_policy": {
+                        "keep_latest": 50,
+                        "keep_pinned": True,
+                    },
                 }
             )
         if request.get_method() == "POST" and request.full_url.endswith("/vaults/vault-001/commits"):
@@ -350,16 +428,29 @@ class DesktopSyncServiceTests(unittest.TestCase):
         *,
         conflict: bool = False,
         remote_payload: bytes = b"# Live note\n",
+        file_versions: Optional[dict[str, list[dict[str, object]]]] = None,
+        downloaded_blobs: Optional[dict[str, bytes]] = None,
         blob_crypto_provider=None,
         file_id_builder=None,
     ):
         remote_content_hash = "sha256:" + hashlib.sha256(remote_payload).hexdigest()
         remote_blob_id = build_placeholder_blob_id(remote_content_hash)
-        api_opener = RecordingApiOpener(conflict=conflict, remote_payload=remote_payload)
-        blob_opener = RecordingBlobOpener(
-            downloaded_blobs={
-                remote_blob_id: build_placeholder_encrypted_blob_payload(remote_payload),
+        resolved_downloaded_blobs = {
+            remote_blob_id: build_placeholder_encrypted_blob_payload(remote_payload),
+        }
+        if downloaded_blobs is not None:
+            resolved_downloaded_blobs.update(downloaded_blobs)
+        api_opener = RecordingApiOpener(
+            conflict=conflict,
+            remote_payload=remote_payload,
+            file_versions=file_versions,
+            encrypted_size_by_blob_id={
+                blob_id: len(payload)
+                for blob_id, payload in resolved_downloaded_blobs.items()
             },
+        )
+        blob_opener = RecordingBlobOpener(
+            downloaded_blobs=resolved_downloaded_blobs,
         )
         service = build_desktop_sync_service(
             DesktopSyncHttpConfig(
@@ -424,6 +515,25 @@ class DesktopSyncServiceTests(unittest.TestCase):
             )
 
         return service, api_opener, blob_opener, payload, encrypted_payload
+
+    def test_device_management_calls_remote_device_endpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, _, _, _ = self._seed_workspace(Path(tmpdir))
+
+            listed = service.list_vault_devices()
+            heartbeat = service.heartbeat_vault_device()
+            revoked = service.revoke_device(device_id="dev_phone")
+
+        self.assertEqual(listed.response.vault_id, "vault-001")
+        self.assertEqual([device.device_id for device in listed.response.devices], ["desktop-shanghai", "dev_phone"])
+        self.assertTrue(listed.response.devices[0].is_current_device)
+        self.assertTrue(listed.response.devices[1].is_inactive_candidate)
+        self.assertEqual(heartbeat.response.device_id, "desktop-shanghai")
+        self.assertEqual(heartbeat.response.acked_revision, 9)
+        self.assertEqual(revoked, {"device_id": "dev_phone", "revoked": True})
+        self.assertIn(("GET", "https://sync.example.com/vaults/vault-001/devices", None, 30.0), api_opener.calls)
+        self.assertIn(("POST", "https://sync.example.com/vaults/vault-001/devices/heartbeat", None, 30.0), api_opener.calls)
+        self.assertIn(("DELETE", "https://sync.example.com/devices/dev_phone", None, 30.0), api_opener.calls)
 
     def test_load_workspace_content_reads_file_bytes_from_vault_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -788,6 +898,21 @@ class DesktopSyncServiceTests(unittest.TestCase):
             cleared = service.clear_workspace_file_draft("file-live")
             self.assertFalse(cleared.has_draft)
             self.assertFalse((root / ".noteapp" / "drafts" / "file-live.draft").exists())
+
+    def test_workspace_file_draft_does_not_create_cloud_file_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, api_opener, blob_opener, _, _ = self._seed_workspace(root)
+
+            draft = service.write_workspace_file_draft("file-live", "# Meeting draft autosave\n")
+
+            self.assertTrue(draft.has_draft)
+            self.assertEqual(
+                (root / ".noteapp" / "drafts" / "file-live.draft").read_text(encoding="utf-8"),
+                "# Meeting draft autosave\n",
+            )
+            self.assertEqual(api_opener.calls, [])
+            self.assertEqual(blob_opener.calls, [])
 
     def test_write_workspace_file_content_clears_existing_draft(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2113,6 +2238,10 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(snapshot.ai.model_id, "MiniMax-M2.7-highspeed_codingplan")
             self.assertFalse(snapshot.ai.api_key_configured)
             self.assertIsNone(snapshot.ai.api_key)
+            self.assertEqual(snapshot.crypto.schema_version, "crypto-v1")
+            self.assertEqual(snapshot.crypto.crypto_scheme, "placeholder-v1")
+            self.assertFalse(snapshot.crypto.unlocked)
+            self.assertFalse(snapshot.crypto.key_available)
 
     def test_load_local_settings_snapshot_reads_local_settings_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2242,6 +2371,68 @@ class DesktopSyncServiceTests(unittest.TestCase):
             set(schema["properties"]["ai"]["properties"]["provider_api"]["enum"]),
             _LOCAL_SETTINGS_AI_PROVIDER_APIS,
         )
+
+    @unittest.skipUnless(is_e2ee_crypto_available(), "PyNaCl is not installed")
+    def test_crypto_recovery_package_export_and_import_unlocks_local_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "vault"
+            crypto_store_root = Path(tmpdir) / "crypto-store"
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                blob_crypto_provider=E2EEDesktopBlobCryptoProvider(
+                    vault_id="vault-001",
+                    vault_key=b"\x0a" * 32,
+                ),
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "NOTEAPP_ALLOW_INSECURE_CRYPTO_STORE": "true",
+                    "NOTEAPP_CRYPTO_STORE_DIR": str(crypto_store_root),
+                },
+                clear=False,
+            ):
+                exported = service.export_crypto_recovery_package(
+                    recovery_phrase="meeting archive recovery",
+                    created_at=1770000040000,
+                    memory_kib=8,
+                    iterations=1,
+                )
+
+                service.import_crypto_recovery_package(
+                    exported.recovery_package,
+                    recovery_phrase="meeting archive recovery",
+                )
+                snapshot = service.load_local_settings_snapshot()
+
+        self.assertEqual(exported.schema_version, "e2ee-recovery-export-v1")
+        self.assertEqual(exported.recovery_package["schema_version"], "e2ee-recovery-v1")
+        self.assertEqual(exported.vault_id, "vault-001")
+        self.assertTrue(snapshot.crypto.unlocked)
+        self.assertEqual(snapshot.crypto.crypto_scheme, "e2ee-v1")
+
+    @unittest.skipUnless(is_e2ee_crypto_available(), "PyNaCl is not installed")
+    def test_crypto_recovery_package_import_rejects_wrong_phrase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(
+                Path(tmpdir),
+                blob_crypto_provider=E2EEDesktopBlobCryptoProvider(
+                    vault_id="vault-001",
+                    vault_key=b"\x0b" * 32,
+                ),
+            )
+            exported = service.export_crypto_recovery_package(
+                recovery_phrase="correct phrase",
+                created_at=1770000040000,
+                memory_kib=8,
+                iterations=1,
+            )
+
+            with self.assertRaisesRegex(ValueError, "did not decrypt"):
+                service.import_crypto_recovery_package(
+                    exported.recovery_package,
+                    recovery_phrase="wrong phrase",
+                )
 
     def test_prepare_commit_materializes_snapshot_and_blob_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2558,6 +2749,93 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 build_placeholder_encrypted_blob_payload(payload),
             )
 
+    def test_submit_workspace_commit_can_mark_manual_meeting_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, _, _, _ = self._seed_workspace(Path(tmpdir))
+
+            result = service.submit_workspace_commit(
+                created_at=1770000030200,
+                file_ids=["file-live"],
+                commit_intent_id="intent-meeting-version-001",
+                file_version_directives=[
+                    FileVersionCommitDirective(
+                        file_id="file-live",
+                        source="manual_meeting_checkpoint",
+                        version_label="2026-05-15 周会",
+                        change_note="补充行动项",
+                        is_pinned=True,
+                    )
+                ],
+            )
+
+            self.assertEqual(result.network.commit.status, "committed")
+            commit_calls = [
+                call
+                for call in api_opener.calls
+                if call[0] == "POST" and call[1].endswith("/vaults/vault-001/commits")
+            ]
+            self.assertEqual(len(commit_calls), 1)
+            commit_body = commit_calls[0][2]
+            self.assertEqual(
+                commit_body["file_version_directives"],
+                [
+                    {
+                        "file_id": "file-live",
+                        "source": "manual_meeting_checkpoint",
+                        "version_label": "2026-05-15 周会",
+                        "change_note": "补充行动项",
+                        "is_pinned": True,
+                    }
+                ],
+            )
+
+    @unittest.skipUnless(is_e2ee_crypto_available(), "PyNaCl is not installed")
+    def test_submit_workspace_commit_with_e2ee_provider_uploads_ciphertext(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            provider = E2EEDesktopBlobCryptoProvider(
+                vault_id="vault-001",
+                vault_key=b"\x03" * 32,
+            )
+            wrong_provider = E2EEDesktopBlobCryptoProvider(
+                vault_id="vault-001",
+                vault_key=b"\x04" * 32,
+            )
+            service, api_opener, blob_opener, payload, _ = self._seed_workspace(
+                Path(tmpdir),
+                blob_crypto_provider=provider,
+            )
+            content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
+            blob_id = provider.build_blob_id(content_hash)
+
+            result = service.submit_workspace_commit(
+                created_at=1770000030200,
+                file_ids=["file-live"],
+                commit_intent_id="intent-e2ee-001",
+            )
+
+            self.assertEqual(result.network.commit.status, "committed")
+            self.assertEqual(
+                [call[0:2] for call in api_opener.calls],
+                [
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/check"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/blobs/upload-init"),
+                    ("POST", "https://sync.example.com/vaults/vault-001/commits"),
+                ],
+            )
+            self.assertEqual(
+                [call[0:2] for call in blob_opener.calls],
+                [("PUT", f"https://blob.example.com/upload/{blob_id}")],
+            )
+            encrypted_payload = blob_opener.calls[0][2]
+            self.assertNotEqual(encrypted_payload[:-POLY1305_TAG_BYTES], payload)
+            self.assertEqual(len(encrypted_payload), len(payload) + POLY1305_TAG_BYTES)
+            self.assertEqual(
+                provider.decrypt_payload(encrypted_payload, content_hash=content_hash),
+                payload,
+            )
+            with self.assertRaisesRegex(ValueError, "authentication failed"):
+                wrong_provider.decrypt_payload(encrypted_payload, content_hash=content_hash)
+
     def test_submit_workspace_commit_reads_workspace_files_before_submit(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service, api_opener, blob_opener, payload, encrypted_payload = self._seed_workspace(Path(tmpdir))
@@ -2601,6 +2879,166 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             self.assertEqual(api_opener.calls, [])
             self.assertEqual(blob_opener.calls, [])
+
+    def test_load_file_version_content_downloads_and_decrypts_blob(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_payload = b"# Live note\n\n- old meeting\n"
+            old_hash = "sha256:" + hashlib.sha256(old_payload).hexdigest()
+            old_blob_id = build_placeholder_blob_id(old_hash)
+            service, api_opener, blob_opener, _, _ = self._seed_workspace(
+                Path(tmpdir),
+                file_versions={
+                    "file-live": [
+                        {
+                            "version_id": "fv-old",
+                            "file_id": "file-live",
+                            "path_at_revision": "Notes/Live.md",
+                            "revision": 6,
+                            "content_hash": old_hash,
+                            "blob_id": old_blob_id,
+                            "size": len(old_payload),
+                            "mtime": 1770000029000,
+                            "created_at": 1770000030000,
+                            "created_by_device": "desktop-shanghai",
+                            "source": "manual_meeting_checkpoint",
+                            "version_label": "meeting before edits",
+                            "is_pinned": True,
+                        }
+                    ]
+                },
+                downloaded_blobs={
+                    old_blob_id: build_placeholder_encrypted_blob_payload(old_payload),
+                },
+            )
+
+            content = service.load_file_version_content(
+                file_id="file-live",
+                version_id="fv-old",
+            )
+
+            self.assertEqual(content.schema_version, "v1")
+            self.assertEqual(content.version.version_id, "fv-old")
+            self.assertEqual(content.content_hash, old_hash)
+            self.assertEqual(content.text, "# Live note\n\n- old meeting\n")
+            self.assertEqual(content.encoding, "utf-8")
+            self.assertTrue(
+                any(
+                    call[0] == "POST" and call[1].endswith("/vaults/vault-001/file-versions/list")
+                    for call in api_opener.calls
+                )
+            )
+            self.assertEqual(
+                [call[0:2] for call in blob_opener.calls if call[0] == "GET"],
+                [("GET", f"https://blob.example.com/download/{old_blob_id}")],
+            )
+
+    def test_diff_file_version_with_current_returns_unified_diff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_payload = b"# Live note\n\n- old meeting\n"
+            old_hash = "sha256:" + hashlib.sha256(old_payload).hexdigest()
+            old_blob_id = build_placeholder_blob_id(old_hash)
+            service, _, _, _, _ = self._seed_workspace(
+                Path(tmpdir),
+                file_versions={
+                    "file-live": [
+                        {
+                            "version_id": "fv-old",
+                            "file_id": "file-live",
+                            "path_at_revision": "Notes/Live.md",
+                            "revision": 6,
+                            "content_hash": old_hash,
+                            "blob_id": old_blob_id,
+                            "size": len(old_payload),
+                            "mtime": 1770000029000,
+                            "created_at": 1770000030000,
+                            "created_by_device": "desktop-shanghai",
+                            "source": "manual_meeting_checkpoint",
+                            "is_pinned": False,
+                        }
+                    ]
+                },
+                downloaded_blobs={
+                    old_blob_id: build_placeholder_encrypted_blob_payload(old_payload),
+                },
+            )
+            (Path(tmpdir) / "Notes" / "Live.md").write_bytes(b"# Live note\n\n- new meeting\n")
+
+            diff = service.diff_file_version_with_current(
+                file_id="file-live",
+                version_id="fv-old",
+            )
+
+            self.assertFalse(diff.is_binary)
+            self.assertIn("--- Notes/Live.md@r6", diff.diff_text)
+            self.assertIn("+++ Notes/Live.md@current", diff.diff_text)
+            self.assertIn("-- old meeting", diff.diff_text)
+            self.assertIn("+- new meeting", diff.diff_text)
+
+    def test_restore_file_version_writes_current_file_and_commits_restore_directive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            old_payload = b"# Restored meeting\n"
+            old_hash = "sha256:" + hashlib.sha256(old_payload).hexdigest()
+            old_blob_id = build_placeholder_blob_id(old_hash)
+            service, api_opener, blob_opener, _, _ = self._seed_workspace(
+                root,
+                file_versions={
+                    "file-live": [
+                        {
+                            "version_id": "fv-restore",
+                            "file_id": "file-live",
+                            "path_at_revision": "Archive/Live.md",
+                            "revision": 5,
+                            "content_hash": old_hash,
+                            "blob_id": old_blob_id,
+                            "size": len(old_payload),
+                            "mtime": 1770000028000,
+                            "created_at": 1770000029000,
+                            "created_by_device": "desktop-shanghai",
+                            "source": "manual_meeting_checkpoint",
+                            "is_pinned": False,
+                        }
+                    ]
+                },
+                downloaded_blobs={
+                    old_blob_id: build_placeholder_encrypted_blob_payload(old_payload),
+                },
+            )
+
+            result = service.restore_file_version(
+                file_id="file-live",
+                version_id="fv-restore",
+                created_at=1770000031200,
+                commit_intent_id="intent-restore-001",
+                version_label="restore checkpoint",
+                change_note="restore meeting version",
+                is_pinned=True,
+            )
+
+            self.assertEqual(result.version.version_id, "fv-restore")
+            self.assertEqual((root / "Notes" / "Live.md").read_bytes(), old_payload)
+            self.assertEqual(result.commit.network.commit.status, "committed")
+            commit_calls = [
+                call
+                for call in api_opener.calls
+                if call[0] == "POST" and call[1].endswith("/vaults/vault-001/commits")
+            ]
+            self.assertEqual(len(commit_calls), 1)
+            commit_body = commit_calls[0][2]
+            self.assertEqual(commit_body["commit_intent_id"], "intent-restore-001")
+            self.assertEqual(commit_body["file_version_directives"][0]["file_id"], "file-live")
+            self.assertEqual(commit_body["file_version_directives"][0]["source"], "restore")
+            self.assertEqual(commit_body["file_version_directives"][0]["version_label"], "restore checkpoint")
+            self.assertEqual(commit_body["file_version_directives"][0]["change_note"], "restore meeting version")
+            self.assertTrue(commit_body["file_version_directives"][0]["is_pinned"])
+            uploaded_payload = blob_opener.calls[-1][2]
+            self.assertEqual(
+                decrypt_placeholder_encrypted_blob_payload(
+                    uploaded_payload,
+                    content_hash=old_hash,
+                ),
+                old_payload,
+            )
 
     def test_build_pull_required_blob_plan_collects_manifest_file_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

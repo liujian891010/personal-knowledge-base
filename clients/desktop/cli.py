@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import json
+import os
 import sys
 from time import time
 from time import sleep as default_sleep
@@ -11,10 +13,26 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, TextIO
 
 from vault_core import BlobDownloadSessionResult
+from vault_core import FileVersionCommitDirective
 from vault_core.constants import FILEMAP_FILENAME, NOTEAPP_DIRNAME
 
 from .runner import DesktopSyncRunner
 from .service import DesktopPullRequiredBlobResult
+from .crypto import (
+    DesktopBlobCryptoProvider,
+    E2EE_CRYPTO_SCHEME,
+    E2EE_VAULT_KEY_BYTES,
+    PLACEHOLDER_CRYPTO_SCHEME,
+    build_e2ee_blob_crypto_provider,
+    build_placeholder_blob_crypto_provider,
+)
+from .crypto_store import (
+    delete_desktop_vault_key,
+    load_desktop_crypto_status,
+    load_desktop_vault_key,
+    store_desktop_vault_key,
+)
+from .recovery import MISSING_RECOVERY_PACKAGE_MESSAGE
 from .scheduler import (
     DesktopSyncCycleScheduleConfig,
     DesktopSyncScheduleConfig,
@@ -26,7 +44,10 @@ from .timing import resolve_desktop_sync_time_plan
 from .workspace import DesktopVaultPaths
 from .worker import DesktopSyncWorker, DesktopSyncWorkerConfig
 
-ServiceBuilder = Callable[[DesktopSyncHttpConfig, Path], DesktopSyncService]
+ServiceBuilder = Callable[
+    [DesktopSyncHttpConfig, Path, Optional[DesktopBlobCryptoProvider]],
+    DesktopSyncService,
+]
 NowMsProvider = Callable[[], int]
 
 
@@ -107,8 +128,87 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
-def build_cli_service(config: DesktopSyncHttpConfig, vault_root: Path) -> DesktopSyncService:
-    return build_desktop_sync_service(config, vault_root)
+def _decode_vault_key_base64(encoded: str) -> bytes:
+    try:
+        return base64.b64decode(encoded.encode("ascii"), validate=True)
+    except (binascii.Error, UnicodeEncodeError) as exc:
+        raise ValueError("--vault-key-base64 must be valid base64") from exc
+
+
+def _decode_vault_key_hex(encoded: str) -> bytes:
+    try:
+        return bytes.fromhex(encoded)
+    except ValueError as exc:
+        raise ValueError("--vault-key-hex must be valid hex") from exc
+
+
+def _resolve_cli_vault_key(
+    *,
+    vault_key_base64: Optional[str] = None,
+    vault_key_hex: Optional[str] = None,
+) -> bytes:
+    if bool(vault_key_base64) == bool(vault_key_hex):
+        raise ValueError("e2ee-v1 requires exactly one of --vault-key-base64 or --vault-key-hex")
+    vault_key = (
+        _decode_vault_key_base64(vault_key_base64)
+        if vault_key_base64 is not None
+        else _decode_vault_key_hex(vault_key_hex or "")
+    )
+    if len(vault_key) != E2EE_VAULT_KEY_BYTES:
+        raise ValueError(f"vault key must decode to {E2EE_VAULT_KEY_BYTES} bytes")
+    return vault_key
+
+
+def build_cli_blob_crypto_provider(
+    *,
+    vault_id: str,
+    crypto_scheme: str,
+    vault_key_base64: Optional[str] = None,
+    vault_key_hex: Optional[str] = None,
+) -> DesktopBlobCryptoProvider:
+    if crypto_scheme == PLACEHOLDER_CRYPTO_SCHEME:
+        if vault_key_base64 or vault_key_hex:
+            raise ValueError("placeholder-v1 does not accept vault key arguments")
+        return build_placeholder_blob_crypto_provider()
+    if crypto_scheme != E2EE_CRYPTO_SCHEME:
+        raise ValueError(f"unsupported crypto scheme: {crypto_scheme}")
+    vault_key = _resolve_cli_vault_key(
+        vault_key_base64=vault_key_base64,
+        vault_key_hex=vault_key_hex,
+    )
+    return build_e2ee_blob_crypto_provider(vault_id=vault_id, vault_key=vault_key)
+
+
+def build_auto_cli_blob_crypto_provider(
+    *,
+    vault_id: str,
+    crypto_scheme: Optional[str],
+    vault_key_base64: Optional[str] = None,
+    vault_key_hex: Optional[str] = None,
+) -> DesktopBlobCryptoProvider:
+    if crypto_scheme is not None or vault_key_base64 is not None or vault_key_hex is not None:
+        return build_cli_blob_crypto_provider(
+            vault_id=vault_id,
+            crypto_scheme=crypto_scheme or E2EE_CRYPTO_SCHEME,
+            vault_key_base64=vault_key_base64,
+            vault_key_hex=vault_key_hex,
+        )
+    vault_key = load_desktop_vault_key(vault_id)
+    if vault_key is not None:
+        return build_e2ee_blob_crypto_provider(vault_id=vault_id, vault_key=vault_key)
+    return build_placeholder_blob_crypto_provider()
+
+
+def build_cli_service(
+    config: DesktopSyncHttpConfig,
+    vault_root: Path,
+    blob_crypto_provider: Optional[DesktopBlobCryptoProvider] = None,
+) -> DesktopSyncService:
+    return build_desktop_sync_service(
+        config,
+        vault_root,
+        blob_crypto_provider=blob_crypto_provider,
+    )
 
 
 def _load_base64_payload_map(path: Path) -> dict[str, bytes]:
@@ -151,6 +251,31 @@ def _load_payload_dir(file_ids: Sequence[str], path: Path, *, suffix: str) -> di
     return decoded
 
 
+def _build_cli_file_version_directives(args: argparse.Namespace) -> Optional[list[FileVersionCommitDirective]]:
+    version_fields = (
+        getattr(args, "version_source", None),
+        getattr(args, "version_label", None),
+        getattr(args, "change_note", None),
+        getattr(args, "pin_version", False),
+    )
+    if not any(version_fields):
+        return None
+    file_ids = list(getattr(args, "file_ids", None) or [])
+    if not file_ids:
+        raise ValueError("file version directives require at least one --file-id")
+    source = getattr(args, "version_source", None) or "manual_checkpoint"
+    return [
+        FileVersionCommitDirective(
+            file_id=file_id,
+            source=source,
+            version_label=getattr(args, "version_label", None),
+            change_note=getattr(args, "change_note", None),
+            is_pinned=bool(getattr(args, "pin_version", False)),
+        )
+        for file_id in file_ids
+    ]
+
+
 def _load_encrypted_blob_payloads(
     file_ids: Sequence[str],
     *,
@@ -177,6 +302,13 @@ def _infer_local_vault_id(vault_root: Path) -> str:
     return vault_id
 
 
+def _optional_env(name: str) -> Optional[str]:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return None
+    return value
+
+
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pkb-desktop-sync")
     parser.add_argument("--vault-root", required=True)
@@ -184,6 +316,10 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vault-id")
     parser.add_argument("--device-id", required=True)
     parser.add_argument("--bearer-token")
+    parser.add_argument("--crypto-scheme", choices=[PLACEHOLDER_CRYPTO_SCHEME, E2EE_CRYPTO_SCHEME])
+    vault_key_group = parser.add_mutually_exclusive_group()
+    vault_key_group.add_argument("--vault-key-base64")
+    vault_key_group.add_argument("--vault-key-hex")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -260,6 +396,21 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("local-settings-snapshot")
     write_settings_parser = subparsers.add_parser("write-local-settings")
     write_settings_parser.add_argument("--input-json", required=True)
+    subparsers.add_parser("crypto-status")
+    crypto_unlock_parser = subparsers.add_parser("crypto-unlock")
+    crypto_unlock_key = crypto_unlock_parser.add_mutually_exclusive_group(required=True)
+    crypto_unlock_key.add_argument("--vault-key-base64")
+    crypto_unlock_key.add_argument("--vault-key-hex")
+    subparsers.add_parser("crypto-lock")
+    crypto_recovery_export_parser = subparsers.add_parser("crypto-recovery-export")
+    crypto_recovery_export_parser.add_argument("--recovery-phrase", required=True)
+    crypto_recovery_export_parser.add_argument("--output-package-json")
+    crypto_recovery_export_parser.add_argument("--created-at", type=int)
+    crypto_recovery_export_parser.add_argument("--kdf-memory-kib", type=int)
+    crypto_recovery_export_parser.add_argument("--kdf-iterations", type=int)
+    crypto_recovery_import_parser = subparsers.add_parser("crypto-recovery-import")
+    crypto_recovery_import_parser.add_argument("--recovery-phrase", required=True)
+    crypto_recovery_import_parser.add_argument("--input-json")
     subparsers.add_parser("detect-local-changes")
     subparsers.add_parser("worker-state")
     subparsers.add_parser("worker-health")
@@ -274,6 +425,39 @@ def create_parser() -> argparse.ArgumentParser:
     sync_shell_snapshot_parser.add_argument("--output-json")
     sync_activity_parser = subparsers.add_parser("sync-activity")
     sync_activity_parser.add_argument("--limit", type=int, default=20)
+    file_versions_parser = subparsers.add_parser("file-versions")
+    file_versions_parser.add_argument("--file-id", required=True)
+    file_versions_parser.add_argument("--limit", type=int, default=50)
+    file_versions_parser.add_argument("--cursor")
+    file_versions_parser.add_argument("--exclude-pinned", action="store_true")
+    file_version_content_parser = subparsers.add_parser("file-version-content")
+    file_version_content_parser.add_argument("--file-id", required=True)
+    file_version_content_parser.add_argument("--version-id", required=True)
+    file_version_content_parser.add_argument("--no-text", action="store_true")
+    diff_file_version_parser = subparsers.add_parser("diff-file-version")
+    diff_file_version_parser.add_argument("--file-id", required=True)
+    diff_file_version_parser.add_argument("--version-id", required=True)
+    diff_file_version_parser.add_argument("--context-lines", type=int, default=3)
+    restore_file_version_parser = subparsers.add_parser("restore-file-version")
+    restore_file_version_parser.add_argument("--file-id", required=True)
+    restore_file_version_parser.add_argument("--version-id", required=True)
+    restore_file_version_parser.add_argument("--created-at", type=int, required=True)
+    restore_file_version_parser.add_argument("--commit-intent-id")
+    restore_file_version_parser.add_argument("--cleanup-normalized-at", type=int)
+    restore_file_version_parser.add_argument("--version-label")
+    restore_file_version_parser.add_argument("--change-note")
+    restore_file_version_parser.add_argument("--pin-version", action="store_true")
+    update_file_version_parser = subparsers.add_parser("update-file-version")
+    update_file_version_parser.add_argument("--version-id", required=True)
+    update_file_version_parser.add_argument("--version-label")
+    update_file_version_parser.add_argument("--change-note")
+    update_file_version_pin = update_file_version_parser.add_mutually_exclusive_group(required=False)
+    update_file_version_pin.add_argument("--pin", action="store_true")
+    update_file_version_pin.add_argument("--unpin", action="store_true")
+    subparsers.add_parser("vault-devices")
+    subparsers.add_parser("heartbeat-vault-device")
+    revoke_device_parser = subparsers.add_parser("revoke-device")
+    revoke_device_parser.add_argument("--target-device-id", required=True)
     execute_action_parser = subparsers.add_parser("execute-sync-action")
     execute_action_parser.add_argument("--action-id", required=True)
     execute_action_parser.add_argument("--now-ms", type=int)
@@ -387,6 +571,13 @@ def create_parser() -> argparse.ArgumentParser:
     submit_workspace_parser.add_argument("--file-id", action="append", dest="file_ids", required=True)
     submit_workspace_parser.add_argument("--commit-intent-id")
     submit_workspace_parser.add_argument("--cleanup-normalized-at", type=int)
+    submit_workspace_parser.add_argument(
+        "--version-source",
+        choices=["manual_checkpoint", "manual_meeting_checkpoint", "restore"],
+    )
+    submit_workspace_parser.add_argument("--version-label")
+    submit_workspace_parser.add_argument("--change-note")
+    submit_workspace_parser.add_argument("--pin-version", action="store_true")
     encrypted_group = submit_workspace_parser.add_mutually_exclusive_group(required=False)
     encrypted_group.add_argument("--encrypted-map")
     encrypted_group.add_argument("--encrypted-dir")
@@ -436,7 +627,20 @@ def run_cli(
         device_id=args.device_id,
         bearer_token=args.bearer_token,
     )
-    service = service_builder(config, vault_root)
+    cli_crypto_scheme = args.crypto_scheme or _optional_env("NOTEAPP_CRYPTO_SCHEME")
+    vault_key_base64 = args.vault_key_base64 or _optional_env("NOTEAPP_VAULT_KEY_BASE64")
+    vault_key_hex = args.vault_key_hex or _optional_env("NOTEAPP_VAULT_KEY_HEX")
+    if args.vault_key_base64 and _optional_env("NOTEAPP_VAULT_KEY_HEX"):
+        raise ValueError("--vault-key-base64 cannot be combined with NOTEAPP_VAULT_KEY_HEX")
+    if args.vault_key_hex and _optional_env("NOTEAPP_VAULT_KEY_BASE64"):
+        raise ValueError("--vault-key-hex cannot be combined with NOTEAPP_VAULT_KEY_BASE64")
+    blob_crypto_provider = build_auto_cli_blob_crypto_provider(
+        vault_id=resolved_vault_id,
+        crypto_scheme=cli_crypto_scheme,
+        vault_key_base64=vault_key_base64,
+        vault_key_hex=vault_key_hex,
+    )
+    service = service_builder(config, vault_root, blob_crypto_provider)
 
     if args.command == "init":
         result = service.ensure_initialized(now_ms=args.now_ms)
@@ -562,6 +766,48 @@ def run_cli(
         result = service.load_local_settings_snapshot()
     elif args.command == "write-local-settings":
         result = service.write_local_settings(_load_json_object(Path(args.input_json)))
+    elif args.command == "crypto-status":
+        result = load_desktop_crypto_status(vault_id=resolved_vault_id, vault_root=vault_root)
+    elif args.command == "crypto-unlock":
+        store_desktop_vault_key(
+            resolved_vault_id,
+            _resolve_cli_vault_key(
+                vault_key_base64=args.vault_key_base64,
+                vault_key_hex=args.vault_key_hex,
+            ),
+        )
+        result = load_desktop_crypto_status(vault_id=resolved_vault_id, vault_root=vault_root)
+    elif args.command == "crypto-lock":
+        delete_desktop_vault_key(resolved_vault_id)
+        result = load_desktop_crypto_status(vault_id=resolved_vault_id, vault_root=vault_root)
+    elif args.command == "crypto-recovery-export":
+        result = service.export_crypto_recovery_package(
+            recovery_phrase=args.recovery_phrase,
+            created_at=args.created_at,
+            memory_kib=args.kdf_memory_kib,
+            iterations=args.kdf_iterations,
+        )
+        if args.output_package_json:
+            recovery_package_json = (
+                result.recovery_package_json
+                if hasattr(result, "recovery_package_json")
+                else _to_jsonable(result).get("recovery_package_json")
+            )
+            if not isinstance(recovery_package_json, str):
+                raise ValueError("crypto-recovery-export returned no recovery_package_json")
+            output_path = Path(args.output_package_json)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                recovery_package_json + "\n",
+                encoding="utf-8",
+            )
+    elif args.command == "crypto-recovery-import":
+        if not args.input_json:
+            raise ValueError(MISSING_RECOVERY_PACKAGE_MESSAGE)
+        result = service.import_crypto_recovery_package(
+            _load_json_object(Path(args.input_json)),
+            recovery_phrase=args.recovery_phrase,
+        )
     elif args.command == "detect-local-changes":
         result = service.detect_local_changes()
     elif args.command == "worker-state":
@@ -581,6 +827,50 @@ def run_cli(
         )
     elif args.command == "sync-activity":
         result = service.list_sync_activity(limit=args.limit)
+    elif args.command == "file-versions":
+        result = service.list_file_versions(
+            file_id=args.file_id,
+            limit=args.limit,
+            cursor=args.cursor,
+            include_pinned=not args.exclude_pinned,
+        )
+    elif args.command == "file-version-content":
+        result = service.load_file_version_content(
+            file_id=args.file_id,
+            version_id=args.version_id,
+            include_text=not args.no_text,
+        )
+    elif args.command == "diff-file-version":
+        result = service.diff_file_version_with_current(
+            file_id=args.file_id,
+            version_id=args.version_id,
+            context_lines=args.context_lines,
+        )
+    elif args.command == "restore-file-version":
+        result = service.restore_file_version(
+            file_id=args.file_id,
+            version_id=args.version_id,
+            created_at=args.created_at,
+            commit_intent_id=args.commit_intent_id,
+            cleanup_normalized_at=args.cleanup_normalized_at,
+            version_label=args.version_label,
+            change_note=args.change_note,
+            is_pinned=args.pin_version,
+        )
+    elif args.command == "update-file-version":
+        is_pinned = True if args.pin else (False if args.unpin else None)
+        result = service.update_file_version(
+            version_id=args.version_id,
+            version_label=args.version_label,
+            change_note=args.change_note,
+            is_pinned=is_pinned,
+        )
+    elif args.command == "vault-devices":
+        result = service.list_vault_devices()
+    elif args.command == "heartbeat-vault-device":
+        result = service.heartbeat_vault_device()
+    elif args.command == "revoke-device":
+        result = service.revoke_device(device_id=args.target_device_id)
     elif args.command == "execute-sync-action":
         result = service.execute_sync_action(args.action_id, now_ms=args.now_ms)
     elif args.command == "execute-sync-action-and-snapshot":
@@ -933,6 +1223,7 @@ def run_cli(
             file_ids=args.file_ids,
             commit_intent_id=args.commit_intent_id,
             cleanup_normalized_at=args.cleanup_normalized_at,
+            file_version_directives=_build_cli_file_version_directives(args),
             encrypted_blob_by_file_id=(
                 _load_encrypted_blob_payloads(
                     args.file_ids,

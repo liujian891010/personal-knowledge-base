@@ -3,13 +3,17 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import tempfile
 import unittest
+from unittest import mock
 from dataclasses import dataclass
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from clients.desktop import (
+    E2EEDesktopBlobCryptoProvider,
+    PlaceholderDesktopBlobCryptoProvider,
     DesktopPullRequiredBlobFile,
     DesktopPullRequiredBlobPlan,
     DesktopPullRequiredBlobResult,
@@ -704,6 +708,17 @@ class FakeService:
                 "local_model_status": "not_configured",
                 "embedding_status": "not_configured",
             },
+            "crypto": {
+                "schema_version": "crypto-v1",
+                "crypto_scheme": "placeholder-v1",
+                "key_epoch": 1,
+                "unlocked": False,
+                "key_available": False,
+                "storage_provider": "insecure-file",
+                "key_ref": "C:/vault/.noteapp/test-crypto-key.json",
+                "message": "no local e2ee-v1 vault key is available",
+                "error": None,
+            },
         }
 
     def write_local_settings(self, payload):
@@ -728,6 +743,87 @@ class FakeService:
             "ai": {
                 "local_model_status": payload["ai"]["local_model_status"],
                 "embedding_status": payload["ai"]["embedding_status"],
+            },
+            "crypto": {
+                "schema_version": "crypto-v1",
+                "crypto_scheme": "placeholder-v1",
+                "key_epoch": 1,
+                "unlocked": False,
+                "key_available": False,
+                "storage_provider": "insecure-file",
+                "key_ref": "C:/vault/.noteapp/test-crypto-key.json",
+                "message": "no local e2ee-v1 vault key is available",
+                "error": None,
+            },
+        }
+
+    def export_crypto_recovery_package(
+        self,
+        *,
+        recovery_phrase,
+        created_at=None,
+        memory_kib=None,
+        iterations=None,
+    ):
+        self.calls.append(
+            (
+                "crypto-recovery-export",
+                recovery_phrase,
+                created_at,
+                memory_kib,
+                iterations,
+            )
+        )
+        package = {
+            "schema_version": "e2ee-recovery-v1",
+            "vault_id": "vault-001",
+            "crypto_scheme": "e2ee-v1",
+            "kdf": {
+                "name": "argon2id",
+                "memory_kib": memory_kib or 8,
+                "iterations": iterations or 1,
+                "parallelism": 1,
+                "salt_b64": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            },
+            "wrap": {
+                "alg": "xchacha20-poly1305",
+                "nonce_b64": "AgICAgICAgICAgICAgICAgICAgICAgIC",
+                "ciphertext_b64": "ZmFrZQ==",
+            },
+            "created_at": created_at or 1770000040000,
+            "checksum": "sha256:fake",
+        }
+        return {
+            "schema_version": "e2ee-recovery-export-v1",
+            "vault_id": "vault-001",
+            "crypto_scheme": "e2ee-v1",
+            "key_epoch": 1,
+            "created_at": created_at or 1770000040000,
+            "recovery_package": package,
+            "recovery_package_json": json.dumps(package, ensure_ascii=False, indent=2, sort_keys=True),
+        }
+
+    def import_crypto_recovery_package(self, package_payload, *, recovery_phrase):
+        self.calls.append(("crypto-recovery-import", package_payload, recovery_phrase))
+        return {
+            "recovery": {
+                "schema_version": "e2ee-recovery-import-v1",
+                "vault_id": "vault-001",
+                "crypto_scheme": "e2ee-v1",
+                "key_epoch": 1,
+                "imported": True,
+                "message": "recovery package decrypted; local vault key is ready to store",
+            },
+            "crypto": {
+                "schema_version": "crypto-v1",
+                "crypto_scheme": "e2ee-v1",
+                "key_epoch": 1,
+                "unlocked": True,
+                "key_available": True,
+                "storage_provider": "insecure-file",
+                "key_ref": "C:/vault/.noteapp/test-crypto-key.json",
+                "message": "e2ee-v1 vault key is available",
+                "error": None,
             },
         }
 
@@ -1089,6 +1185,159 @@ class FakeService:
             downloaded_blobs={blob_id: b"xyz" for blob_id in blob_ids},
         )
 
+    def list_file_versions(self, *, file_id, limit=50, cursor=None, include_pinned=True):
+        self.calls.append(("file-versions", file_id, limit, cursor, include_pinned))
+        return {
+            "request": {
+                "file_id": file_id,
+                "limit": limit,
+                "cursor": cursor,
+                "include_pinned": include_pinned,
+            },
+            "response": {
+                "file_id": file_id,
+                "versions": [
+                    {
+                        "version_id": "fv-001",
+                        "file_id": file_id,
+                        "path_at_revision": "Meetings/XXX.md",
+                        "revision": 2,
+                        "content_hash": "sha256:meeting-v2",
+                        "blob_id": "blob-meeting-v2",
+                        "size": 2048,
+                        "mtime": 1770000029990,
+                        "created_at": 1770000030000,
+                        "created_by_device": "desktop-shanghai",
+                        "source": "manual_meeting_checkpoint",
+                        "version_label": "客户会议",
+                        "change_note": "确认行动项后保存",
+                        "is_pinned": True,
+                    }
+                ],
+                "next_cursor": None,
+            },
+        }
+
+    def load_file_version_content(self, *, file_id, version_id, include_text=True):
+        self.calls.append(("file-version-content", file_id, version_id, include_text))
+        return {
+            "schema_version": "v1",
+            "file_id": file_id,
+            "version_id": version_id,
+            "content_base64": "IyBNZWV0aW5nCg==",
+            "text": "# Meeting\n" if include_text else None,
+        }
+
+    def diff_file_version_with_current(self, *, file_id, version_id, context_lines=3):
+        self.calls.append(("diff-file-version", file_id, version_id, context_lines))
+        return {
+            "schema_version": "v1",
+            "file_id": file_id,
+            "version_id": version_id,
+            "is_binary": False,
+            "diff_text": "--- old\n+++ current\n",
+        }
+
+    def restore_file_version(
+        self,
+        *,
+        file_id,
+        version_id,
+        created_at,
+        commit_intent_id=None,
+        cleanup_normalized_at=None,
+        version_label=None,
+        change_note=None,
+        is_pinned=False,
+    ):
+        self.calls.append(
+            (
+                "restore-file-version",
+                file_id,
+                version_id,
+                created_at,
+                commit_intent_id,
+                cleanup_normalized_at,
+                version_label,
+                change_note,
+                is_pinned,
+            )
+        )
+        return {
+            "schema_version": "v1",
+            "file_id": file_id,
+            "version_id": version_id,
+            "created_at": created_at,
+            "commit_intent_id": commit_intent_id,
+            "cleanup_normalized_at": cleanup_normalized_at,
+            "version_label": version_label,
+            "change_note": change_note,
+            "is_pinned": is_pinned,
+        }
+
+    def update_file_version(self, *, version_id, version_label=None, change_note=None, is_pinned=None):
+        self.calls.append(("update-file-version", version_id, version_label, change_note, is_pinned))
+        return {
+            "request": {
+                "version_id": version_id,
+                "version_label": version_label,
+                "change_note": change_note,
+                "is_pinned": is_pinned,
+            },
+            "response": {
+                "version": {
+                    "version_id": version_id,
+                    "version_label": version_label,
+                    "change_note": change_note,
+                    "is_pinned": is_pinned,
+                }
+            },
+        }
+
+    def list_vault_devices(self):
+        self.calls.append(("vault-devices",))
+        return {
+            "response": {
+                "vault_id": "vault-001",
+                "head_revision": 9,
+                "inactive_after_ms": 604800000,
+                "devices": [
+                    {
+                        "device_id": "desktop-shanghai",
+                        "device_name": "Desktop",
+                        "platform": "desktop",
+                        "app_version": "1.0.43",
+                        "protocol_version": "v1",
+                        "registered_at_ms": 1770000000000,
+                        "last_seen_at_ms": 1770000005000,
+                        "acked_revision": 9,
+                        "is_current_device": True,
+                        "is_revoked": False,
+                        "is_inactive_candidate": False,
+                    }
+                ],
+            }
+        }
+
+    def heartbeat_vault_device(self):
+        self.calls.append(("heartbeat-vault-device",))
+        return {
+            "response": {
+                "vault_id": "vault-001",
+                "device_id": "desktop-shanghai",
+                "last_seen_at_ms": 1770000006000,
+                "acked_revision": 9,
+                "head_revision": 9,
+            }
+        }
+
+    def revoke_device(self, *, device_id):
+        self.calls.append(("revoke-device", device_id))
+        return {
+            "device_id": device_id,
+            "revoked": True,
+        }
+
     def download_and_decrypt_pull_required_blobs(self, pull_result):
         self.calls.append(("download-and-decrypt-pull-required-blobs", pull_result))
         if self.download_and_decrypt_pull_payload is not None:
@@ -1147,17 +1396,19 @@ class FakeService:
         commit_intent_id=None,
         cleanup_normalized_at=None,
         encrypted_blob_by_file_id=None,
+        file_version_directives=None,
     ):
-        self.calls.append(
-            (
-                "submit-workspace-commit",
-                created_at,
-                list(file_ids),
-                commit_intent_id,
-                cleanup_normalized_at,
-                encrypted_blob_by_file_id,
-            )
+        call = (
+            "submit-workspace-commit",
+            created_at,
+            list(file_ids),
+            commit_intent_id,
+            cleanup_normalized_at,
+            encrypted_blob_by_file_id,
         )
+        if file_version_directives is not None:
+            call = call + (file_version_directives,)
+        self.calls.append(call)
         submit_count = sum(1 for call in self.calls if call[0] == "submit-workspace-commit") - 1
         if submit_count in self.fail_submit_workspace_at_calls:
             raise RuntimeError(f"submit failed at call {submit_count}")
@@ -1172,6 +1423,22 @@ class FakeService:
                 else {
                     key: len(value) for key, value in encrypted_blob_by_file_id.items()
                 }
+            ),
+            **(
+                {
+                    "file_version_directives": [
+                        {
+                            "file_id": item.file_id,
+                            "source": item.source,
+                            "version_label": item.version_label,
+                            "change_note": item.change_note,
+                            "is_pinned": item.is_pinned,
+                        }
+                        for item in file_version_directives
+                    ]
+                }
+                if file_version_directives is not None
+                else {}
             ),
         }
 
@@ -1227,8 +1494,8 @@ class DesktopCliTests(unittest.TestCase):
         self.created = []
         self.service = FakeService()
 
-    def _builder(self, config, vault_root: Path):
-        self.created.append((config, vault_root))
+    def _builder(self, config, vault_root: Path, blob_crypto_provider=None):
+        self.created.append((config, vault_root, blob_crypto_provider))
         return self.service
 
     def _run(self, *argv: str, sleep=None, now_ms_provider=None):
@@ -1279,13 +1546,255 @@ class DesktopCliTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload, {"kind": "init", "value": 1770000040000})
-        config, vault_root = self.created[0]
+        config, vault_root, blob_crypto_provider = self.created[0]
         self.assertEqual(config.base_url, "https://sync.example.com")
         self.assertEqual(config.vault_id, "vault-001")
         self.assertEqual(config.device_id, "desktop-shanghai")
         self.assertEqual(config.bearer_token, "token-1")
         self.assertEqual(vault_root, Path("C:/vault"))
+        self.assertIsInstance(blob_crypto_provider, PlaceholderDesktopBlobCryptoProvider)
         self.assertEqual(self.service.calls, [("init", 1770000040000)])
+
+    def test_init_command_can_build_e2ee_provider_from_base64_key(self) -> None:
+        vault_key = b"\x07" * 32
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "--crypto-scheme",
+            "e2ee-v1",
+            "--vault-key-base64",
+            base64.b64encode(vault_key).decode("ascii"),
+            "init",
+            "--now-ms",
+            "1770000040000",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload, {"kind": "init", "value": 1770000040000})
+        provider = self.created[0][2]
+        self.assertIsInstance(provider, E2EEDesktopBlobCryptoProvider)
+        self.assertEqual(provider.vault_id, "vault-001")
+        self.assertEqual(provider.vault_key, vault_key)
+
+    def test_init_command_rejects_e2ee_without_vault_key(self) -> None:
+        with self.assertRaisesRegex(ValueError, "e2ee-v1 requires exactly one"):
+            self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "--crypto-scheme",
+                "e2ee-v1",
+                "init",
+            )
+
+        self.assertEqual(self.created, [])
+
+    def test_crypto_status_reports_insecure_store_state_for_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "NOTEAPP_ALLOW_INSECURE_CRYPTO_STORE": "true",
+                    "NOTEAPP_CRYPTO_STORE_DIR": tmpdir,
+                },
+                clear=False,
+            ):
+                exit_code, payload = self._run(
+                    "--vault-root",
+                    "C:/vault",
+                    "--base-url",
+                    "https://sync.example.com",
+                    "--vault-id",
+                    "vault-001",
+                    "--device-id",
+                    "desktop-shanghai",
+                    "crypto-status",
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["crypto_scheme"], "placeholder-v1")
+        self.assertFalse(payload["unlocked"])
+        self.assertEqual(payload["storage_provider"], "insecure-file")
+
+    def test_crypto_unlock_and_lock_use_local_crypto_store(self) -> None:
+        vault_key = b"\x08" * 32
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "NOTEAPP_ALLOW_INSECURE_CRYPTO_STORE": "true",
+                    "NOTEAPP_CRYPTO_STORE_DIR": tmpdir,
+                },
+                clear=False,
+            ):
+                exit_code, unlocked = self._run(
+                    "--vault-root",
+                    "C:/vault",
+                    "--base-url",
+                    "https://sync.example.com",
+                    "--vault-id",
+                    "vault-001",
+                    "--device-id",
+                    "desktop-shanghai",
+                    "crypto-unlock",
+                    "--vault-key-base64",
+                    base64.b64encode(vault_key).decode("ascii"),
+                )
+                status_exit_code, status = self._run(
+                    "--vault-root",
+                    "C:/vault",
+                    "--base-url",
+                    "https://sync.example.com",
+                    "--vault-id",
+                    "vault-001",
+                    "--device-id",
+                    "desktop-shanghai",
+                    "crypto-status",
+                )
+                lock_exit_code, locked = self._run(
+                    "--vault-root",
+                    "C:/vault",
+                    "--base-url",
+                    "https://sync.example.com",
+                    "--vault-id",
+                    "vault-001",
+                    "--device-id",
+                    "desktop-shanghai",
+                    "crypto-lock",
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(status_exit_code, 0)
+        self.assertEqual(lock_exit_code, 0)
+        self.assertEqual(unlocked["crypto_scheme"], "e2ee-v1")
+        self.assertTrue(unlocked["unlocked"])
+        self.assertTrue(status["key_available"])
+        self.assertEqual(locked["crypto_scheme"], "placeholder-v1")
+        self.assertFalse(locked["unlocked"])
+
+    def test_crypto_recovery_export_writes_package_json(self) -> None:
+        vault_key = b"\x0c" * 32
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "recovery.json"
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "--crypto-scheme",
+                "e2ee-v1",
+                "--vault-key-base64",
+                base64.b64encode(vault_key).decode("ascii"),
+                "crypto-recovery-export",
+                "--recovery-phrase",
+                "meeting recovery phrase",
+                "--created-at",
+                "1770000040000",
+                "--kdf-memory-kib",
+                "8",
+                "--kdf-iterations",
+                "1",
+                "--output-package-json",
+                str(output_path),
+            )
+
+            package = json.loads(output_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["schema_version"], "e2ee-recovery-export-v1")
+        self.assertEqual(payload["recovery_package"]["schema_version"], "e2ee-recovery-v1")
+        self.assertEqual(package["schema_version"], "e2ee-recovery-v1")
+        self.assertEqual(package["vault_id"], "vault-001")
+
+    def test_crypto_recovery_import_requires_recovery_package(self) -> None:
+        with self.assertRaisesRegex(ValueError, "请提供恢复包文件"):
+            self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "crypto-recovery-import",
+                "--recovery-phrase",
+                "phrase only",
+            )
+
+    def test_crypto_recovery_import_unlocks_local_crypto_store(self) -> None:
+        vault_key = b"\x0d" * 32
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "recovery.json"
+            store_root = Path(tmpdir) / "store"
+            self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "--crypto-scheme",
+                "e2ee-v1",
+                "--vault-key-base64",
+                base64.b64encode(vault_key).decode("ascii"),
+                "crypto-recovery-export",
+                "--recovery-phrase",
+                "meeting recovery phrase",
+                "--created-at",
+                "1770000040000",
+                "--kdf-memory-kib",
+                "8",
+                "--kdf-iterations",
+                "1",
+                "--output-package-json",
+                str(output_path),
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "NOTEAPP_ALLOW_INSECURE_CRYPTO_STORE": "true",
+                    "NOTEAPP_CRYPTO_STORE_DIR": str(store_root),
+                },
+                clear=False,
+            ):
+                exit_code, payload = self._run(
+                    "--vault-root",
+                    "C:/vault",
+                    "--base-url",
+                    "https://sync.example.com",
+                    "--vault-id",
+                    "vault-001",
+                    "--device-id",
+                    "desktop-shanghai",
+                    "crypto-recovery-import",
+                    "--recovery-phrase",
+                    "meeting recovery phrase",
+                    "--input-json",
+                    str(output_path),
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["recovery"]["imported"])
+        self.assertTrue(payload["crypto"]["unlocked"])
+        self.assertEqual(self.service.calls[-1][0], "crypto-recovery-import")
 
     def test_status_command_routes_to_load_snapshot(self) -> None:
         exit_code, payload = self._run(
@@ -4226,6 +4735,223 @@ class DesktopCliTests(unittest.TestCase):
         )
         self.assertEqual(self.service.calls, [("download-blobs", ["blob-a", "blob-b"])])
 
+    def test_file_versions_command_routes_file_id_and_pagination(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "file-versions",
+            "--file-id",
+            "file-xxx-md",
+            "--limit",
+            "20",
+            "--cursor",
+            "offset:20",
+            "--exclude-pinned",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["request"]["file_id"], "file-xxx-md")
+        self.assertEqual(payload["request"]["limit"], 20)
+        self.assertFalse(payload["request"]["include_pinned"])
+        self.assertEqual(
+            self.service.calls,
+            [("file-versions", "file-xxx-md", 20, "offset:20", False)],
+        )
+
+    def test_file_version_content_command_routes_version_and_text_flag(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "file-version-content",
+            "--file-id",
+            "file-xxx-md",
+            "--version-id",
+            "fv-001",
+            "--no-text",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["file_id"], "file-xxx-md")
+        self.assertEqual(payload["version_id"], "fv-001")
+        self.assertIsNone(payload["text"])
+        self.assertEqual(
+            self.service.calls,
+            [("file-version-content", "file-xxx-md", "fv-001", False)],
+        )
+
+    def test_diff_file_version_command_routes_context_lines(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "diff-file-version",
+            "--file-id",
+            "file-xxx-md",
+            "--version-id",
+            "fv-001",
+            "--context-lines",
+            "8",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(payload["is_binary"])
+        self.assertEqual(payload["diff_text"], "--- old\n+++ current\n")
+        self.assertEqual(
+            self.service.calls,
+            [("diff-file-version", "file-xxx-md", "fv-001", 8)],
+        )
+
+    def test_restore_file_version_command_routes_commit_options(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "restore-file-version",
+            "--file-id",
+            "file-xxx-md",
+            "--version-id",
+            "fv-001",
+            "--created-at",
+            "1770000040700",
+            "--commit-intent-id",
+            "intent-restore-001",
+            "--cleanup-normalized-at",
+            "1770000040701",
+            "--version-label",
+            "restore checkpoint",
+            "--change-note",
+            "restore meeting version",
+            "--pin-version",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["version_id"], "fv-001")
+        self.assertEqual(payload["commit_intent_id"], "intent-restore-001")
+        self.assertTrue(payload["is_pinned"])
+        self.assertEqual(
+            self.service.calls,
+            [
+                (
+                    "restore-file-version",
+                    "file-xxx-md",
+                    "fv-001",
+                    1770000040700,
+                    "intent-restore-001",
+                    1770000040701,
+                    "restore checkpoint",
+                    "restore meeting version",
+                    True,
+                )
+            ],
+        )
+
+    def test_update_file_version_command_routes_label_note_and_pin(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "update-file-version",
+            "--version-id",
+            "fv-001",
+            "--version-label",
+            "客户会议复盘",
+            "--change-note",
+            "补充行动项",
+            "--unpin",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["request"]["version_id"], "fv-001")
+        self.assertEqual(payload["request"]["version_label"], "客户会议复盘")
+        self.assertEqual(payload["request"]["change_note"], "补充行动项")
+        self.assertFalse(payload["request"]["is_pinned"])
+        self.assertEqual(
+            self.service.calls,
+            [("update-file-version", "fv-001", "客户会议复盘", "补充行动项", False)],
+        )
+
+    def test_vault_devices_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "vault-devices",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["response"]["vault_id"], "vault-001")
+        self.assertEqual(payload["response"]["devices"][0]["device_id"], "desktop-shanghai")
+        self.assertEqual(self.service.calls, [("vault-devices",)])
+
+    def test_heartbeat_vault_device_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "heartbeat-vault-device",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["response"]["device_id"], "desktop-shanghai")
+        self.assertEqual(payload["response"]["acked_revision"], 9)
+        self.assertEqual(self.service.calls, [("heartbeat-vault-device",)])
+
+    def test_revoke_device_command_routes_target_device_id(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "revoke-device",
+            "--target-device-id",
+            "dev_phone",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload, {"device_id": "dev_phone", "revoked": True})
+        self.assertEqual(self.service.calls, [("revoke-device", "dev_phone")])
+
     def test_download_blobs_command_writes_blob_files_when_output_dir_is_provided(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir) / "downloaded"
@@ -4506,6 +5232,42 @@ class DesktopCliTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_submit_workspace_commit_command_can_attach_file_version_directives(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "submit-workspace-commit",
+            "--created-at",
+            "1770000040750",
+            "--file-id",
+            "file-a",
+            "--version-source",
+            "manual_meeting_checkpoint",
+            "--version-label",
+            "2026-05-15 周会",
+            "--change-note",
+            "会后确认版",
+            "--pin-version",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["file_version_directives"][0]["source"], "manual_meeting_checkpoint")
+        self.assertEqual(payload["file_version_directives"][0]["version_label"], "2026-05-15 周会")
+        self.assertTrue(payload["file_version_directives"][0]["is_pinned"])
+        call = self.service.calls[-1]
+        self.assertEqual(call[:6], ("submit-workspace-commit", 1770000040750, ["file-a"], None, None, None))
+        self.assertEqual(call[6][0].file_id, "file-a")
+        self.assertEqual(call[6][0].source, "manual_meeting_checkpoint")
+        self.assertEqual(call[6][0].version_label, "2026-05-15 周会")
+        self.assertEqual(call[6][0].change_note, "会后确认版")
+        self.assertTrue(call[6][0].is_pinned)
 
     def test_submit_detected_commit_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(

@@ -40,6 +40,8 @@ def _store_error_response(error: SyncStoreError) -> JSONResponse:
     status_code_by_code = {
         "blob_not_found": 404,
         "device_not_found": 404,
+        "file_version_not_found": 404,
+        "resumable_upload_session_not_found": 404,
     }
     return _error_response(status_code_by_code.get(error.code, 400), error.code, str(error))
 
@@ -61,6 +63,7 @@ def _authorized_device_id(request: Request) -> Optional[str]:
     device_id = store.device_id_for_token(token)
     if device_id is None:
         raise _error(403, "device_revoked", "Device token is invalid or revoked.")
+    store.touch_device(device_id)
     return device_id
 
 
@@ -71,6 +74,7 @@ def _required_authorized_device_id(request: Request) -> str:
     device_id = store.device_id_for_token(token)
     if device_id is None:
         raise _error(403, "device_revoked", "Device token is invalid or revoked.")
+    store.touch_device(device_id)
     return device_id
 
 
@@ -78,6 +82,26 @@ def _body_mapping(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise _error(400, "invalid_json_body", "Request body must be a JSON object.")
     return payload
+
+
+def _required_int_header(request: Request, name: str) -> int:
+    value = request.headers.get(name)
+    if value is None:
+        raise _error(400, "missing_chunk_header", f"{name} header is required.")
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise _error(400, "invalid_chunk_header", f"{name} header must be an integer.") from error
+    if parsed < 0:
+        raise _error(400, "invalid_chunk_header", f"{name} header must be non-negative.")
+    return parsed
+
+
+def _required_string_header(request: Request, name: str) -> str:
+    value = request.headers.get(name)
+    if not value:
+        raise _error(400, "missing_chunk_header", f"{name} header is required.")
+    return value
 
 
 @app.get("/health")
@@ -99,6 +123,41 @@ def delete_device(device_id: str, request: Request) -> Response:
     if not store.delete_device(device_id):
         raise _error(404, "device_not_found", "Device was not found.")
     return Response(status_code=204)
+
+
+@app.get("/vaults/{vault_id}/devices")
+def list_vault_devices(vault_id: str, request: Request) -> dict[str, Any]:
+    device_id = _required_authorized_device_id(request)
+    try:
+        return store.list_vault_devices(vault_id, current_device_id=device_id)
+    except SyncStoreError as error:
+        return _store_error_response(error)
+
+
+@app.post("/vaults/{vault_id}/devices/heartbeat")
+def heartbeat_device(vault_id: str, request: Request) -> dict[str, Any]:
+    device_id = _required_authorized_device_id(request)
+    try:
+        return store.heartbeat_device(vault_id, device_id=device_id)
+    except SyncStoreError as error:
+        return _store_error_response(error)
+
+
+@app.post("/vaults/{vault_id}/tombstones/gc")
+def run_tombstone_gc(vault_id: str, request: Request, payload: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    device_id = _required_authorized_device_id(request)
+    body = _body_mapping(payload or {})
+    options: dict[str, Any] = {"actor_device_id": device_id}
+    for key in ("now_ms", "min_retention_ms", "inactive_after_ms"):
+        if key not in body:
+            continue
+        if not isinstance(body[key], int):
+            raise _error(400, "invalid_request", f"{key} must be an integer")
+        options[key] = body[key]
+    try:
+        return store.run_tombstone_gc(vault_id, **options)
+    except SyncStoreError as error:
+        return _store_error_response(error)
 
 
 @app.get("/vaults/{vault_id}/head")
@@ -146,6 +205,24 @@ def ack_revisions(vault_id: str, payload: dict[str, Any], request: Request) -> d
         return _store_error_response(error)
 
 
+@app.post("/vaults/{vault_id}/file-versions/list")
+def list_file_versions(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
+    _authorized_device_id(request)
+    try:
+        return store.list_file_versions(vault_id, _body_mapping(payload))
+    except SyncStoreError as error:
+        return _store_error_response(error)
+
+
+@app.patch("/vaults/{vault_id}/file-versions/{version_id}")
+def update_file_version(vault_id: str, version_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
+    _authorized_device_id(request)
+    try:
+        return store.update_file_version(vault_id, version_id, _body_mapping(payload))
+    except SyncStoreError as error:
+        return _store_error_response(error)
+
+
 @app.post("/vaults/{vault_id}/blobs/check")
 def check_blobs(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
     _authorized_device_id(request)
@@ -164,11 +241,48 @@ def init_blob_upload(vault_id: str, payload: dict[str, Any], request: Request) -
         return _store_error_response(error)
 
 
+@app.post("/vaults/{vault_id}/blobs/resumable-upload-init")
+def init_resumable_blob_upload(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
+    device_id = _authorized_device_id(request)
+    try:
+        return store.init_resumable_blob_upload(
+            vault_id,
+            _body_mapping(payload),
+            request_base_url=str(request.base_url),
+            device_id=device_id,
+        )
+    except SyncStoreError as error:
+        return _store_error_response(error)
+
+
+@app.post("/vaults/{vault_id}/blobs/resumable-upload-complete")
+def complete_resumable_blob_upload(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
+    _authorized_device_id(request)
+    try:
+        return store.complete_resumable_blob_upload(vault_id, _body_mapping(payload))
+    except SyncStoreError as error:
+        return _store_error_response(error)
+
+
 @app.post("/vaults/{vault_id}/blobs/download-init")
 def init_blob_download(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
     device_id = _authorized_device_id(request)
     try:
         return store.init_blob_download(vault_id, _body_mapping(payload), request_base_url=str(request.base_url), device_id=device_id)
+    except SyncStoreError as error:
+        return _store_error_response(error)
+
+
+@app.post("/vaults/{vault_id}/blobs/resumable-download-init")
+def init_resumable_blob_download(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
+    device_id = _authorized_device_id(request)
+    try:
+        return store.init_resumable_blob_download(
+            vault_id,
+            _body_mapping(payload),
+            request_base_url=str(request.base_url),
+            device_id=device_id,
+        )
     except SyncStoreError as error:
         return _store_error_response(error)
 
@@ -182,10 +296,38 @@ async def upload_blob(capability_token: str, request: Request) -> Response:
         raise _error(error.status_code, error.code, str(error)) from error
 
 
+@app.put("/_capabilities/blobs/resumable-upload/{session_id}")
+async def upload_resumable_blob_chunk(session_id: str, request: Request) -> Response:
+    try:
+        store.put_resumable_blob_chunk(
+            session_id,
+            chunk_id=_required_string_header(request, "x-noteapp-chunk-id"),
+            offset=_required_int_header(request, "x-noteapp-chunk-offset"),
+            size=_required_int_header(request, "x-noteapp-chunk-size"),
+            payload=await request.body(),
+        )
+        return Response(status_code=204)
+    except BlobCapabilityError as error:
+        raise _error(error.status_code, error.code, str(error)) from error
+
+
 @app.get("/_capabilities/blobs/{capability_token}")
 def download_blob(capability_token: str) -> Response:
     try:
         payload = store.read_blob_download(capability_token)
+        return Response(content=payload, media_type="application/octet-stream")
+    except BlobCapabilityError as error:
+        raise _error(error.status_code, error.code, str(error)) from error
+
+
+@app.get("/_capabilities/blobs/resumable-download/{capability_token}")
+def download_resumable_blob_range(capability_token: str, request: Request) -> Response:
+    try:
+        payload = store.read_resumable_blob_download(
+            capability_token,
+            offset=_required_int_header(request, "x-noteapp-range-offset"),
+            size=_required_int_header(request, "x-noteapp-range-size"),
+        )
         return Response(content=payload, media_type="application/octet-stream")
     except BlobCapabilityError as error:
         raise _error(error.status_code, error.code, str(error)) from error

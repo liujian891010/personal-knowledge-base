@@ -41,6 +41,13 @@ VALID_SYNC_APPLY_PHASES = {
     "finalizing",
 }
 
+VALID_FILE_VERSION_SOURCES = {
+    "commit_success",
+    "manual_checkpoint",
+    "manual_meeting_checkpoint",
+    "restore",
+}
+
 
 def _require_non_negative_int(name: str, value: Optional[int], allow_none: bool = False) -> None:
     if value is None and allow_none:
@@ -54,6 +61,11 @@ def _require_positive_int(name: str, value: Optional[int], allow_none: bool = Fa
         return
     if not isinstance(value, int) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
+
+
+def _require_optional_non_empty_string(name: str, value: Optional[str]) -> None:
+    if value is not None and (not isinstance(value, str) or not value):
+        raise ValueError(f"{name} must be a non-empty string when provided")
 
 
 @dataclass(frozen=True)
@@ -327,6 +339,163 @@ class ManifestRecord:
             tombstones=[TombstoneRecord.from_dict(item) for item in payload.get("tombstones", [])],
             summary_hash=payload["summary_hash"],
             meta=payload.get("meta"),
+        )
+
+
+@dataclass(frozen=True)
+class FileVersionRecord:
+    version_id: str
+    file_id: str
+    path_at_revision: str
+    revision: int
+    content_hash: str
+    blob_id: str
+    size: int
+    mtime: int
+    created_at: int
+    created_by_device: str
+    source: str
+    version_label: Optional[str] = None
+    change_note: Optional[str] = None
+    is_pinned: bool = False
+    meta: Optional[Dict[str, Any]] = None
+
+    def __post_init__(self) -> None:
+        if not self.version_id:
+            raise ValueError("version_id must be non-empty")
+        if not self.file_id:
+            raise ValueError("file_id must be non-empty")
+        if not self.path_at_revision:
+            raise ValueError("path_at_revision must be non-empty")
+        if not self.content_hash:
+            raise ValueError("content_hash must be non-empty")
+        if not self.blob_id:
+            raise ValueError("blob_id must be non-empty")
+        if not self.created_by_device:
+            raise ValueError("created_by_device must be non-empty")
+        if self.source not in VALID_FILE_VERSION_SOURCES:
+            raise ValueError(f"unsupported file version source: {self.source}")
+        _require_positive_int("revision", self.revision)
+        _require_non_negative_int("size", self.size)
+        _require_non_negative_int("mtime", self.mtime)
+        _require_non_negative_int("created_at", self.created_at)
+        _require_optional_non_empty_string("version_label", self.version_label)
+        _require_optional_non_empty_string("change_note", self.change_note)
+        if not isinstance(self.is_pinned, bool):
+            raise ValueError("is_pinned must be a boolean")
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "version_id": self.version_id,
+            "file_id": self.file_id,
+            "path_at_revision": self.path_at_revision,
+            "revision": self.revision,
+            "content_hash": self.content_hash,
+            "blob_id": self.blob_id,
+            "size": self.size,
+            "mtime": self.mtime,
+            "created_at": self.created_at,
+            "created_by_device": self.created_by_device,
+            "source": self.source,
+            "is_pinned": self.is_pinned,
+        }
+        if self.version_label is not None:
+            payload["version_label"] = self.version_label
+        if self.change_note is not None:
+            payload["change_note"] = self.change_note
+        if self.meta is not None:
+            payload["meta"] = self.meta
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "FileVersionRecord":
+        return cls(
+            version_id=payload["version_id"],
+            file_id=payload["file_id"],
+            path_at_revision=payload["path_at_revision"],
+            revision=payload["revision"],
+            content_hash=payload["content_hash"],
+            blob_id=payload["blob_id"],
+            size=payload["size"],
+            mtime=payload["mtime"],
+            created_at=payload["created_at"],
+            created_by_device=payload["created_by_device"],
+            source=payload["source"],
+            version_label=payload.get("version_label"),
+            change_note=payload.get("change_note"),
+            is_pinned=payload.get("is_pinned", False),
+            meta=payload.get("meta"),
+        )
+
+
+@dataclass(frozen=True)
+class FileVersionCommitDirective:
+    file_id: str
+    source: str
+    version_label: Optional[str] = None
+    change_note: Optional[str] = None
+    is_pinned: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.file_id:
+            raise ValueError("file_id must be non-empty")
+        if self.source not in VALID_FILE_VERSION_SOURCES:
+            raise ValueError(f"unsupported file version source: {self.source}")
+        _require_optional_non_empty_string("version_label", self.version_label)
+        _require_optional_non_empty_string("change_note", self.change_note)
+        if not isinstance(self.is_pinned, bool):
+            raise ValueError("is_pinned must be a boolean")
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "file_id": self.file_id,
+            "source": self.source,
+            "is_pinned": self.is_pinned,
+        }
+        if self.version_label is not None:
+            payload["version_label"] = self.version_label
+        if self.change_note is not None:
+            payload["change_note"] = self.change_note
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "FileVersionCommitDirective":
+        return cls(
+            file_id=payload["file_id"],
+            source=payload["source"],
+            version_label=payload.get("version_label"),
+            change_note=payload.get("change_note"),
+            is_pinned=payload.get("is_pinned", False),
+        )
+
+
+@dataclass(frozen=True)
+class FileVersionRetentionPolicy:
+    keep_latest: int = 50
+    keep_pinned: bool = True
+    max_age_days: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        _require_positive_int("keep_latest", self.keep_latest)
+        if not isinstance(self.keep_pinned, bool):
+            raise ValueError("keep_pinned must be a boolean")
+        _require_positive_int("max_age_days", self.max_age_days, allow_none=True)
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "keep_latest": self.keep_latest,
+            "keep_pinned": self.keep_pinned,
+        }
+        if self.max_age_days is not None:
+            payload["max_age_days"] = self.max_age_days
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "FileVersionRetentionPolicy":
+        return cls(
+            keep_latest=payload.get("keep_latest", 50),
+            keep_pinned=payload.get("keep_pinned", True),
+            max_age_days=payload.get("max_age_days"),
         )
 
 

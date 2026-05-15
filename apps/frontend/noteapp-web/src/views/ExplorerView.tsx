@@ -10,25 +10,35 @@ import {
   Eye,
   Folder,
   FolderOpen,
+  GitCompare,
   Info,
   PanelRightClose,
   PanelRightOpen,
   Paperclip,
+  Pin,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   Search,
+  Tag,
   Trash2,
 } from 'lucide-react';
 
 import { useWorkspaceFilesController } from '../useWorkspaceFiles';
 import { useWorkspaceFileContentController } from '../useWorkspaceFileContent';
 import { useWorkspaceLinksController } from '../useWorkspaceLinks';
+import { useWorkspaceFileVersionsController } from '../useWorkspaceFileVersions';
 import { useWorkspaceSearchController } from '../useWorkspaceSearch';
 import { useSyncShellController } from '../useSyncShellSnapshot';
 import type { AiContextDraft } from '../aiContext';
 import type { SyncShellSummary } from '../syncShell';
 import type { WorkspaceFileEntry } from '../workspaceFiles';
+import type {
+  WorkspaceFileVersionContent,
+  WorkspaceFileVersionDiff,
+  WorkspaceFileVersionRecord,
+} from '../workspaceFileVersions';
 import type { WorkspaceNoteLink } from '../workspaceLinks';
 
 const explorerCollapsedFoldersStoragePrefix = 'noteapp.explorer.collapsedFolders.v1';
@@ -213,6 +223,33 @@ function attachmentPreviewKind(mimeType: string | null | undefined): 'image' | '
   return 'other';
 }
 
+function versionSourceLabel(source: WorkspaceFileVersionRecord['source']): string {
+  switch (source) {
+    case 'manual_meeting_checkpoint':
+      return '会议版本';
+    case 'manual_checkpoint':
+      return '手动版本';
+    case 'restore':
+      return '恢复版本';
+    default:
+      return '同步提交';
+  }
+}
+
+function versionTitle(version: WorkspaceFileVersionRecord): string {
+  return version.version_label || `${versionSourceLabel(version.source)} r${version.revision}`;
+}
+
+function decodeVersionText(contentBase64: string): string {
+  try {
+    const binary = window.atob(contentBase64);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return '';
+  }
+}
+
 function folderAncestors(folderPath: string): string[] {
   const parts = folderPath.split('/').filter(Boolean);
   const ancestors = [''];
@@ -253,6 +290,8 @@ type ExplorerRow =
   };
 
 type MarkdownEditorMode = 'edit' | 'preview' | 'split';
+type VersionPanelTab = 'preview' | 'diff';
+type VersionPanelFile = Pick<WorkspaceFileEntry, 'file_id' | 'path' | 'status' | 'exists_on_disk'>;
 type FileDialogState =
   | { kind: 'create'; path: string; directoryPath: string; fileName: string }
   | { kind: 'rename'; path: string }
@@ -739,6 +778,280 @@ function syncPromptDetail(summary: SyncShellSummary, syncError: string | null, s
   return summary.detail;
 }
 
+function VersionHistoryPanel({
+  file,
+  versions,
+  selectedVersion,
+  preview,
+  diff,
+  activeTab,
+  labelDraft,
+  noteDraft,
+  isLoading,
+  isPreviewLoading,
+  isDiffLoading,
+  isMutating,
+  onClose,
+  onRefresh,
+  onSelectVersion,
+  onTabChange,
+  onLabelDraftChange,
+  onNoteDraftChange,
+  onSaveMetadata,
+  onTogglePin,
+  onRestore,
+  onSaveAsCopy,
+}: {
+  file: VersionPanelFile;
+  versions: WorkspaceFileVersionRecord[];
+  selectedVersion: WorkspaceFileVersionRecord | null;
+  preview: WorkspaceFileVersionContent | null;
+  diff: WorkspaceFileVersionDiff | null;
+  activeTab: VersionPanelTab;
+  labelDraft: string;
+  noteDraft: string;
+  isLoading: boolean;
+  isPreviewLoading: boolean;
+  isDiffLoading: boolean;
+  isMutating: boolean;
+  onClose: () => void;
+  onRefresh: () => void;
+  onSelectVersion: (version: WorkspaceFileVersionRecord, tab?: VersionPanelTab) => void;
+  onTabChange: (tab: VersionPanelTab) => void;
+  onLabelDraftChange: (value: string) => void;
+  onNoteDraftChange: (value: string) => void;
+  onSaveMetadata: () => void;
+  onTogglePin: (version: WorkspaceFileVersionRecord) => void;
+  onRestore: () => void;
+  onSaveAsCopy: () => void;
+}) {
+  const selectedPreviewText = preview && selectedVersion?.version_id === preview.version.version_id
+    ? preview.text ?? decodeVersionText(preview.content_base64)
+    : '';
+  const selectedDiffText = diff && selectedVersion?.version_id === diff.version.version_id ? diff.diff_text : '';
+  const canUseSelectedVersion = Boolean(selectedVersion && file.status === 'active' && file.exists_on_disk);
+
+  return (
+    <aside className="absolute bottom-0 right-0 top-0 z-30 flex h-full min-h-0 w-[min(94vw,48rem)] flex-shrink-0 flex-col overflow-hidden rounded-xl border border-[#0f3460] bg-[#16213e] shadow-2xl shadow-black/40 xl:static xl:w-[34rem] xl:shadow-black/20">
+      <div className="flex items-start justify-between gap-3 border-b border-[#0f3460] px-4 py-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <GitCompare size={16} className="text-[#a9c8fc]" />
+            <h3 className="truncate text-[15px] font-bold text-[#e3e2e6]">版本历史</h3>
+          </div>
+          <p className="mt-1 truncate font-mono text-[11px] text-slate-500" title={file.path}>
+            {file.path}
+          </p>
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={isLoading}
+            className="inline-flex h-7 items-center gap-1.5 rounded border border-[#0f3460] bg-[#121316] px-2 text-[11px] font-semibold text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} />
+            刷新
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            title="收起版本历史"
+            className="inline-flex h-7 w-7 items-center justify-center rounded border border-[#0f3460] bg-[#121316] text-slate-400 hover:text-white"
+          >
+            <PanelRightClose size={14} />
+          </button>
+        </div>
+      </div>
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[14rem_minmax(0,1fr)]">
+        <div className="min-h-0 border-b border-[#0f3460] xl:border-b-0 xl:border-r">
+          <div className="flex items-center justify-between gap-2 px-3 py-2">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
+              Versions {versions.length}
+            </span>
+            {isLoading && <span className="text-[11px] text-slate-500">Loading</span>}
+          </div>
+          <div className="max-h-52 space-y-1 overflow-y-auto px-2 pb-2 xl:max-h-none">
+            {!isLoading && versions.length === 0 && (
+              <div className="rounded border border-[#0f3460] bg-[#121316] px-3 py-4 text-[12px] text-slate-500">
+                暂无历史版本。保存并同步后会生成版本记录。
+              </div>
+            )}
+            {versions.map((version) => {
+              const isSelected = selectedVersion?.version_id === version.version_id;
+              return (
+                <button
+                  key={version.version_id}
+                  type="button"
+                  onClick={() => onSelectVersion(version, activeTab)}
+                  className={`block w-full rounded border px-3 py-2 text-left transition-colors ${
+                    isSelected
+                      ? 'border-[#a9c8fc]/60 bg-[#0f3460]/60 text-white'
+                      : 'border-[#0f3460] bg-[#121316] text-slate-300 hover:border-[#a9c8fc]/50 hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-[12px] font-bold">{versionTitle(version)}</span>
+                    {version.is_pinned && <Pin size={12} className="flex-shrink-0 text-[#ffb782]" />}
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-2 font-mono text-[10px] text-slate-500">
+                    <span>r{version.revision}</span>
+                    <span>{formatFileTime(version.created_at)}</span>
+                  </div>
+                  <div className="mt-1 truncate text-[11px] text-slate-500">
+                    {versionSourceLabel(version.source)}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-col">
+          {!selectedVersion ? (
+            <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-[13px] text-slate-500">
+              选择一个版本查看内容或差异。
+            </div>
+          ) : (
+            <>
+              <div className="border-b border-[#0f3460] p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="truncate text-[14px] font-bold text-[#e3e2e6]">{versionTitle(selectedVersion)}</h4>
+                      <span className="rounded border border-[#0f3460] bg-[#121316] px-2 py-0.5 font-mono text-[10px] text-slate-400">
+                        r{selectedVersion.revision}
+                      </span>
+                    </div>
+                    <p className="mt-1 truncate font-mono text-[11px] text-slate-500">
+                      {formatFileTime(selectedVersion.created_at)} · {versionSourceLabel(selectedVersion.source)}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onTogglePin(selectedVersion)}
+                      disabled={isMutating}
+                      className={`inline-flex h-7 items-center gap-1.5 rounded border px-2 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
+                        selectedVersion.is_pinned
+                          ? 'border-[#ffb782]/50 bg-[#ffb782]/10 text-[#ffd8a8]'
+                          : 'border-[#0f3460] bg-[#121316] text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      <Pin size={12} />
+                      {selectedVersion.is_pinned ? '取消 Pin' : 'Pin'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onSaveAsCopy}
+                      disabled={!canUseSelectedVersion || isMutating || isPreviewLoading}
+                      className="inline-flex h-7 items-center gap-1.5 rounded border border-[#0f3460] bg-[#121316] px-2 text-[11px] font-semibold text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Tag size={12} />
+                      另存副本
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onRestore}
+                      disabled={!canUseSelectedVersion || isMutating}
+                      className="inline-flex h-7 items-center gap-1.5 rounded border border-[#e94560]/40 bg-[#e94560]/10 px-2 text-[11px] font-semibold text-[#ffb3c0] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <RotateCcw size={12} />
+                      恢复
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 gap-2">
+                  <label className="block">
+                    <span className="mb-1 block text-[11px] font-semibold text-slate-400">版本标签</span>
+                    <input
+                      value={labelDraft}
+                      onChange={(event) => onLabelDraftChange(event.target.value)}
+                      className="w-full rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[12px] text-[#e3e2e6] outline-none focus:border-[#a9c8fc]"
+                      placeholder="例如：客户会议复盘"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-[11px] font-semibold text-slate-400">备注</span>
+                    <textarea
+                      value={noteDraft}
+                      onChange={(event) => onNoteDraftChange(event.target.value)}
+                      className="h-16 w-full resize-none rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[12px] text-[#e3e2e6] outline-none focus:border-[#a9c8fc]"
+                      placeholder="记录这版的会议、结论或行动项"
+                    />
+                  </label>
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={onSaveMetadata}
+                      disabled={isMutating}
+                      className="inline-flex h-7 items-center rounded border border-[#2a5ea3] bg-[#0f3460] px-3 text-[11px] font-semibold text-white hover:bg-[#15508f] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      保存标签备注
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 border-b border-[#0f3460] bg-[#121316] px-3 py-2">
+                {(['preview', 'diff'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => onTabChange(tab)}
+                    className={`rounded px-3 py-1.5 text-[12px] font-semibold transition-colors ${
+                      activeTab === tab
+                        ? 'bg-[#0f3460] text-white'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {tab === 'preview' ? '预览' : '差异'}
+                  </button>
+                ))}
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-auto bg-[#0d0e11]">
+                {activeTab === 'preview' && (
+                  isPreviewLoading ? (
+                    <div className="flex h-full items-center justify-center text-[13px] text-slate-500">
+                      正在加载版本内容...
+                    </div>
+                  ) : selectedPreviewText.trim() ? (
+                    <pre className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-[12px] leading-relaxed text-slate-300">
+                      {selectedPreviewText}
+                    </pre>
+                  ) : (
+                    <div className="flex h-full items-center justify-center p-6 text-center text-[13px] text-slate-500">
+                      暂无可预览文本，可能是二进制或内容尚未加载。
+                    </div>
+                  )
+                )}
+                {activeTab === 'diff' && (
+                  isDiffLoading ? (
+                    <div className="flex h-full items-center justify-center text-[13px] text-slate-500">
+                      正在生成差异...
+                    </div>
+                  ) : selectedDiffText.trim() ? (
+                    <pre className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-[12px] leading-relaxed text-slate-300">
+                      {selectedDiffText}
+                    </pre>
+                  ) : (
+                    <div className="flex h-full items-center justify-center p-6 text-center text-[13px] text-slate-500">
+                      当前文件与该版本没有文本差异，或该版本不可做文本 diff。
+                    </div>
+                  )
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
 export default function ExplorerView({
   initialSelectedPath,
   initialContextFileIds,
@@ -796,6 +1109,23 @@ export default function ExplorerView({
     loadLinks,
     clearLinks,
   } = useWorkspaceLinksController();
+  const {
+    versions: selectedFileVersions,
+    selectedVersion,
+    preview: selectedVersionPreview,
+    diff: selectedVersionDiff,
+    lastError: versionError,
+    isLoading: isVersionLoading,
+    isPreviewLoading: isVersionPreviewLoading,
+    isDiffLoading: isVersionDiffLoading,
+    isMutating: isVersionMutating,
+    loadVersions,
+    loadPreview: loadVersionPreview,
+    loadDiff: loadVersionDiff,
+    updateVersion,
+    restoreVersion,
+    clear: clearVersions,
+  } = useWorkspaceFileVersionsController();
   const {
     summary: syncSummary,
     source: syncSource,
@@ -866,6 +1196,10 @@ export default function ExplorerView({
   const [attachmentPreviewError, setAttachmentPreviewError] = useState<string | null>(null);
   const [isAttachmentPreviewLoading, setIsAttachmentPreviewLoading] = useState(false);
   const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(false);
+  const [isVersionPanelOpen, setIsVersionPanelOpen] = useState(false);
+  const [versionPanelTab, setVersionPanelTab] = useState<VersionPanelTab>('preview');
+  const [versionLabelDraft, setVersionLabelDraft] = useState('');
+  const [versionNoteDraft, setVersionNoteDraft] = useState('');
   const [draftText, setDraftText] = useState('');
   const [editorMode, setEditorMode] = useState<MarkdownEditorMode>('preview');
   const [pendingDraftRecovery, setPendingDraftRecovery] = useState<{
@@ -1061,6 +1395,35 @@ export default function ExplorerView({
     source,
   ]);
 
+  useEffect(() => {
+    clearVersions();
+    setVersionLabelDraft('');
+    setVersionNoteDraft('');
+    if (
+      source !== 'bridge'
+      || !selectedFile
+      || selectedFile.status !== 'active'
+      || !selectedFile.exists_on_disk
+    ) {
+      return;
+    }
+    void loadVersions(selectedFile.file_id).catch(() => {
+      // Version errors are exposed by the version controller.
+    });
+  }, [
+    clearVersions,
+    loadVersions,
+    selectedFileId,
+    selectedFileExistsOnDisk,
+    selectedFileStatus,
+    source,
+  ]);
+
+  useEffect(() => {
+    setVersionLabelDraft(selectedVersion?.version_label ?? '');
+    setVersionNoteDraft(selectedVersion?.change_note ?? '');
+  }, [selectedVersion]);
+
   const isContentDirty = Boolean(selectedContent && draftText !== selectedContent.text);
   const canEditContent = Boolean(
     selectedFile
@@ -1185,6 +1548,111 @@ export default function ExplorerView({
     if (fileId) {
       await loadContent(fileId);
       await loadLinks(fileId);
+    }
+  }
+
+  async function handleSelectVersion(version: WorkspaceFileVersionRecord, tab: VersionPanelTab = versionPanelTab) {
+    if (!selectedFile) {
+      return;
+    }
+    setVersionPanelTab(tab);
+    if (tab === 'diff') {
+      await loadVersionDiff(selectedFile.file_id, version.version_id).catch(() => {
+        // Version errors are exposed by the version controller.
+      });
+      return;
+    }
+    await loadVersionPreview(selectedFile.file_id, version.version_id).catch(() => {
+      // Version errors are exposed by the version controller.
+    });
+  }
+
+  function handleVersionTabChange(tab: VersionPanelTab) {
+    setVersionPanelTab(tab);
+    if (selectedVersion) {
+      void handleSelectVersion(selectedVersion, tab);
+    }
+  }
+
+  async function handleRefreshVersions() {
+    if (!selectedFile) {
+      return;
+    }
+    await loadVersions(selectedFile.file_id).catch(() => {
+      // Version errors are exposed by the version controller.
+    });
+  }
+
+  async function handleUpdateSelectedVersion() {
+    if (!selectedVersion) {
+      return;
+    }
+    try {
+      await updateVersion(selectedVersion.version_id, {
+        version_label: versionLabelDraft.trim() || undefined,
+        change_note: versionNoteDraft.trim() || undefined,
+      });
+      setFileMutationError(null);
+    } catch (error) {
+      setFileMutationError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function handleToggleVersionPin(version: WorkspaceFileVersionRecord) {
+    try {
+      await updateVersion(version.version_id, { is_pinned: !version.is_pinned });
+      setFileMutationError(null);
+    } catch (error) {
+      setFileMutationError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function handleRestoreSelectedVersion() {
+    if (!selectedFile || !selectedVersion) {
+      return;
+    }
+    const confirmed = window.confirm(`恢复版本“${versionTitle(selectedVersion)}”到当前文件？当前文件会被写回并产生新的同步提交。`);
+    if (!confirmed) {
+      return;
+    }
+    try {
+      await restoreVersion(selectedFile.file_id, selectedVersion.version_id, {
+        version_label: `restore: ${versionTitle(selectedVersion)}`,
+        change_note: `Restored from ${selectedVersion.version_id}`,
+      });
+      await loadContent(selectedFile.file_id);
+      await loadLinks(selectedFile.file_id);
+      await refresh();
+      await refreshSyncStatus();
+      await loadVersions(selectedFile.file_id);
+      setEditorMode('preview');
+      setFileMutationError(null);
+    } catch (error) {
+      setFileMutationError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function handleSaveVersionAsCopy() {
+    if (!selectedFile || !selectedVersion) {
+      return;
+    }
+    try {
+      let text = selectedVersionPreview?.text ?? null;
+      if (!text || selectedVersionPreview?.version.version_id !== selectedVersion.version_id) {
+        const loaded = await loadVersionPreview(selectedFile.file_id, selectedVersion.version_id);
+        text = loaded.text ?? decodeVersionText(loaded.content_base64);
+      }
+      const baseName = fileName(selectedFile.path).replace(/\.(md|markdown)$/i, '');
+      const directoryPath = folderPathForFile(selectedFile.path);
+      const copyName = `${baseName}.r${selectedVersion.revision}.md`;
+      const copyPath = buildWorkspaceFilePath(directoryPath, copyName);
+      const created = await createNote(copyPath, text || '');
+      await refreshSyncStatus();
+      openWorkspaceFile(created.file_id);
+      setEditorMode('preview');
+      setFileMutationError(null);
+    } catch (error) {
+      setFileMutationError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -1562,6 +2030,11 @@ export default function ExplorerView({
               {fileMutationError}
             </div>
           )}
+          {versionError && (
+            <div className="mb-4 rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782] line-clamp-3">
+              {versionError}
+            </div>
+          )}
           {linksError && (
             <div className="mb-4 rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782] line-clamp-3">
               {linksError}
@@ -1747,6 +2220,23 @@ export default function ExplorerView({
                       <span>附件</span>
                     </button>
                     <button
+                      onClick={() => {
+                        setIsVersionPanelOpen((value) => {
+                          const nextValue = !value;
+                          if (nextValue && selectedFileVersions.length > 0) {
+                            void handleSelectVersion(selectedVersion ?? selectedFileVersions[0]);
+                          }
+                          return nextValue;
+                        });
+                      }}
+                      disabled={!selectedFile || selectedFile.status !== 'active' || source !== 'bridge'}
+                      title={isVersionPanelOpen ? '收起版本历史' : '显示版本历史'}
+                      className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                    >
+                      <GitCompare size={14} />
+                      <span>版本</span>
+                    </button>
+                    <button
                       onClick={() => setIsInfoPanelOpen((value) => !value)}
                       title={isInfoPanelOpen ? '收起详情' : '显示详情'}
                       className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white transition-colors"
@@ -1929,6 +2419,33 @@ export default function ExplorerView({
                   )}
                 </div>
               </section>
+
+              {isVersionPanelOpen && (
+                <VersionHistoryPanel
+                  file={selectedFile}
+                  versions={selectedFileVersions}
+                  selectedVersion={selectedVersion}
+                  preview={selectedVersionPreview}
+                  diff={selectedVersionDiff}
+                  activeTab={versionPanelTab}
+                  labelDraft={versionLabelDraft}
+                  noteDraft={versionNoteDraft}
+                  isLoading={isVersionLoading}
+                  isPreviewLoading={isVersionPreviewLoading}
+                  isDiffLoading={isVersionDiffLoading}
+                  isMutating={isVersionMutating}
+                  onClose={() => setIsVersionPanelOpen(false)}
+                  onRefresh={() => void handleRefreshVersions()}
+                  onSelectVersion={(version, tab) => void handleSelectVersion(version, tab)}
+                  onTabChange={handleVersionTabChange}
+                  onLabelDraftChange={setVersionLabelDraft}
+                  onNoteDraftChange={setVersionNoteDraft}
+                  onSaveMetadata={() => void handleUpdateSelectedVersion()}
+                  onTogglePin={(version) => void handleToggleVersionPin(version)}
+                  onRestore={() => void handleRestoreSelectedVersion()}
+                  onSaveAsCopy={() => void handleSaveVersionAsCopy()}
+                />
+              )}
 
               {isInfoPanelOpen && (
                 <aside className="absolute bottom-0 right-0 top-0 z-20 h-full min-h-0 w-80 flex-shrink-0 overflow-y-auto rounded-xl border border-[#0f3460] bg-[#16213e] p-4 shadow-lg shadow-black/30 xl:static xl:shadow-black/20">
