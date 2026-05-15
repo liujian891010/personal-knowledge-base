@@ -9,12 +9,17 @@ from .change_detection import (
 )
 from .crypto import (
     DesktopBlobCryptoProvider,
+    E2EE_BLOB_ID_PREFIX,
+    E2EE_CRYPTO_SCHEME,
+    E2EEDesktopBlobCryptoProvider,
     PlaceholderDesktopBlobCryptoProvider,
+    build_e2ee_blob_crypto_provider,
     build_placeholder_blob_id,
     build_placeholder_blob_crypto_provider,
     build_placeholder_encrypted_blob_map,
     build_placeholder_encrypted_blob_payload,
     decrypt_placeholder_encrypted_blob_payload,
+    is_e2ee_crypto_available,
 )
 from .runner import (
     DesktopSyncCycleResult,
@@ -174,6 +179,9 @@ __all__ = [
     "DesktopSyncWorkerStateRecord",
     "DesktopTrackedChangeCommitPlan",
     "DesktopBlobCryptoProvider",
+    "E2EE_BLOB_ID_PREFIX",
+    "E2EE_CRYPTO_SCHEME",
+    "E2EEDesktopBlobCryptoProvider",
     "build_desktop_sync_runner",
     "build_cli_service",
     "DesktopSyncTimePlan",
@@ -184,6 +192,7 @@ __all__ = [
     "PlaceholderDesktopBlobCryptoProvider",
     "DesktopWorkspaceSnapshot",
     "build_generated_file_id",
+    "build_e2ee_blob_crypto_provider",
     "build_placeholder_blob_id",
     "build_placeholder_blob_crypto_provider",
     "build_placeholder_encrypted_blob_map",
@@ -197,6 +206,7 @@ __all__ = [
     "inspect_vault_package",
     "build_tracked_change_commit_plan",
     "detect_local_workspace_changes",
+    "is_e2ee_crypto_available",
     "build_desktop_sync_worker_health",
     "build_desktop_sync_worker_state_record",
     "load_desktop_sync_worker_state",

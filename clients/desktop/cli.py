@@ -213,6 +213,10 @@ def create_parser() -> argparse.ArgumentParser:
     rename_workspace_note_parser.add_argument("--file-id", required=True)
     rename_workspace_note_parser.add_argument("--path", required=True)
     rename_workspace_note_parser.add_argument("--now-ms", type=int)
+    move_workspace_note_parser = subparsers.add_parser("move-workspace-note")
+    move_workspace_note_parser.add_argument("--file-id", required=True)
+    move_workspace_note_parser.add_argument("--path", required=True)
+    move_workspace_note_parser.add_argument("--now-ms", type=int)
     delete_workspace_note_parser = subparsers.add_parser("delete-workspace-note")
     delete_workspace_note_parser.add_argument("--file-id", required=True)
     delete_workspace_note_parser.add_argument("--now-ms", type=int)
@@ -471,6 +475,12 @@ def run_cli(
         )
     elif args.command == "rename-workspace-note":
         result = service.rename_workspace_note(
+            args.file_id,
+            args.path,
+            now_ms=args.now_ms,
+        )
+    elif args.command == "move-workspace-note":
+        result = service.move_workspace_note(
             args.file_id,
             args.path,
             now_ms=args.now_ms,

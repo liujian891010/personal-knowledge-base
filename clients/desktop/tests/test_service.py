@@ -577,6 +577,42 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(blob.mime_type, "image/png")
             self.assertEqual(blob.content_base64, "iVBORw0KGgo=")
 
+    def test_delete_restore_workspace_attachment_preserves_trash_and_tombstone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            created = service.create_workspace_attachment(
+                "photo.png",
+                b"\x89PNG\r\n\x1a\n",
+                now_ms=1770000032000,
+            )
+            attachment_file_id = created.file.file_id
+
+            deleted = service.delete_workspace_note(attachment_file_id, now_ms=1770000033000)
+
+            self.assertEqual(deleted.file.status, "deleted")
+            self.assertEqual(deleted.file.type, "attachment")
+            self.assertFalse((root / "Attachments" / "photo.png").exists())
+            trash_path = root / ".noteapp" / "trash" / f"1770000033000-{attachment_file_id}.png"
+            self.assertEqual(trash_path.read_bytes(), b"\x89PNG\r\n\x1a\n")
+            tombstone = load_tombstone_ledger(service.workspace.paths.ledger_path)[-1]
+            self.assertEqual(tombstone.file_id, attachment_file_id)
+            self.assertIsNone(tombstone.deleted_revision)
+            trash = service.list_workspace_trash()
+            self.assertEqual(trash.total_count, 1)
+            self.assertEqual(trash.items[0].type, "attachment")
+            self.assertEqual(trash.items[0].path, "Attachments/photo.png")
+
+            restored = service.restore_workspace_trash_item(attachment_file_id, now_ms=1770000034000)
+
+            self.assertEqual(restored.file.status, "active")
+            self.assertEqual(restored.file.type, "attachment")
+            self.assertEqual((root / "Attachments" / "photo.png").read_bytes(), b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(load_tombstone_ledger(service.workspace.paths.ledger_path), [])
+
     def test_import_existing_workspace_files_repairs_local_only_stale_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -850,6 +886,159 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 service.rename_workspace_note("file-live", "Archive/Live.md", now_ms=1770000032000)
 
             self.assertTrue((root / "Notes" / "Live.md").exists())
+
+    def test_move_workspace_note_allows_folder_moves_and_preserves_file_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            source_path = root / "Notes" / "Source.md"
+            source_path.write_text("See [[Live]].\n", encoding="utf-8")
+            document = load_filemap(service.workspace.paths.filemap_path)
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                document.replace_files(
+                    [
+                        *document.files,
+                        FileRecord(
+                            file_id="file-source",
+                            path="Notes/Source.md",
+                            type="note",
+                            status="active",
+                            updated_at=1770000031000,
+                        ),
+                    ],
+                    updated_at=1770000031000,
+                ),
+            )
+
+            moved = service.move_workspace_note(
+                "file-live",
+                "Archive/Meetings/Live.md",
+                now_ms=1770000032500,
+            )
+
+            self.assertEqual(moved.operation, "move")
+            self.assertEqual(moved.file.file_id, "file-live")
+            self.assertEqual(moved.file.path, "Archive/Meetings/Live.md")
+            self.assertFalse((root / "Notes" / "Live.md").exists())
+            self.assertEqual(
+                (root / "Archive" / "Meetings" / "Live.md").read_text(encoding="utf-8"),
+                "# Live note\n",
+            )
+            records = {record.file_id: record for record in load_filemap(service.workspace.paths.filemap_path).files}
+            self.assertEqual(records["file-live"].path, "Archive/Meetings/Live.md")
+            links = service.load_workspace_note_links("file-source")
+            self.assertEqual(links.outgoing[0].target_file_id, "file-live")
+            self.assertEqual(links.outgoing[0].target_path, "Archive/Meetings/Live.md")
+            search = service.search_workspace("Live")
+            self.assertEqual(search.results[0].file_id, "file-live")
+            self.assertEqual(search.results[0].path, "Archive/Meetings/Live.md")
+
+    def test_move_workspace_note_rejects_path_conflicts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            occupied_path = root / "Archive" / "Occupied.md"
+            occupied_path.parent.mkdir(parents=True, exist_ok=True)
+            occupied_path.write_text("# Occupied\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(FileExistsError, "already exists on disk"):
+                service.move_workspace_note("file-live", "Archive/Occupied.md", now_ms=1770000032500)
+
+            self.assertTrue((root / "Notes" / "Live.md").exists())
+
+    def test_submit_workspace_commit_after_move_keeps_manifest_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, api_opener, _, _, encrypted_payload = self._seed_workspace(root)
+
+            service.move_workspace_note(
+                "file-live",
+                "Archive/Meetings/Live.md",
+                now_ms=1770000032500,
+            )
+            result = service.submit_workspace_commit(
+                created_at=1770000032600,
+                file_ids=["file-live"],
+                encrypted_blob_by_file_id={"file-live": encrypted_payload},
+                commit_intent_id="intent-move",
+            )
+
+            commit_body = next(
+                call[2]
+                for call in api_opener.calls
+                if call[0] == "POST" and call[1].endswith("/vaults/vault-001/commits")
+            )
+            self.assertEqual(result.network.commit.status, "committed")
+            self.assertIsInstance(commit_body, dict)
+            manifest = commit_body["manifest"]
+            self.assertEqual(manifest["tombstones"], [])
+            self.assertEqual(
+                [
+                    {
+                        "file_id": item["file_id"],
+                        "path": item["path"],
+                        "type": item["type"],
+                    }
+                    for item in manifest["files"]
+                ],
+                [
+                    {
+                        "file_id": "file-live",
+                        "path": "Archive/Meetings/Live.md",
+                        "type": "note",
+                    }
+                ],
+            )
+            self.assertEqual(commit_body["blob_refs"][0]["file_id"], "file-live")
+            self.assertEqual(load_tombstone_ledger(service.workspace.paths.ledger_path), [])
+            records = {record.file_id: record for record in load_filemap(service.workspace.paths.filemap_path).files}
+            self.assertEqual(records["file-live"].path, "Archive/Meetings/Live.md")
+            self.assertEqual(records["file-live"].last_known_revision, 8)
+            self.assertFalse((root / "Notes" / "Live.md").exists())
+            self.assertEqual(service.detect_local_changes().change_count, 0)
+
+    def test_submit_detected_commit_after_attachment_delete_emits_tombstone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, api_opener, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            created = service.create_workspace_attachment(
+                "photo.png",
+                b"\x89PNG\r\n\x1a\n",
+                now_ms=1770000032000,
+            )
+            attachment_file_id = created.file.file_id
+            service.submit_detected_changes(
+                created_at=1770000032500,
+                commit_intent_id="intent-attachment-create",
+            )
+            service.delete_workspace_note(attachment_file_id, now_ms=1770000033000)
+            self.assertIsNone(load_tombstone_ledger(service.workspace.paths.ledger_path)[-1].deleted_revision)
+
+            result = service.submit_detected_changes(
+                created_at=1770000033500,
+                commit_intent_id="intent-attachment-delete",
+            )
+
+            commit_bodies = [
+                call[2]
+                for call in api_opener.calls
+                if call[0] == "POST" and call[1].endswith("/vaults/vault-001/commits")
+            ]
+            delete_manifest = commit_bodies[-1]["manifest"]
+            self.assertEqual(result.network.commit.status, "committed")
+            self.assertEqual(
+                [item["file_id"] for item in delete_manifest["tombstones"]],
+                [attachment_file_id],
+            )
+            self.assertEqual(delete_manifest["tombstones"][0]["last_known_path"], "Attachments/photo.png")
+            self.assertFalse(any(item["file_id"] == attachment_file_id for item in delete_manifest["files"]))
+            records = {record.file_id: record for record in load_filemap(service.workspace.paths.filemap_path).files}
+            self.assertEqual(records[attachment_file_id].status, "deleted")
+            self.assertEqual(records[attachment_file_id].last_known_revision, 9)
 
     def test_rename_workspace_note_rewrites_wiki_links_to_new_title(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -4889,6 +5078,26 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertIsNone(result)
             self.assertEqual(api_opener.calls, [])
             self.assertEqual(blob_opener.calls, [])
+
+    def test_submit_detected_changes_if_needed_commits_pending_tombstones(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, api_opener, blob_opener, _, _ = self._seed_workspace(Path(tmpdir))
+            service.delete_workspace_note("file-live", now_ms=1770000030150)
+
+            result = service.submit_detected_changes_if_needed(
+                created_at=1770000030200,
+                commit_intent_id="intent-tombstone-001",
+            )
+
+            self.assertIsNotNone(result)
+            self.assertEqual(result.network.commit.status, "committed")
+            self.assertEqual([call[0] for call in api_opener.calls], ["POST"])
+            self.assertEqual(api_opener.calls[0][1], "https://sync.example.com/vaults/vault-001/commits")
+            self.assertEqual(blob_opener.calls, [])
+            self.assertEqual(
+                [item.file_id for item in result.prepared.submission.manifest.tombstones],
+                ["file-live"],
+            )
 
     def test_submit_detected_changes_if_needed_ignores_ai_raw_and_log_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

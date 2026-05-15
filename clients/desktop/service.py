@@ -181,8 +181,8 @@ def _safe_deleted_file_name(file_id: str, deleted_at: int, original_path: str) -
     if not file_id or "/" in file_id or "\\" in file_id or ".." in Path(file_id).parts:
         raise ValueError(f"workspace deleted file_id is not safe: {file_id!r}")
     suffix = PurePosixPath(original_path).suffix
-    if suffix.lower() not in {".md", ".markdown", ".txt"}:
-        suffix = ".md"
+    if not re.fullmatch(r"\.[A-Za-z0-9]{1,16}", suffix):
+        suffix = ".bin"
     return f"{deleted_at}-{file_id}{suffix}"
 
 
@@ -671,6 +671,10 @@ def _normalize_workspace_note_rename_path(current_path: str, new_name: str) -> s
     if not _is_existing_workspace_import_path(normalized):
         raise ValueError(f"workspace note path is not importable: {new_name!r}")
     return normalized
+
+
+def _normalize_workspace_note_move_path(value: str) -> str:
+    return _normalize_workspace_note_path(value)
 
 
 def _normalize_workspace_attachment_name(value: str) -> str:
@@ -2970,6 +2974,78 @@ class DesktopSyncService:
             files=files_snapshot,
         )
 
+    def move_workspace_note(
+        self,
+        file_id: str,
+        target_path: str,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> DesktopWorkspaceFileMutationResult:
+        snapshot = self.load_snapshot()
+        record = next((item for item in snapshot.document.files if item.file_id == file_id), None)
+        if record is None:
+            raise KeyError(f"file_id not found in workspace filemap: {file_id}")
+        if record.status != "active":
+            raise ValueError(f"workspace file is not active: {file_id}")
+        if record.type not in {"note", "attachment"}:
+            raise ValueError(f"workspace file is not movable: {file_id}")
+        normalized_path = _normalize_workspace_note_move_path(target_path)
+        source_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
+        target_file_path = _resolve_workspace_file_path(self.workspace.vault_root, normalized_path)
+        if not source_path.exists() or not source_path.is_file():
+            raise FileNotFoundError(f"workspace file content not found: {file_id}")
+
+        source_resolved = source_path.resolve()
+        target_resolved = target_file_path.resolve()
+        if target_file_path.exists() and target_resolved != source_resolved:
+            raise FileExistsError(f"workspace note path already exists on disk: {normalized_path}")
+
+        updated_at = now_ms if now_ms is not None else _current_time_ms()
+        old_title = _note_title_from_path(record.path)
+        new_title = _note_title_from_path(normalized_path)
+        document = rename_file(
+            snapshot.document,
+            file_id=file_id,
+            new_path=normalized_path,
+            updated_at=updated_at,
+        )
+
+        if target_resolved != source_resolved:
+            target_file_path.parent.mkdir(parents=True, exist_ok=True)
+            source_path.replace(target_file_path)
+            if source_path.exists():
+                raise RuntimeError(f"workspace move left source file in place: {record.path}")
+            if not target_file_path.exists() or not target_file_path.is_file():
+                raise RuntimeError(f"workspace move did not create target file: {normalized_path}")
+
+        write_filemap_atomic(self.workspace.paths.filemap_path, document)
+        if old_title.lower() != new_title.lower():
+            self._rewrite_workspace_note_links_for_rename(
+                old_title=old_title,
+                new_title=new_title,
+                renamed_file_id=file_id,
+            )
+        self._upsert_workspace_search_index_for_record(
+            FileRecord(
+                file_id=file_id,
+                path=normalized_path,
+                type=record.type,
+                status=record.status,
+                updated_at=updated_at,
+            )
+        )
+        self.rebuild_workspace_note_links()
+        files_snapshot = self.list_workspace_files()
+        return DesktopWorkspaceFileMutationResult(
+            schema_version="v1",
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            vault_root=self.workspace.vault_root,
+            operation="move",
+            file=self._workspace_file_entry_for_id(files_snapshot, file_id),
+            files=files_snapshot,
+        )
+
     def delete_workspace_note(
         self,
         file_id: str,
@@ -2982,8 +3058,8 @@ class DesktopSyncService:
             raise KeyError(f"file_id not found in workspace filemap: {file_id}")
         if record.status != "active":
             raise ValueError(f"workspace file is not active: {file_id}")
-        if record.type != "note":
-            raise ValueError(f"workspace file is not a note: {file_id}")
+        if record.type not in {"note", "attachment"}:
+            raise ValueError(f"workspace file is not deletable: {file_id}")
         deleted_at = now_ms if now_ms is not None else _current_time_ms()
         local_delete_sequence = snapshot.state.local_delete_sequence + 1
         document, tombstone = mark_deleted(
@@ -2991,7 +3067,7 @@ class DesktopSyncService:
             file_id=file_id,
             deleted_at=deleted_at,
             local_delete_seq=local_delete_sequence,
-            deleted_revision=record.last_known_revision,
+            deleted_revision=None,
             deleted_by_device=self.config.device_id,
         )
         content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
@@ -5661,7 +5737,8 @@ class DesktopSyncService:
             self.workspace.vault_root,
             snapshot.document,
         )
-        if not change_set.changes:
+        has_pending_tombstones = any(record.deleted_revision is None for record in snapshot.tombstones)
+        if not change_set.changes and not has_pending_tombstones:
             return None
         plan = build_tracked_change_commit_plan(
             self.workspace.vault_root,

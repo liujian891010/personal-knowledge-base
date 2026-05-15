@@ -9,9 +9,11 @@ import {
   Edit3,
   Eye,
   Folder,
+  FolderOpen,
   Info,
   PanelRightClose,
   PanelRightOpen,
+  Paperclip,
   Plus,
   RefreshCw,
   Save,
@@ -23,7 +25,9 @@ import { useWorkspaceFilesController } from '../useWorkspaceFiles';
 import { useWorkspaceFileContentController } from '../useWorkspaceFileContent';
 import { useWorkspaceLinksController } from '../useWorkspaceLinks';
 import { useWorkspaceSearchController } from '../useWorkspaceSearch';
+import { useSyncShellController } from '../useSyncShellSnapshot';
 import type { AiContextDraft } from '../aiContext';
+import type { SyncShellSummary } from '../syncShell';
 import type { WorkspaceFileEntry } from '../workspaceFiles';
 import type { WorkspaceNoteLink } from '../workspaceLinks';
 
@@ -61,6 +65,12 @@ function buildNotePath(directoryPath: string, fileName: string): string {
   return normalizedDirectory ? `${normalizedDirectory}/${normalizedFileName}` : normalizedFileName;
 }
 
+function buildWorkspaceFilePath(directoryPath: string, fileName: string): string {
+  const normalizedDirectory = directoryPath.trim().replace(/^\/+|\/+$/g, '');
+  const normalizedFileName = fileName.trim().replace(/^\/+|\/+$/g, '');
+  return normalizedDirectory ? `${normalizedDirectory}/${normalizedFileName}` : normalizedFileName;
+}
+
 function fileBelongsToFolder(path: string, folderPath: string): boolean {
   const fileFolder = folderPathForFile(path);
   if (!folderPath) {
@@ -71,6 +81,10 @@ function fileBelongsToFolder(path: string, folderPath: string): boolean {
 
 function isSystemAiPath(path: string): boolean {
   return path === '.ai' || path.startsWith('.ai/');
+}
+
+function isAttachmentPath(path: string): boolean {
+  return path === 'Attachments' || path.startsWith('Attachments/');
 }
 
 function isEditableWorkspaceFile(file: WorkspaceFileEntry | null): boolean {
@@ -88,10 +102,115 @@ function isVisibleMarkdownFile(file: WorkspaceFileEntry): boolean {
   return file.type === 'note' && file.status !== 'deleted' && !isSystemAiPath(file.path);
 }
 
+function isVisibleWorkspaceFile(file: WorkspaceFileEntry): boolean {
+  return (
+    (file.type === 'note' || file.type === 'attachment')
+    && file.status !== 'deleted'
+    && !isSystemAiPath(file.path)
+  );
+}
+
 function notePathFromWikiLink(linkText: string): string {
   const target = linkText.split('|', 1)[0].split('#', 1)[0].trim();
   const safeName = target.replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-').replace(/\s+/g, ' ').trim();
   return `Notes/${safeName || 'Untitled'}.md`;
+}
+
+function relativePathBetweenFiles(fromFilePath: string, targetPath: string): string {
+  const fromParts = folderPathForFile(fromFilePath).split('/').filter(Boolean);
+  const targetParts = targetPath.split(/[\\/]/).filter(Boolean);
+  let commonLength = 0;
+  while (
+    commonLength < fromParts.length
+    && commonLength < targetParts.length
+    && fromParts[commonLength] === targetParts[commonLength]
+  ) {
+    commonLength += 1;
+  }
+  const upwardParts = Array.from({ length: fromParts.length - commonLength }, () => '..');
+  const relativeParts = [...upwardParts, ...targetParts.slice(commonLength)];
+  return relativeParts.join('/') || fileName(targetPath);
+}
+
+function escapeMarkdownLabel(value: string): string {
+  return value.replace(/([\\[\]])/g, '\\$1');
+}
+
+function isImageAttachment(path: string): boolean {
+  return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(path);
+}
+
+function markdownAttachmentLink(notePath: string, attachment: WorkspaceFileEntry): string {
+  const label = escapeMarkdownLabel(fileName(attachment.path));
+  const relativePath = relativePathBetweenFiles(notePath, attachment.path);
+  const destination = `<${relativePath}>`;
+  return isImageAttachment(attachment.path)
+    ? `![${label}](${destination})`
+    : `[${label}](${destination})`;
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => {
+      const result = reader.result;
+      if (typeof result !== 'string') {
+        reject(new Error('附件读取结果不可用'));
+        return;
+      }
+      resolve(result.split(',', 2)[1] ?? '');
+    });
+    reader.addEventListener('error', () => reject(reader.error ?? new Error('附件读取失败')));
+    reader.readAsDataURL(file);
+  });
+}
+
+function isWorkspaceFileBlobPreview(payload: unknown): payload is WorkspaceFileBlobPreview {
+  if (typeof payload !== 'object' || payload === null) {
+    return false;
+  }
+  const record = payload as Record<string, unknown>;
+  return (
+    typeof record.file_id === 'string'
+    && typeof record.path === 'string'
+    && typeof record.type === 'string'
+    && typeof record.size_bytes === 'number'
+    && typeof record.content_base64 === 'string'
+  );
+}
+
+async function fetchWorkspaceFileBlobPreview(fileId: string): Promise<WorkspaceFileBlobPreview> {
+  const response = await fetch(
+    `${syncBridgeUrl}/api/workspace/files/${encodeURIComponent(fileId)}/blob`,
+    { cache: 'no-store' },
+  );
+  if (!response.ok) {
+    let message = `附件预览接口返回 ${response.status}`;
+    try {
+      const payload: unknown = await response.json();
+      if (typeof payload === 'object' && payload !== null && 'message' in payload && typeof payload.message === 'string') {
+        message = payload.message;
+      }
+    } catch {
+      // Keep the HTTP status fallback.
+    }
+    throw new Error(message);
+  }
+  const payload: unknown = await response.json();
+  if (!isWorkspaceFileBlobPreview(payload)) {
+    throw new Error('附件预览响应格式不正确');
+  }
+  return payload;
+}
+
+function attachmentPreviewKind(mimeType: string | null | undefined): 'image' | 'pdf' | 'other' {
+  if (mimeType?.startsWith('image/')) {
+    return 'image';
+  }
+  if (mimeType === 'application/pdf') {
+    return 'pdf';
+  }
+  return 'other';
 }
 
 function folderAncestors(folderPath: string): string[] {
@@ -137,7 +256,17 @@ type MarkdownEditorMode = 'edit' | 'preview' | 'split';
 type FileDialogState =
   | { kind: 'create'; path: string; directoryPath: string; fileName: string }
   | { kind: 'rename'; path: string }
+  | { kind: 'move'; directoryPath: string }
   | { kind: 'delete'; path: string };
+
+interface WorkspaceFileBlobPreview {
+  file_id: string;
+  path: string;
+  type: string;
+  size_bytes: number;
+  content_base64: string;
+  mime_type?: string | null;
+}
 function isRowVisible(row: ExplorerRow, collapsedFolders: Set<string>): boolean {
   if (row.kind === 'folder') {
     if (row.path === '') {
@@ -449,19 +578,15 @@ function MarkdownPreview({
 
 function buildExplorerRows(files: WorkspaceFileEntry[], rootName: string): ExplorerRow[] {
   const folderPaths = new Set<string>(['']);
-  const recursiveDocumentCounts = new Map<string, number>([['', 0]]);
+  const recursiveItemCounts = new Map<string, number>([['', 0]]);
   for (const file of files) {
     const parts = file.path.split(/[\\/]/).filter(Boolean);
     const folderParts = parts.slice(0, -1);
-    if (isVisibleMarkdownFile(file)) {
-      recursiveDocumentCounts.set('', (recursiveDocumentCounts.get('') ?? 0) + 1);
-    }
+    recursiveItemCounts.set('', (recursiveItemCounts.get('') ?? 0) + 1);
     for (let index = 0; index < folderParts.length; index += 1) {
       const folderPath = folderParts.slice(0, index + 1).join('/');
       folderPaths.add(folderPath);
-      if (isVisibleMarkdownFile(file)) {
-        recursiveDocumentCounts.set(folderPath, (recursiveDocumentCounts.get(folderPath) ?? 0) + 1);
-      }
+      recursiveItemCounts.set(folderPath, (recursiveItemCounts.get(folderPath) ?? 0) + 1);
     }
   }
 
@@ -487,7 +612,7 @@ function buildExplorerRows(files: WorkspaceFileEntry[], rootName: string): Explo
       name: folderPath ? fileName(folderPath) : rootName,
       path: folderPath,
       depth,
-      count: recursiveDocumentCounts.get(folderPath) ?? 0,
+      count: recursiveItemCounts.get(folderPath) ?? 0,
     });
     for (const file of folderFiles) {
       rows.push({
@@ -556,6 +681,9 @@ function fileTypeLabel(type: string): string {
   if (type === 'note') {
     return '笔记';
   }
+  if (type === 'attachment') {
+    return '附件';
+  }
   return type;
 }
 
@@ -569,18 +697,62 @@ function statusClasses(file: WorkspaceFileEntry): string {
   return 'text-emerald-300 bg-emerald-400/10 border-emerald-400/30';
 }
 
+function syncActionLabel(actionId: string, fallback: string): string {
+  if (actionId === 'submit-detected-commit') {
+    return '提交本地变更';
+  }
+  if (actionId === 'pull') {
+    return '拉取远端基线';
+  }
+  if (actionId === 'recover' || actionId === 'recover-pull-apply') {
+    return '恢复同步流程';
+  }
+  if (actionId === 'list-conflicts') {
+    return '打开冲突页';
+  }
+  return fallback;
+}
+
+function syncPromptTitle(summary: SyncShellSummary, syncError: string | null, syncSource: string): string {
+  if (syncError && syncSource !== 'bridge') {
+    return '同步状态暂不可用';
+  }
+  if (summary.conflictBadgeCount > 0) {
+    return `${summary.conflictBadgeCount} 个冲突待处理`;
+  }
+  if (summary.changeBadgeCount > 0) {
+    return `${summary.changeBadgeCount} 个本地变更待同步`;
+  }
+  return summary.headline;
+}
+
+function syncPromptDetail(summary: SyncShellSummary, syncError: string | null, syncSource: string): string {
+  if (syncError && syncSource !== 'bridge') {
+    return syncError;
+  }
+  if (summary.conflictBadgeCount > 0) {
+    return '同步前需要先检查或清理本地冲突副本。';
+  }
+  if (summary.changeBadgeCount > 0) {
+    return '最近的保存、移动或删除已经写入本地，点击即可提交到云端同步流程。';
+  }
+  return summary.detail;
+}
+
 export default function ExplorerView({
   initialSelectedPath,
   initialContextFileIds,
   onInitialSelectedPathConsumed,
   onInitialContextFileIdsConsumed,
   onOpenAiContext,
+  onOpenConflicts,
 }: {
   initialSelectedPath?: string | null;
   initialContextFileIds?: string[] | null;
   onInitialSelectedPathConsumed?: () => void;
   onInitialContextFileIdsConsumed?: () => void;
   onOpenAiContext: (context: AiContextDraft) => void;
+  onOpenConflicts?: () => void;
 }) {
   const {
     summary,
@@ -590,7 +762,9 @@ export default function ExplorerView({
     isRefreshing,
     refresh,
     createNote,
+    createAttachment,
     renameNote,
+    moveNote,
     deleteNote,
   } = useWorkspaceFilesController();
   const {
@@ -622,8 +796,17 @@ export default function ExplorerView({
     loadLinks,
     clearLinks,
   } = useWorkspaceLinksController();
+  const {
+    summary: syncSummary,
+    source: syncSource,
+    lastError: syncError,
+    isRefreshing: isSyncRefreshing,
+    isExecuting: isSyncExecuting,
+    refresh: refreshSync,
+    executePrimaryAction: executePrimarySyncAction,
+  } = useSyncShellController(source === 'bridge');
   const visibleFiles = useMemo(
-    () => (source === 'bridge' ? files.filter(isVisibleMarkdownFile) : []),
+    () => (source === 'bridge' ? files.filter(isVisibleWorkspaceFile) : []),
     [files, source],
   );
   const visibleMissingCount = useMemo(
@@ -643,6 +826,7 @@ export default function ExplorerView({
     () => {
       const paths = explorerRows
         .filter((row): row is Extract<ExplorerRow, { kind: 'folder' }> => row.kind === 'folder')
+        .filter((row) => !isAttachmentPath(row.path))
         .map((row) => row.path);
       return paths.length > 0 ? paths : [''];
     },
@@ -678,6 +862,9 @@ export default function ExplorerView({
   const selectedFileIsEditable = isEditableWorkspaceFile(selectedFile);
   const selectedFileExistsOnDisk = selectedFile?.exists_on_disk ?? false;
   const selectedFileStatus = selectedFile?.status ?? '';
+  const [attachmentPreview, setAttachmentPreview] = useState<WorkspaceFileBlobPreview | null>(null);
+  const [attachmentPreviewError, setAttachmentPreviewError] = useState<string | null>(null);
+  const [isAttachmentPreviewLoading, setIsAttachmentPreviewLoading] = useState(false);
   const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(false);
   const [draftText, setDraftText] = useState('');
   const [editorMode, setEditorMode] = useState<MarkdownEditorMode>('preview');
@@ -690,6 +877,8 @@ export default function ExplorerView({
   const [fileMutationError, setFileMutationError] = useState<string | null>(null);
   const [fileDialog, setFileDialog] = useState<FileDialogState | null>(null);
   const [selectedContextFileIds, setSelectedContextFileIds] = useState<Set<string>>(() => new Set());
+  const refreshSyncRef = useRef(refreshSync);
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const hydratedContentFileIdRef = useRef<string | null>(null);
   const hydratedContentTextRef = useRef('');
   const wikiLinkByText = useMemo(() => {
@@ -699,10 +888,57 @@ export default function ExplorerView({
     }
     return result;
   }, [selectedLinks]);
+  const syncPromptVisible = source === 'bridge' && (
+    (syncSource === 'bridge' && (syncSummary.changeBadgeCount > 0 || syncSummary.conflictBadgeCount > 0))
+    || Boolean(syncError)
+  );
+  const attachmentPreviewDataUrl = useMemo(() => {
+    if (!attachmentPreview) {
+      return null;
+    }
+    const mimeType = attachmentPreview.mime_type || 'application/octet-stream';
+    return `data:${mimeType};base64,${attachmentPreview.content_base64}`;
+  }, [attachmentPreview]);
+
+  useEffect(() => {
+    refreshSyncRef.current = refreshSync;
+  }, [refreshSync]);
 
   const openWorkspaceFile = useCallback((fileId: string) => {
     setSelectedFileId(fileId);
   }, []);
+
+  useEffect(() => {
+    if (!selectedFile || selectedFile.type !== 'attachment' || selectedFile.status !== 'active') {
+      setAttachmentPreview(null);
+      setAttachmentPreviewError(null);
+      setIsAttachmentPreviewLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setIsAttachmentPreviewLoading(true);
+    setAttachmentPreviewError(null);
+    fetchWorkspaceFileBlobPreview(selectedFile.file_id)
+      .then((preview) => {
+        if (!cancelled) {
+          setAttachmentPreview(preview);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setAttachmentPreview(null);
+          setAttachmentPreviewError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsAttachmentPreviewLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFile]);
 
   useEffect(() => {
     if (!initialContextFileIds) {
@@ -883,6 +1119,7 @@ export default function ExplorerView({
       void saveContent(fileId, nextText)
         .then(refresh)
         .then(() => loadLinks(fileId))
+        .then(refreshSyncStatus)
         .then(() => {
           setAutoSaveStatus('saved');
         })
@@ -917,10 +1154,37 @@ export default function ExplorerView({
       await saveContent(selectedFile.file_id, draftText);
       await refresh();
       await loadLinks(selectedFile.file_id);
+      await refreshSyncStatus();
       setAutoSaveStatus('saved');
     } catch {
       // 错误信息由 hook 写入页面状态。
       setAutoSaveStatus('error');
+    }
+  }
+
+  async function refreshSyncStatus() {
+    try {
+      await refreshSyncRef.current();
+    } catch {
+      // Sync state is surfaced separately by the sync panel hook.
+    }
+  }
+
+  async function handleSyncPromptAction() {
+    if (syncSource !== 'bridge') {
+      await refreshSyncStatus();
+      return;
+    }
+    if (syncSummary.primaryActionId === 'list-conflicts' && onOpenConflicts) {
+      onOpenConflicts();
+      return;
+    }
+    const fileId = selectedFileId;
+    await executePrimarySyncAction();
+    await refresh();
+    if (fileId) {
+      await loadContent(fileId);
+      await loadLinks(fileId);
     }
   }
 
@@ -932,8 +1196,40 @@ export default function ExplorerView({
       const path = notePathFromWikiLink(linkText);
       const created = await createNote(path, `# ${fileName(path).replace(/\.(md|markdown)$/i, '')}\n`);
       await loadLinks(selectedFile.file_id);
+      await refreshSyncStatus();
       openWorkspaceFile(created.file_id);
       setEditorMode('edit');
+      setFileMutationError(null);
+    } catch (error) {
+      setFileMutationError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function insertTextIntoDraft(text: string) {
+    setDraftText((current) => {
+      const needsLeadingBreak = current.length > 0 && !current.endsWith('\n');
+      const prefix = needsLeadingBreak ? '\n\n' : '';
+      const suffix = current.endsWith('\n') ? '\n' : '\n\n';
+      return `${current}${prefix}${text}${suffix}`;
+    });
+    setEditorMode('edit');
+  }
+
+  async function handleAttachmentInputChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    event.target.value = '';
+    if (!file) {
+      return;
+    }
+    try {
+      const contentBase64 = await readFileAsBase64(file);
+      const created = await createAttachment(file.name, contentBase64);
+      if (selectedFile?.type === 'note' && canEditContent) {
+        insertTextIntoDraft(markdownAttachmentLink(selectedFile.path, created));
+      } else {
+        openWorkspaceFile(created.file_id);
+      }
+      await refreshSyncStatus();
       setFileMutationError(null);
     } catch (error) {
       setFileMutationError(error instanceof Error ? error.message : String(error));
@@ -961,6 +1257,16 @@ export default function ExplorerView({
     }
   }
 
+  function handleMoveNote() {
+    if (selectedFile) {
+      const currentDirectory = folderPathForFile(selectedFile.path);
+      setFileDialog({
+        kind: 'move',
+        directoryPath: availableDirectoryPaths.includes(currentDirectory) ? currentDirectory : '',
+      });
+    }
+  }
+
   function handleDeleteNote() {
     if (selectedFile) {
       setFileDialog({ kind: 'delete', path: selectedFile.path });
@@ -971,7 +1277,9 @@ export default function ExplorerView({
     if (!fileDialog) {
       return;
     }
-    const path = fileDialog.path.trim();
+    const path = fileDialog.kind === 'move' && selectedFile
+      ? buildWorkspaceFilePath(fileDialog.directoryPath, fileName(selectedFile.path))
+      : 'path' in fileDialog ? fileDialog.path.trim() : '';
     if (fileDialog.kind !== 'delete' && !path) {
       setFileMutationError('文档路径不能为空。');
       return;
@@ -988,12 +1296,20 @@ export default function ExplorerView({
         }
         const renamed = await renameNote(selectedFile.file_id, path);
         openWorkspaceFile(renamed.file_id);
+      } else if (fileDialog.kind === 'move') {
+        if (!selectedFile || path === selectedFile.path) {
+          setFileDialog(null);
+          return;
+        }
+        const moved = await moveNote(selectedFile.file_id, path);
+        openWorkspaceFile(moved.file_id);
       } else if (selectedFile) {
         await deleteNote(selectedFile.file_id);
         clearContent();
         clearLinks();
         setSelectedFileId(null);
       }
+      await refreshSyncStatus();
       setFileMutationError(null);
       setFileDialog(null);
     } catch (error) {
@@ -1041,11 +1357,17 @@ export default function ExplorerView({
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">工作区</span>
             <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-slate-500">
               <span>{sourceLabel(source)}</span>
-              <span>{visibleFiles.length} 篇文档</span>
+              <span>{visibleFiles.length} 个条目</span>
               {visibleMissingCount > 0 && <span className="text-[#e94560]">{visibleMissingCount} 个缺失</span>}
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <input
+              ref={attachmentInputRef}
+              type="file"
+              className="hidden"
+              onChange={(event) => void handleAttachmentInputChange(event)}
+            />
             <button
               onClick={refresh}
               disabled={isRefreshing}
@@ -1060,6 +1382,13 @@ export default function ExplorerView({
               className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white transition-colors"
             >
               <Plus size={15} />
+            </button>
+            <button
+              onClick={() => attachmentInputRef.current?.click()}
+              title="导入附件"
+              className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#121316] border border-[#0f3460] text-slate-400 hover:text-white transition-colors"
+            >
+              <Paperclip size={15} />
             </button>
           </div>
         </div>
@@ -1139,7 +1468,7 @@ export default function ExplorerView({
                     )}
                     <Folder size={16} className="text-[#a9c8fc]" />
                     <span className="text-[13px] font-semibold flex-1 font-sans truncate">{row.name}</span>
-                    <span className="font-mono text-[10px] text-slate-500" title={`${row.count} 篇文档`}>{row.count}</span>
+                    <span className="font-mono text-[10px] text-slate-500" title={`${row.count} 个条目`}>{row.count}</span>
                   </button>
                   <button
                     type="button"
@@ -1191,7 +1520,9 @@ export default function ExplorerView({
                       className="flex-shrink-0"
                       style={{ width: '0px' }}
                     />
-                    <MarkdownFileIcon size={14} tone={row.file.exists_on_disk ? 'normal' : 'danger'} />
+                    {row.file.type === 'attachment'
+                      ? <Paperclip size={14} className={row.file.exists_on_disk ? 'flex-shrink-0 text-[#ffb782]' : 'flex-shrink-0 text-[#e94560]'} />
+                      : <MarkdownFileIcon size={14} tone={row.file.exists_on_disk ? 'normal' : 'danger'} />}
                     <span className="truncate">{fileName(row.file.path)}</span>
                   </button>
                 </div>
@@ -1205,7 +1536,9 @@ export default function ExplorerView({
         <header className="bg-[#16213e] border-b border-[#0f3460] h-14 flex items-center justify-between px-4 flex-shrink-0 z-10 shadow-sm">
           <div className="flex items-center gap-4 min-w-0">
             <div className="flex items-center gap-2 text-slate-300 min-w-0">
-              <MarkdownFileIcon size={18} />
+              {selectedFile?.type === 'attachment'
+                ? <Paperclip size={18} className="flex-shrink-0 text-[#ffb782]" />
+                : <MarkdownFileIcon size={18} />}
               <span className="text-[13px] font-semibold truncate">
                 {selectedFile ? fileName(selectedFile.path) : '工作区'}
               </span>
@@ -1232,6 +1565,45 @@ export default function ExplorerView({
           {linksError && (
             <div className="mb-4 rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782] line-clamp-3">
               {linksError}
+            </div>
+          )}
+          {syncPromptVisible && (
+            <div className={`mb-4 flex flex-col gap-3 rounded-xl border px-4 py-3 md:flex-row md:items-center md:justify-between ${
+              syncSummary.conflictBadgeCount > 0 || (syncError && syncSource !== 'bridge')
+                ? 'border-[#ffb782]/30 bg-[#ffb782]/10'
+                : 'border-[#2a5ea3]/40 bg-[#0f3460]/20'
+            }`}
+            >
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="mt-0.5 rounded-full border border-[#0f3460] bg-[#121316] p-1.5 text-[#a9c8fc]">
+                  <RefreshCw
+                    size={14}
+                    className={isSyncRefreshing || isSyncExecuting ? 'animate-spin' : ''}
+                  />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[13px] font-bold text-[#e3e2e6]">
+                    {syncPromptTitle(syncSummary, syncError, syncSource)}
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-[12px] leading-relaxed text-slate-400">
+                    {syncPromptDetail(syncSummary, syncError, syncSource)}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleSyncPromptAction()}
+                disabled={
+                  isSyncRefreshing
+                  || isSyncExecuting
+                  || (syncSource === 'bridge' && !syncSummary.primaryActionEnabled)
+                }
+                className="inline-flex h-8 flex-shrink-0 items-center justify-center rounded border border-[#2a5ea3] bg-[#121316] px-3 text-[12px] font-semibold text-[#a9c8fc] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {syncSource === 'bridge'
+                  ? syncActionLabel(syncSummary.primaryActionId, syncSummary.primaryActionLabel)
+                  : '重试同步状态'}
+              </button>
             </div>
           )}
 
@@ -1332,7 +1704,7 @@ export default function ExplorerView({
                     )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    {selectedFileIsEditable && (
+                  {selectedFileIsEditable && (
                     <div className="flex items-center rounded border border-[#0f3460] bg-[#121316] p-0.5">
                       <button
                         onClick={() => setEditorMode('edit')}
@@ -1367,6 +1739,14 @@ export default function ExplorerView({
                     </div>
                     )}
                     <button
+                      onClick={() => attachmentInputRef.current?.click()}
+                      title="导入附件并插入当前文档"
+                      className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white transition-colors"
+                    >
+                      <Paperclip size={14} />
+                      <span>附件</span>
+                    </button>
+                    <button
                       onClick={() => setIsInfoPanelOpen((value) => !value)}
                       title={isInfoPanelOpen ? '收起详情' : '显示详情'}
                       className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white transition-colors"
@@ -1384,9 +1764,22 @@ export default function ExplorerView({
                       <span>重命名</span>
                     </button>
                     <button
-                      onClick={handleDeleteNote}
+                      onClick={handleMoveNote}
                       disabled={!selectedFile || selectedFile.type !== 'note' || selectedFile.status !== 'active'}
-                      title="删除文档"
+                      title="移动文档"
+                      className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                    >
+                      <FolderOpen size={14} />
+                      <span>移动</span>
+                    </button>
+                    <button
+                      onClick={handleDeleteNote}
+                      disabled={
+                        !selectedFile
+                        || !['note', 'attachment'].includes(selectedFile.type)
+                        || selectedFile.status !== 'active'
+                      }
+                      title="移入回收站"
                       className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#e94560]/40 bg-[#e94560]/10 px-3 text-[12px] font-semibold text-[#ffb3c0] hover:text-white disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
                     >
                       <Trash2 size={14} />
@@ -1466,6 +1859,71 @@ export default function ExplorerView({
                           wikiLinkByText={wikiLinkByText}
                           onOpenWikiLink={openWorkspaceFile}
                         />
+                      </div>
+                    </div>
+                  )}
+
+                  {!selectedFileIsEditable && selectedFile.type === 'attachment' && (
+                    <div className="flex h-full min-h-0 flex-col">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#0f3460] px-5 py-3">
+                        <div className="min-w-0">
+                          <h3 className="truncate text-[15px] font-bold text-[#e3e2e6]">附件预览</h3>
+                          <p className="mt-1 truncate font-mono text-[11px] text-slate-500">{selectedFile.path}</p>
+                        </div>
+                        {attachmentPreviewDataUrl && (
+                          <a
+                            href={attachmentPreviewDataUrl}
+                            download={fileName(selectedFile.path)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex h-8 items-center justify-center rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-[#a9c8fc] hover:text-white"
+                          >
+                            打开/下载
+                          </a>
+                        )}
+                      </div>
+                      <div className="min-h-0 flex-1 overflow-auto bg-[#0d0e11] p-5">
+                        {isAttachmentPreviewLoading && (
+                          <div className="flex h-full items-center justify-center text-[13px] text-slate-400">
+                            正在加载附件预览...
+                          </div>
+                        )}
+                        {!isAttachmentPreviewLoading && attachmentPreviewError && (
+                          <div className="rounded border border-[#ffb782]/30 bg-[#ffb782]/10 p-4 text-[13px] text-[#ffb782]">
+                            {attachmentPreviewError}
+                          </div>
+                        )}
+                        {!isAttachmentPreviewLoading && !attachmentPreviewError && attachmentPreview && attachmentPreviewDataUrl && (
+                          <>
+                            {attachmentPreviewKind(attachmentPreview.mime_type) === 'image' && (
+                              <div className="flex min-h-full items-center justify-center">
+                                <img
+                                  src={attachmentPreviewDataUrl}
+                                  alt={fileName(selectedFile.path)}
+                                  className="max-h-full max-w-full rounded-lg border border-[#0f3460] bg-[#121316] object-contain"
+                                />
+                              </div>
+                            )}
+                            {attachmentPreviewKind(attachmentPreview.mime_type) === 'pdf' && (
+                              <iframe
+                                src={attachmentPreviewDataUrl}
+                                title={fileName(selectedFile.path)}
+                                className="h-full min-h-[520px] w-full rounded-lg border border-[#0f3460] bg-white"
+                              />
+                            )}
+                            {attachmentPreviewKind(attachmentPreview.mime_type) === 'other' && (
+                              <div className="flex min-h-full flex-col items-center justify-center text-center">
+                                <div className="rounded-2xl border border-[#ffb782]/30 bg-[#ffb782]/10 p-4 text-[#ffb782]">
+                                  <Paperclip size={34} />
+                                </div>
+                                <h3 className="mt-4 text-lg font-bold text-[#e3e2e6]">此附件暂不支持内嵌预览</h3>
+                                <p className="mt-2 max-w-md text-[13px] leading-relaxed text-slate-400">
+                                  类型：{attachmentPreview.mime_type ?? '未知'}，大小：{formatBytes(attachmentPreview.size_bytes)}。请使用“打开/下载”交给系统应用处理。
+                                </p>
+                              </div>
+                            )}
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1655,11 +2113,13 @@ export default function ExplorerView({
               <h3 className="text-[16px] font-bold text-[#e3e2e6]">
                 {fileDialog.kind === 'create' && '新建文档'}
                 {fileDialog.kind === 'rename' && '重命名文档'}
+                {fileDialog.kind === 'move' && '移动文档'}
                 {fileDialog.kind === 'delete' && '移入回收站'}
               </h3>
               <p className="mt-2 text-[12px] leading-relaxed text-slate-400">
                 {fileDialog.kind === 'create' && '输入相对工作区路径；未带扩展名时会自动使用 .md。'}
                 {fileDialog.kind === 'rename' && '只修改当前目录下的文件名，不会移动到其他文件夹。'}
+                {fileDialog.kind === 'move' && '选择目标目录，文件名保持不变；file_id 会保持不变。'}
                 {fileDialog.kind === 'delete' && `将移出工作区并保留到 .noteapp/trash：${fileName(fileDialog.path)}`}
               </p>
             </div>
@@ -1708,7 +2168,7 @@ export default function ExplorerView({
             {fileDialog.kind === 'rename' && (
               <label className="mb-4 block">
                 <span className="mb-2 block text-[12px] font-semibold text-slate-300">
-                  {fileDialog.kind === 'rename' ? '文件名' : '文档路径'}
+                  文件名
                 </span>
                 <input
                   autoFocus
@@ -1718,6 +2178,31 @@ export default function ExplorerView({
                   placeholder="Untitled.md"
                 />
               </label>
+            )}
+            {fileDialog.kind === 'move' && selectedFile && (
+              <div className="mb-4 space-y-3">
+                <label className="block">
+                  <span className="mb-2 block text-[12px] font-semibold text-slate-300">目标目录</span>
+                  <select
+                    autoFocus
+                    value={fileDialog.directoryPath}
+                    onChange={(event) => setFileDialog({ ...fileDialog, directoryPath: event.target.value })}
+                    className="w-full rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[13px] text-[#e3e2e6] outline-none focus:border-[#a9c8fc]"
+                  >
+                    {availableDirectoryPaths.map((directoryPath) => (
+                      <option key={directoryPath || '__root__'} value={directoryPath}>
+                        {directoryPath || '/'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[12px] text-slate-400">
+                  移动后路径：
+                  <code className="ml-1 font-mono text-[#e3e2e6]">
+                    {buildWorkspaceFilePath(fileDialog.directoryPath, fileName(selectedFile.path))}
+                  </code>
+                </div>
+              </div>
             )}
             {fileMutationError && (
               <div className="mb-4 rounded border border-[#ffb782]/30 bg-[#ffb782]/10 px-3 py-2 text-[12px] text-[#ffb782]">
@@ -1740,7 +2225,7 @@ export default function ExplorerView({
                     : 'bg-[#0f3460] hover:bg-[#15508f]'
                 }`}
               >
-                {fileDialog.kind === 'delete' ? '移入回收站' : '确认'}
+                {fileDialog.kind === 'delete' ? '移入回收站' : fileDialog.kind === 'move' ? '移动' : '确认'}
               </button>
             </div>
           </form>

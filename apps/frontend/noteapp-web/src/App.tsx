@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Bot,
-  ChevronsUpDown,
   FolderOpen,
   KeyRound,
   Loader2,
@@ -22,7 +21,7 @@ import AiChatView from './views/AiChatView';
 import type { AiContextDraft } from './aiContext';
 import { invalidateLocalSettingsCache } from './useLocalSettingsSnapshot';
 import { invalidateWorkspaceFilesCache } from './useWorkspaceFiles';
-import { useWorkspaceRegistryController } from './useWorkspaceRegistry';
+import { useWorkspaceRegistryController, type RegisteredWorkspace } from './useWorkspaceRegistry';
 
 type AppView = 'explorer' | 'conflicts' | 'trash' | 'ai-chat' | 'ai-wiki' | 'settings' | 'sync';
 
@@ -247,7 +246,7 @@ function Sidebar({ currentView, setView }: { currentView: AppView, setView: (vie
 
 function MobileNav({ currentView, setView }: { currentView: AppView, setView: (view: AppView) => void }) {
   return (
-    <nav className="grid h-16 flex-shrink-0 grid-cols-7 border-t border-[#0f3460] bg-[#16213e] md:hidden">
+    <nav className="grid h-16 flex-shrink-0 grid-cols-4 border-t border-[#0f3460] bg-[#16213e] md:hidden">
       {navItems.map((item) => (
         <button
           key={item.id}
@@ -266,14 +265,12 @@ function MobileNav({ currentView, setView }: { currentView: AppView, setView: (v
 
 function WorkspaceGate({
   isLoading,
-  isMutating,
   lastError,
-  onSelectWorkspaceFolder,
+  onOpenSettings,
 }: {
   isLoading: boolean;
-  isMutating: boolean;
   lastError: string | null;
-  onSelectWorkspaceFolder: () => void;
+  onOpenSettings: () => void;
 }) {
   return (
     <div className="flex h-full items-center justify-center p-6">
@@ -281,9 +278,9 @@ function WorkspaceGate({
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[#0f3460] bg-[#121316] text-[#a9c8fc]">
           <FolderOpen size={22} />
         </div>
-        <h2 className="mt-5 text-2xl font-black text-[#e3e2e6]">请选择工作区</h2>
+        <h2 className="mt-5 text-2xl font-black text-[#e3e2e6]">未配置工作区</h2>
         <p className="mt-3 text-[13px] leading-6 text-slate-400">
-          当前没有活动工作区。添加一个 Markdown 工作区后，笔记库、搜索、回收站和 AI 文档会自动切换到该工作区。
+          工作区添加、切换和移除已经统一放到设置页的通用项。请到设置里完成工作区配置。
         </p>
         {lastError && (
           <p className="mt-4 rounded-xl border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] leading-5 text-[#ffb782]">
@@ -292,12 +289,12 @@ function WorkspaceGate({
         )}
         <button
           type="button"
-          disabled={isLoading || isMutating}
-          onClick={onSelectWorkspaceFolder}
+          disabled={isLoading}
+          onClick={onOpenSettings}
           className="mt-6 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#0f3460] bg-[#0f3460]/40 text-[13px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {(isLoading || isMutating) && <Loader2 size={16} className="animate-spin" />}
-          选择工作区文件夹
+          {isLoading && <Loader2 size={16} className="animate-spin" />}
+          <span className="text-[13px]">前往设置</span>
         </button>
       </div>
     </div>
@@ -307,56 +304,37 @@ function WorkspaceGate({
 function TopBar({
   userInfo,
   onLogout,
+  activeWorkspace,
+  workspaces,
+  isWorkspaceLoading,
+  isWorkspaceMutating,
+  isWorkspaceSwitching,
+  workspaceError,
+  onSelectWorkspaceFolder,
+  onActivateWorkspace,
+  onDeleteWorkspace,
 }: {
   userInfo: unknown;
   onLogout: () => void;
+  activeWorkspace: RegisteredWorkspace | null;
+  workspaces: RegisteredWorkspace[];
+  isWorkspaceLoading: boolean;
+  isWorkspaceMutating: boolean;
+  isWorkspaceSwitching: boolean;
+  workspaceError: string | null;
+  onSelectWorkspaceFolder: () => void | Promise<void>;
+  onActivateWorkspace: (workspaceId: string) => void | Promise<void>;
+  onDeleteWorkspace: (workspaceId: string) => void | Promise<void>;
 }) {
   const userName = userNameFromUserInfo(userInfo);
-  const activeWorkspace = null;
-  const isWorkspaceLoading = false;
-  const isWorkspaceDialogOpen = false;
-  const workspaceError: string | null = null;
-  const workspaces: Array<{
-    id: string;
-    name: string;
-    vault_root: string;
-    initialized: boolean;
-    exists: boolean;
-    is_active: boolean;
-  }> = [];
-  const isWorkspaceMutating = false;
-  const isWorkspaceSwitching = false;
-  const workspaceToDelete = null as null | { id: string; name: string; vault_root: string };
-  const workspaceToActivate = null as null | { id: string; name: string; vault_root: string };
-  const setIsWorkspaceDialogOpen = (_value: boolean) => {};
-  const setWorkspaceToDelete = (_workspace: typeof workspaceToDelete) => {};
-  const setWorkspaceToActivate = (_workspace: typeof workspaceToActivate) => {};
-  const onSelectWorkspaceFolder = () => {};
-  const onDeleteWorkspace = (_workspaceId: string) => {};
-  const onActivateWorkspace = async (_workspaceId: string) => {};
+  const [isWorkspaceDialogOpen, setIsWorkspaceDialogOpen] = useState(false);
+  const [workspaceToDelete, setWorkspaceToDelete] = useState<RegisteredWorkspace | null>(null);
+  const [workspaceToActivate, setWorkspaceToActivate] = useState<RegisteredWorkspace | null>(null);
 
   return (
     <>
     <header className="sticky top-0 z-30 flex h-16 w-full flex-shrink-0 items-center justify-between border-b border-[#0f3460] bg-[#16213e]/80 px-4 backdrop-blur-md md:px-6">
-      <div className="flex-1 opacity-0 pointer-events-none">
-        <button
-          type="button"
-          onClick={() => setIsWorkspaceDialogOpen(true)}
-          className="flex min-w-0 items-center gap-3 rounded-xl border border-[#2a5ea3] bg-gradient-to-r from-[#0f3460]/55 to-[#121316] px-3 py-2 text-left text-[12px] text-slate-200 shadow-sm shadow-black/20 transition-colors hover:border-[#5a8ed1] hover:text-white"
-          title={activeWorkspace?.vault_root ?? '未选择工作区'}
-        >
-          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-[#2a5ea3] bg-[#0b1020] text-[#a9c8fc]">
-            <FolderOpen size={15} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7eaee8]">Workspace</div>
-            <div className="truncate text-[13px] font-semibold">
-              {activeWorkspace?.name ?? (isWorkspaceLoading ? '正在读取工作区...' : '未选择工作区')}
-            </div>
-          </div>
-          <ChevronsUpDown size={14} className="flex-shrink-0 text-[#7eaee8]" />
-        </button>
-      </div>
+      <div className="min-w-0 flex-1" />
       <div className="flex min-w-0 items-center gap-2">
         <div className="hidden min-w-0 items-center gap-2 rounded-lg border border-[#0f3460] bg-[#121316] px-3 py-2 text-[12px] text-slate-300 sm:flex">
           <UserRound size={14} className="flex-shrink-0 text-[#a9c8fc]" />
@@ -545,7 +523,6 @@ export default function App() {
     isLoading: isWorkspaceLoading,
     isMutating: isWorkspaceMutating,
     lastError: workspaceError,
-    refresh: refreshWorkspaces,
     activateWorkspace,
     selectWorkspaceFolder,
     removeWorkspace,
@@ -666,6 +643,15 @@ export default function App() {
         <TopBar
           userInfo={userInfo}
           onLogout={() => void logout()}
+          activeWorkspace={activeWorkspace}
+          workspaces={workspaces}
+          isWorkspaceLoading={isWorkspaceLoading}
+          isWorkspaceMutating={isWorkspaceMutating}
+          isWorkspaceSwitching={isWorkspaceSwitching}
+          workspaceError={workspaceError}
+          onSelectWorkspaceFolder={() => void handleSelectWorkspaceFolder()}
+          onActivateWorkspace={handleActivateWorkspace}
+          onDeleteWorkspace={(workspaceId) => void handleDeleteWorkspace(workspaceId)}
         />
 
         <div className="relative flex-1 overflow-hidden">
@@ -683,9 +669,8 @@ export default function App() {
           {shouldShowWorkspaceGate ? (
             <WorkspaceGate
               isLoading={isWorkspaceLoading}
-              isMutating={isWorkspaceMutating}
               lastError={workspaceError}
-              onSelectWorkspaceFolder={() => void handleSelectWorkspaceFolder()}
+              onOpenSettings={() => setCurrentView('settings')}
             />
           ) : (
           <AnimatePresence mode="wait">
@@ -704,6 +689,7 @@ export default function App() {
                   onInitialSelectedPathConsumed={() => setInitialExplorerPath(null)}
                   onInitialContextFileIdsConsumed={() => setInitialExplorerContextFileIds(null)}
                   onOpenAiContext={openAiContext}
+                  onOpenConflicts={() => setCurrentView('conflicts')}
                 />
               )}
               {currentView === 'conflicts' && <ConflictsView />}

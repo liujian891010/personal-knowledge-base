@@ -11,7 +11,7 @@ from clients.desktop.change_detection import (
     detect_local_workspace_changes,
 )
 from clients.desktop.crypto import build_placeholder_blob_id
-from vault_core import FileMapDocument, FileRecord
+from vault_core import FileMapDocument, FileRecord, TombstoneRecord
 
 
 class DesktopChangeDetectionTests(unittest.TestCase):
@@ -218,6 +218,49 @@ class DesktopChangeDetectionTests(unittest.TestCase):
         self.assertEqual(plan.document.files[0].status, "deleted")
         self.assertEqual(plan.local_delete_sequence, 5)
         self.assertEqual(plan.tombstones[0].file_id, "file-missing")
+        self.assertIsNone(plan.tombstones[0].deleted_revision)
+
+    def test_build_tracked_change_commit_plan_allows_pending_tombstone_only_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Notes").mkdir(parents=True, exist_ok=True)
+            payload = b"# live\n"
+            live_path = root / "Notes" / "Live.md"
+            live_path.write_bytes(payload)
+            content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
+            document = FileMapDocument(
+                vault_id="vault-001",
+                updated_at=1770000050450,
+                files=[
+                    FileRecord(
+                        file_id="file-live",
+                        path="Notes/Live.md",
+                        type="note",
+                        status="active",
+                        updated_at=1770000050440,
+                        content_hash=content_hash,
+                    )
+                ],
+            )
+
+            plan = build_tracked_change_commit_plan(
+                root,
+                document,
+                tombstones=[
+                    TombstoneRecord(
+                        file_id="file-deleted",
+                        deleted_revision=None,
+                        deleted_at=1770000050430,
+                        local_delete_seq=2,
+                        last_known_path="Attachments/photo.png",
+                    )
+                ],
+                current_local_delete_sequence=2,
+            )
+
+            self.assertEqual(plan.change_set.change_count, 0)
+            self.assertEqual(plan.tombstones[0].file_id, "file-deleted")
+            self.assertEqual(plan.content_by_file_id, {"file-live": payload})
 
     def test_build_tracked_change_commit_plan_adds_untracked_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

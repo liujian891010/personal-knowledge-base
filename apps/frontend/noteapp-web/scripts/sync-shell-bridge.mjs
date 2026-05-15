@@ -94,6 +94,8 @@ It forwards to:
   POST /api/workspace/attachments
                                   Create a local attachment under Attachments/
   PATCH /api/workspace/files/:id Rename a local Markdown note
+  POST /api/workspace/files/:id/move
+                                  Move a local Markdown note across folders.
   DELETE /api/workspace/files/:id
                                   Delete a local Markdown note
   GET  /api/workspace/search?q=term
@@ -1206,6 +1208,21 @@ function workspaceNoteLinksFileIdFromPath(pathname) {
   return decodeURIComponent(encoded);
 }
 
+function workspaceMoveFileIdFromPath(pathname) {
+  const suffix = '/move';
+  for (const prefix of ['/api/workspace/files/', '/api/workspace/notes/']) {
+    if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+      continue;
+    }
+    const encoded = pathname.slice(prefix.length, -suffix.length);
+    if (!encoded || encoded.includes('/')) {
+      return null;
+    }
+    return decodeURIComponent(encoded);
+  }
+  return null;
+}
+
 function errorPayload(error) {
   const message = error instanceof Error ? error.message : String(error);
   if (error && typeof error === 'object' && Number.isFinite(Number(error.statusCode))) {
@@ -1694,6 +1711,30 @@ const server = createServer(async (request, response) => {
       } finally {
         rmSync(tempRoot, { recursive: true, force: true });
       }
+      return;
+    }
+
+    const workspaceMoveFileId = workspaceMoveFileIdFromPath(url.pathname);
+    if (request.method === 'POST' && workspaceMoveFileId) {
+      const rawBody = await readRequestBody(request);
+      const payload = JSON.parse(rawBody);
+      if (!payload || typeof payload.path !== 'string') {
+        throw new Error('workspace note move request must include path');
+      }
+      const stdout = runDesktopCli([
+        'move-workspace-note',
+        '--file-id',
+        workspaceMoveFileId,
+        '--path',
+        payload.path,
+      ]);
+      runScript('write-workspace-files.mjs', {
+        NOTEAPP_WORKSPACE_FILES_OUTPUT: workspaceFilesPath,
+      });
+      runScript('write-live-sync-shell.mjs', {
+        NOTEAPP_SYNC_SNAPSHOT_OUTPUT: snapshotPath,
+      });
+      jsonResponse(request, response, 200, JSON.parse(stdout));
       return;
     }
 

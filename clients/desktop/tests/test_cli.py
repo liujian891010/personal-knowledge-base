@@ -318,6 +318,35 @@ class FakeService:
             },
         }
 
+    def move_workspace_note(self, file_id, path, *, now_ms=None):
+        self.calls.append(("move-workspace-note", file_id, path, now_ms))
+        return {
+            "schema_version": "v1",
+            "vault_id": "vault-001",
+            "device_id": "desktop-shanghai",
+            "vault_root": "C:/vault",
+            "operation": "move",
+            "file": {
+                "file_id": file_id,
+                "path": path,
+                "type": "note",
+                "status": "active",
+                "updated_at": now_ms or 1770000040001,
+                "exists_on_disk": True,
+                "size_bytes": 123,
+            },
+            "files": {
+                "schema_version": "v1",
+                "vault_id": "vault-001",
+                "device_id": "desktop-shanghai",
+                "vault_root": "C:/vault",
+                "files": [],
+                "total_count": 0,
+                "active_count": 0,
+                "missing_count": 0,
+            },
+        }
+
     def delete_workspace_note(self, file_id, *, now_ms=None):
         self.calls.append(("delete-workspace-note", file_id, now_ms))
         return {
@@ -1577,6 +1606,34 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["operation"], "rename")
         self.assertEqual(self.service.calls, [("rename-workspace-note", "file-a", "Notes/Renamed.md", None)])
+
+    def test_move_workspace_note_command_routes_to_service(self) -> None:
+        exit_code, payload = self._run(
+            "--vault-root",
+            "C:/vault",
+            "--base-url",
+            "https://sync.example.com",
+            "--vault-id",
+            "vault-001",
+            "--device-id",
+            "desktop-shanghai",
+            "move-workspace-note",
+            "--file-id",
+            "file-a",
+            "--path",
+            "Archive/Renamed.md",
+            "--now-ms",
+            "1770000042222",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["operation"], "move")
+        self.assertEqual(payload["file"]["file_id"], "file-a")
+        self.assertEqual(payload["file"]["path"], "Archive/Renamed.md")
+        self.assertEqual(
+            self.service.calls,
+            [("move-workspace-note", "file-a", "Archive/Renamed.md", 1770000042222)],
+        )
 
     def test_delete_workspace_note_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(

@@ -36,7 +36,9 @@ export interface WorkspaceFilesController {
   isRefreshing: boolean;
   refresh: () => Promise<void>;
   createNote: (path: string, text?: string) => Promise<WorkspaceFileEntry>;
+  createAttachment: (fileName: string, contentBase64: string) => Promise<WorkspaceFileEntry>;
   renameNote: (fileId: string, path: string) => Promise<WorkspaceFileEntry>;
+  moveNote: (fileId: string, path: string) => Promise<WorkspaceFileEntry>;
   deleteNote: (fileId: string) => Promise<WorkspaceFileEntry>;
 }
 
@@ -273,6 +275,69 @@ export function useWorkspaceFilesController(enabled = true): WorkspaceFilesContr
     }
   }, [enabled]);
 
+  const createAttachment = useCallback(async (fileName: string, contentBase64: string) => {
+    if (!enabled) {
+      throw new Error('workspace is not available');
+    }
+    setIsRefreshing(true);
+    try {
+      const result = await mutateWorkspace(
+        '/api/workspace/attachments',
+        {
+          method: 'POST',
+          body: JSON.stringify({ file_name: fileName, content_base64: contentBase64 }),
+        },
+        'workspace attachment create',
+      );
+      setSnapshot(result.files);
+      cachedLoadResult = {
+        snapshot: result.files,
+        source: 'bridge',
+        error: null,
+      };
+      setSource('bridge');
+      setLastError(null);
+      return result.file;
+    } catch (error) {
+      setLastError(errorMessage(error));
+      throw error;
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [enabled]);
+
+  const moveNote = useCallback(async (fileId: string, path: string) => {
+    if (!enabled) {
+      throw new Error('workspace is not available');
+    }
+    setIsRefreshing(true);
+    try {
+      const result = await mutateWorkspace(
+        `/api/workspace/notes/${encodeURIComponent(fileId)}/move`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ path }),
+        },
+        'workspace note move',
+        `/api/workspace/files/${encodeURIComponent(fileId)}/move`,
+      );
+      setSnapshot(result.files);
+      cachedLoadResult = {
+        snapshot: result.files,
+        source: 'bridge',
+        error: null,
+      };
+      setSource('bridge');
+      setLastError(null);
+      return result.file;
+    } catch (error) {
+      setLastError(errorMessage(error));
+      throw error;
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [enabled]);
+
   const deleteNote = useCallback(async (fileId: string) => {
     if (!enabled) {
       throw new Error('workspace is not available');
@@ -313,7 +378,9 @@ export function useWorkspaceFilesController(enabled = true): WorkspaceFilesContr
     isRefreshing,
     refresh,
     createNote,
+    createAttachment,
     renameNote,
+    moveNote,
     deleteNote,
   };
 }

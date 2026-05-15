@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, FileText, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { AlertCircle, FileText, Paperclip, RefreshCw, Search, Trash2 } from 'lucide-react';
 
 import { invalidateWorkspaceFilesCache } from '../useWorkspaceFiles';
 
@@ -173,7 +173,7 @@ export default function TrashView() {
               回收站
             </h1>
             <p className="mt-2 max-w-xl text-sm text-slate-400">
-              这里显示从工作区移入 `.noteapp/trash` 的文档。恢复会回到原路径，原路径被占用时会失败以避免覆盖。
+              这里显示从工作区移入 `.noteapp/trash` 的文档和附件。恢复会回到原路径，原路径被占用时会失败以避免覆盖。
             </p>
           </div>
           <div className="flex gap-2">
@@ -234,11 +234,13 @@ export default function TrashView() {
                   <div key={item.file_id} className="group grid grid-cols-1 items-center gap-4 p-4 transition-colors hover:bg-[#1f2b4a] md:grid-cols-12">
                     <div className="col-span-1 flex items-center gap-3 md:col-span-5">
                       <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-[#0f3460] bg-[#121316]">
-                        <FileText size={20} className={item.exists_in_trash ? 'text-slate-400' : 'text-[#e94560]'} />
+                        {item.type === 'attachment'
+                          ? <Paperclip size={20} className={item.exists_in_trash ? 'text-[#ffb782]' : 'text-[#e94560]'} />
+                          : <FileText size={20} className={item.exists_in_trash ? 'text-slate-400' : 'text-[#e94560]'} />}
                       </div>
                       <div className="min-w-0">
                         <p className="truncate text-[14px] font-medium text-[#e3e2e6]">{fileName(item.path)}</p>
-                        <p className="mt-1 font-mono text-[11px] text-slate-500">{formatBytes(item.size_bytes)}</p>
+                        <p className="mt-1 font-mono text-[11px] text-slate-500">{item.type} / {formatBytes(item.size_bytes)}</p>
                         {!item.exists_in_trash && <p className="mt-1 text-[11px] text-[#ffb782]">trash file missing</p>}
                       </div>
                     </div>

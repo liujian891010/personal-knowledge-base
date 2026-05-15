@@ -281,14 +281,15 @@ def build_tracked_change_commit_plan(
             "detected local changes include unsupported items for tracked submit: "
             + unsupported_kinds
         )
-    if not resolved_change_set.changes:
+    resolved_tombstones = list(tombstones or [])
+    has_pending_tombstones = any(record.deleted_revision is None for record in resolved_tombstones)
+    if not resolved_change_set.changes and not has_pending_tombstones:
         raise ValueError("no supported tracked changes detected")
 
     modified_file_id_set = set(resolved_change_set.modified_file_ids)
     content_by_file_id: dict[str, bytes] = {}
     latest_updated_at = document.updated_at
     working_document = document
-    resolved_tombstones = list(tombstones or [])
     local_delete_sequence = current_local_delete_sequence
     resolve_file_id = build_generated_file_id if file_id_builder is None else file_id_builder
     resolve_blob_id = build_placeholder_blob_id if blob_id_builder is None else blob_id_builder
@@ -424,7 +425,7 @@ def build_tracked_change_commit_plan(
             file_id=record.file_id,
             deleted_at=deleted_at,
             local_delete_seq=local_delete_sequence,
-            deleted_revision=record.last_known_revision,
+            deleted_revision=None,
             deleted_by_device=deleted_by_device,
         )
         resolved_tombstones.append(tombstone)
