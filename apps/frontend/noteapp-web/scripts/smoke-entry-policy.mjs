@@ -22,11 +22,12 @@ function extractNavItemsBlock(appSource) {
 
 const appSource = readProjectFile('src/App.tsx');
 const explorerSource = readProjectFile('src/views/ExplorerView.tsx');
+const graphSource = readProjectFile('src/views/GraphView.tsx');
 const settingsSource = readProjectFile('src/views/SettingsView.tsx');
 const localSettingsSource = readProjectFile('src/useLocalSettingsSnapshot.ts');
 const navItemsBlock = extractNavItemsBlock(appSource);
 
-const openMainViews = ['explorer', 'ai-chat', 'trash', 'settings'];
+const openMainViews = ['explorer', 'ai-chat', 'graph', 'trash', 'settings'];
 const hiddenViews = ['sync', 'conflicts', 'ai-wiki'];
 
 for (const viewId of openMainViews) {
@@ -110,6 +111,18 @@ assert(
 assert(
   explorerSource.includes("['note', 'attachment'].includes(selectedFile.type)"),
   'Explorer delete action is not enabled for attachment trash flow',
+);
+assert(
+  graphSource.includes('useWorkspaceLinksController'),
+  'GraphView is not wired to workspace links',
+);
+assert(
+  graphSource.includes('links?.outgoing') && graphSource.includes('links?.backlinks'),
+  'GraphView does not build nodes and edges from outgoing/backlink links data',
+);
+assert(
+  !graphSource.includes('left-[30%]') && !graphSource.includes('x1="50%"'),
+  'GraphView still contains static sample graph coordinates',
 );
 
 for (const [name, source] of [

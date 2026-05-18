@@ -6,6 +6,7 @@ import {
   KeyRound,
   Loader2,
   LogOut,
+  Network,
   Settings,
   Trash2,
   UserRound,
@@ -18,12 +19,13 @@ import SettingsView from './views/SettingsView';
 import TrashView from './views/TrashView';
 import AiWikiView from './views/AiWikiView';
 import AiChatView from './views/AiChatView';
+import GraphView from './views/GraphView';
 import type { AiContextDraft } from './aiContext';
 import { invalidateLocalSettingsCache } from './useLocalSettingsSnapshot';
 import { invalidateWorkspaceFilesCache } from './useWorkspaceFiles';
 import { useWorkspaceRegistryController, type RegisteredWorkspace } from './useWorkspaceRegistry';
 
-type AppView = 'explorer' | 'conflicts' | 'trash' | 'ai-chat' | 'ai-wiki' | 'settings' | 'sync';
+type AppView = 'explorer' | 'conflicts' | 'trash' | 'ai-chat' | 'ai-wiki' | 'graph' | 'settings' | 'sync';
 
 const loginSessionStorageKey = 'userInfo';
 const loginCheckUrl = 'https://sg-al-cwork-web.mediportal.com.cn/user/login/appkey';
@@ -41,6 +43,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { id: 'explorer', icon: FolderOpen, label: '笔记库浏览' },
   { id: 'ai-chat', icon: Bot, label: 'AI 文档' },
+  { id: 'graph', icon: Network, label: '图谱' },
   { id: 'trash', icon: Trash2, label: '回收站' },
   { id: 'settings', icon: Settings, label: '设置' },
 ];
@@ -246,7 +249,7 @@ function Sidebar({ currentView, setView }: { currentView: AppView, setView: (vie
 
 function MobileNav({ currentView, setView }: { currentView: AppView, setView: (view: AppView) => void }) {
   return (
-    <nav className="grid h-16 flex-shrink-0 grid-cols-4 border-t border-[#0f3460] bg-[#16213e] md:hidden">
+    <nav className="grid h-16 flex-shrink-0 grid-cols-5 border-t border-[#0f3460] bg-[#16213e] md:hidden">
       {navItems.map((item) => (
         <button
           key={item.id}
@@ -694,6 +697,7 @@ export default function App() {
               )}
               {currentView === 'conflicts' && <ConflictsView />}
               {currentView === 'trash' && <TrashView />}
+              {currentView === 'graph' && <GraphView />}
               {currentView === 'ai-chat' && (
                 <AiChatView
                   initialContext={initialAiContext}

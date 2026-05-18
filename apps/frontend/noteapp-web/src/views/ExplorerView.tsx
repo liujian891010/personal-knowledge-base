@@ -1287,7 +1287,9 @@ export default function ExplorerView({
     [selectedContextFileIds, visibleFiles],
   );
   const searchContextFileIds = useMemo(() => {
-    const visibleById = new Map(visibleFiles.map((file) => [file.file_id, file]));
+    const visibleById = new Map<string, WorkspaceFileEntry>(
+      visibleFiles.map((file) => [file.file_id, file]),
+    );
     const fileIds: string[] = [];
     for (const result of searchResults) {
       const file = visibleById.get(result.file_id);
