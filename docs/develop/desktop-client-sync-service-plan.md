@@ -157,6 +157,19 @@
 3. **缓存 / 队列（可后置）**
    - capability、异步回收、后台任务。
 
+`V1043-M3-01` 已冻结生产后端架构方案，详见 [v1.0.43-production-backend-architecture.md](./v1.0.43-production-backend-architecture.md)。数据库路线为 M3 内测 / V1 初期优先托管 SQLite（Turso / Cloudflare D1 等），通过 repository 层隔离方言；V1 稳定期按写入延迟、事务语义、备份恢复和查询复杂度评估是否迁移 PostgreSQL。
+
+### 5.4 生产后端架构冻结
+
+M3 不重写同步主链路，也不把当前本地 JSON store 直接暴露为生产服务。正式中心服务按以下边界演进：
+
+1. 保留现有 FastAPI 同步 API 的主链路语义，新增账号登录、refresh token、vault 创建 / 绑定等生产入口。
+2. 所有 vault 级 API 在生产配置下必须要求 `Authorization`，本地 bootstrap 放宽只允许 dev/test profile 显式启用。
+3. `revision`、`manifest`、`ack`、`file_versions`、`capability` 和 tombstone GC 审计全部进入关系型数据库。
+4. 加密 blob 进入 S3/OSS 兼容对象存储，客户端仍只能通过 `upload-init` / `download-init` 获取受控能力。
+5. commit CAS 以数据库事务串行化同一 `vault_id` 的 head 推进，不能继续依赖单进程锁。
+6. 设备撤销必须同时吊销 access token、refresh token、session 和未使用 capability。
+
 ## 6. 推荐演进路径
 
 ## 阶段 A：内测桌面版

@@ -372,6 +372,8 @@
 
 目标：从“本地开发 MVP 服务”升级为“多设备可持续使用”的中心同步服务。
 
+说明：v1.0.43 任务表已把生产后端工作拆到 `V1043-M3-01` 至 `V1043-M3-07`。本节 `SV-*` 任务继续作为工程拆解使用，架构基线以 [v1.0.43-production-backend-architecture.md](./v1.0.43-production-backend-architecture.md) 为准。
+
 ### 7.1 Lane D / Sync Server
 
 #### SV-01 账号与登录模型正式化
@@ -382,6 +384,7 @@
 2. 登录接口。
 3. access token / refresh token。
 4. token 续期与失效策略。
+5. 生产配置下移除无 Authorization 的本地 bootstrap 放宽。
 
 验收：
 
@@ -390,7 +393,7 @@
 
 依赖：
 
-1. 无。
+1. `V1043-M3-01`
 
 #### SV-02 设备注册与设备撤销
 
@@ -434,6 +437,7 @@
 2. commit 流程。
 3. ack 流程。
 4. resolve-intent 规则。
+5. commit 成功后同事务写入 `file_versions`。
 
 验收：
 
@@ -453,11 +457,13 @@
 2. download-init
 3. capability 生命周期管理
 4. 对接对象存储
+5. 设备撤销时未使用 capability 立即失效
 
 验收：
 
 1. blob 不再依赖本地临时存储。
 2. 上传下载链路可用于正式环境。
+3. 客户端仍不能绕过 `download-init` 直接拼对象存储 URL。
 
 依赖：
 

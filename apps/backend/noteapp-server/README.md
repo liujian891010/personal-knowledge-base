@@ -96,3 +96,11 @@ This MVP is intentionally not production-ready:
 4. No token expiry enforcement beyond capability expiry
 5. Tombstone GC is local-store only; no background worker, metrics, or production retention controls
 6. No cross-process CAS lock beyond the single-process JSON store
+
+The `V1043-M3-01` production backend architecture is frozen in:
+
+```text
+docs/develop/v1.0.43-production-backend-architecture.md
+```
+
+Future production work should treat this JSON store as a dev/test profile and move account, device, vault, revision, blob metadata, capability, tombstone GC, and `file_versions` state behind a durable repository layer.
