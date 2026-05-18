@@ -103,6 +103,7 @@ From the repository root:
 ```powershell
 python -m unittest apps\backend\noteapp-server\tests\test_sync_store.py
 python tests\e2e\sync_server_smoke.py
+python tests\e2e\sync_server_production_smoke.py
 ```
 
 ## Operations

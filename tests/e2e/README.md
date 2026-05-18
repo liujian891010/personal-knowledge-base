@@ -40,6 +40,23 @@ $env:PYTHONPATH='packages/vault-core/src;.'
 python tests\e2e\desktop_sync_smoke.py
 ```
 
+## Sync Server Production Smoke
+
+`sync_server_production_smoke.py` starts the FastAPI sync server with the SQLite repository profile and runs the production-backend regression gates:
+
+1. unauthorized vault requests are rejected
+2. dependency health reports SQLite migrations
+3. invalid manifests return a contract error
+4. concurrent CAS commits produce exactly one success and one conflict
+5. device revocation invalidates protected APIs and stale blob capabilities
+6. an S3/OSS-compatible object storage outage returns a diagnosable 503
+
+Run from the repository root:
+
+```powershell
+python tests\e2e\sync_server_production_smoke.py
+```
+
 ## Frontend Sync Snapshot Smoke
 
 `frontend_sync_snapshot_smoke.py` starts the local FastAPI sync server, initializes a temporary desktop vault, then runs the frontend `sync:snapshot` and `settings:snapshot` bridge scripts to generate live sync-shell and settings JSON snapshots.

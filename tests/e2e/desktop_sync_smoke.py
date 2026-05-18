@@ -102,6 +102,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as data_dir, tempfile.TemporaryDirectory() as work_dir:
         env = dict(os.environ)
         env["NOTEAPP_SERVER_DATA_DIR"] = data_dir
+        env["NOTEAPP_SERVER_LOG_LEVEL"] = "WARNING"
         process = subprocess.Popen(
             [
                 sys.executable,
