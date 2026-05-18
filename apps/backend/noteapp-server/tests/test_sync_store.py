@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import threading
 import tempfile
 import unittest
 from pathlib import Path
@@ -299,6 +300,69 @@ class SyncStoreTests(unittest.TestCase):
             )
         finally:
             connection.close()
+
+    def test_sqlite_repository_serializes_concurrent_cas_commits(self) -> None:
+        db_path = Path(self.temp_dir.name) / "cas.sqlite3"
+        data_dir = Path(self.temp_dir.name) / "server"
+        seed_store = SyncStore(data_dir, repository=SQLiteStateRepository(db_path))
+        upload = seed_store.init_blob_upload(
+            "vault-cas",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-cas",
+                        "encrypted_size": 7,
+                        "content_hash": "sha256:plain",
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id="device-seed",
+        )
+        seed_store.complete_blob_upload(upload["uploads"][0]["upload_url"].rsplit("/", 1)[-1], b"payload")
+
+        barrier = threading.Barrier(2)
+        results: list[dict[str, object]] = []
+        result_lock = threading.Lock()
+
+        def worker(name: str) -> None:
+            store = SyncStore(data_dir, repository=SQLiteStateRepository(db_path))
+            payload = {
+                "commit_intent_id": f"intent-{name}",
+                "base_revision": 0,
+                "created_by_device": f"device-{name}",
+                "intent_manifest_hash": f"sha256:intent-{name}",
+                "manifest": _manifest(
+                    "vault-cas",
+                    base_revision=0,
+                    blob_id="blob-cas",
+                    content_hash="sha256:plain",
+                    path=f"Notes/{name}.md",
+                    created_by_device=f"device-{name}",
+                ),
+                "blob_refs": [{"blob_id": "blob-cas", "file_id": f"file-{name}"}],
+            }
+            barrier.wait(timeout=5)
+            try:
+                committed = store.create_commit("vault-cas", payload, auth_device_id=f"device-{name}")
+                outcome = {"name": name, "status": "committed", "revision": committed["new_revision"]}
+            except CommitConflict as conflict:
+                outcome = {"name": name, "status": "conflict", "code": conflict.payload["code"]}
+            with result_lock:
+                results.append(outcome)
+
+        threads = [threading.Thread(target=worker, args=(name,)) for name in ("a", "b")]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+            self.assertFalse(thread.is_alive())
+
+        self.assertEqual(sorted(result["status"] for result in results), ["committed", "conflict"])
+        self.assertEqual([result["revision"] for result in results if result["status"] == "committed"], [1])
+        self.assertEqual([result["code"] for result in results if result["status"] == "conflict"], ["base_revision_conflict"])
+        final_store = SyncStore(data_dir, repository=SQLiteStateRepository(db_path))
+        self.assertEqual(final_store.get_vault_head("vault-cas")["head_revision"], 1)
 
     def test_list_vault_devices_and_heartbeat_report_ack_and_inactive_state(self) -> None:
         desktop = self.store.register_device(

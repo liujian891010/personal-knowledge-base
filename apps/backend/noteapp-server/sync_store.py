@@ -10,7 +10,7 @@ import uuid
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional, TypeVar
 from urllib.parse import quote
 
 from blob_storage import BlobStorageError, FileSystemBlobStore
@@ -51,6 +51,7 @@ DEFAULT_REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000
 DEFAULT_DEVICE_INACTIVE_AFTER_MS = 7 * 24 * 60 * 60 * 1000
 DEFAULT_TOMBSTONE_GC_MIN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 MAX_TOMBSTONE_GC_LOGS = 100
+T = TypeVar("T")
 
 
 def _now_ms() -> int:
@@ -280,6 +281,12 @@ class SyncStore:
     def _save(self, state: dict[str, Any]) -> None:
         try:
             self.repository.save(state)
+        except StateRepositoryConflict as error:
+            raise SyncStoreError(error.code, str(error)) from error
+
+    def _update_state(self, mutator: Callable[[dict[str, Any]], T]) -> T:
+        try:
+            return self.repository.update(self._default_state(), mutator)
         except StateRepositoryConflict as error:
             raise SyncStoreError(error.code, str(error)) from error
 
@@ -1403,15 +1410,15 @@ class SyncStore:
         if not isinstance(created_by_device, str) or not created_by_device:
             raise SyncStoreError("invalid_request", "created_by_device is required")
 
-        with self._lock:
-            state = self._load()
+        def commit_mutation(state: dict[str, Any]) -> dict[str, Any]:
+            for key, default in self._default_state().items():
+                state.setdefault(key, default)
             vault = self._ensure_vault(state, vault_id)
             existing_commit = vault["commits"].get(commit_intent_id)
             if isinstance(existing_commit, dict):
                 if existing_commit.get("intent_manifest_hash") == intent_manifest_hash:
                     revision = existing_commit["revision"]
                     vault["acks"][created_by_device] = max(vault["acks"].get(created_by_device, 0), revision)
-                    self._save(state)
                     return {
                         "vault_id": vault_id,
                         "new_revision": revision,
@@ -1438,13 +1445,15 @@ class SyncStore:
                 "committed_at_ms": _now_ms(),
             }
             vault["acks"][created_by_device] = max(vault["acks"].get(created_by_device, 0), new_revision)
-            self._save(state)
             return {
                 "vault_id": vault_id,
                 "new_revision": new_revision,
                 "head_manifest_summary": finalized_manifest["summary_hash"],
                 "acked_revision_for_device": vault["acks"][created_by_device],
             }
+
+        with self._lock:
+            return self._update_state(commit_mutation)
 
     def resolve_commit_intent(self, vault_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         commit_intent_id = _require_string(payload, "commit_intent_id")

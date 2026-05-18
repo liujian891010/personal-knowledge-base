@@ -130,7 +130,7 @@ This MVP is intentionally not production-ready:
 2. SQLite is a local-file repository profile; managed DB backup/restore and operational migration rollout are still pending
 3. S3/OSS mode uses a server streaming proxy; production credential rotation, bucket lifecycle rules, and observability are still pending
 4. Tombstone GC has no background worker, metrics, or production retention controls
-5. No cross-process CAS lock beyond optimistic repository version checks
+5. CAS locking is implemented for the SQLite repository profile; distributed multi-node locking, metrics, and operational alerts are still pending
 
 The `V1043-M3-01` production backend architecture is frozen in:
 
@@ -138,4 +138,4 @@ The `V1043-M3-01` production backend architecture is frozen in:
 docs/develop/v1.0.43-production-backend-architecture.md
 ```
 
-Future production work should keep JSON/local filesystem as dev/test profiles and harden the SQLite/S3-compatible repository path with CAS locking, operational migrations, monitoring, backup, and recovery.
+Future production work should keep JSON/local filesystem as dev/test profiles and harden the SQLite/S3-compatible repository path with operational migrations, monitoring, backup, distributed locking strategy, and recovery.

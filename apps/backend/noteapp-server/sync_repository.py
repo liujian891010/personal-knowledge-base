@@ -7,11 +7,12 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional, TypeVar
 
 
 REPOSITORY_VERSION_KEY = "_repository_version"
 SQLITE_SCHEMA_VERSION = 2
+T = TypeVar("T")
 
 
 class StateRepositoryConflict(RuntimeError):
@@ -42,6 +43,12 @@ class JsonStateRepository:
             handle.write("\n")
         tmp_path.replace(self.state_path)
 
+    def update(self, default_state: dict[str, Any], mutator: Callable[[dict[str, Any]], T]) -> T:
+        state = self.load(default_state)
+        result = mutator(state)
+        self.save(state)
+        return result
+
 
 class SQLiteStateRepository:
     def __init__(self, db_path: Path) -> None:
@@ -70,6 +77,30 @@ class SQLiteStateRepository:
         if expected_version is not None and not isinstance(expected_version, int):
             raise StateRepositoryConflict("state_write_conflict", "Repository version marker must be an integer.")
         self._save_state(state, expected_version=expected_version)
+
+    def update(self, default_state: dict[str, Any], mutator: Callable[[dict[str, Any]], T]) -> T:
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = connection.execute(
+                    "SELECT version, payload_json FROM sync_state WHERE id = ?",
+                    ("current",),
+                ).fetchone()
+                if row is None:
+                    state = deepcopy(default_state)
+                    next_version = 1
+                else:
+                    state = json.loads(row["payload_json"])
+                    next_version = int(row["version"]) + 1
+                state[REPOSITORY_VERSION_KEY] = next_version - 1
+                result = mutator(state)
+                self._write_state_locked(connection, state, version=next_version)
+                state[REPOSITORY_VERSION_KEY] = next_version
+                connection.commit()
+                return result
+            except Exception:
+                connection.rollback()
+                raise
 
     def import_state(self, state: dict[str, Any], *, force: bool = False) -> None:
         with self._connection() as connection:
