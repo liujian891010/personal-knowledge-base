@@ -117,3 +117,7 @@ $env:PYTHON='C:\Path\To\python.exe'
 4. 应用版本、运行路径、bridge 端口与进程归属
 
 bridge 异常退出或启动失败时，先导出诊断包，再结合错误弹窗中的提示检查 Python、端口占用和工作区路径。
+
+## 更新策略
+
+V1 不启用自动更新。升级方式是手动下载下一版已签名 Windows 安装包并覆盖安装；回滚方式是运行上一版已签名安装包。完整策略见 `docs/develop/v1.0.43-desktop-update-strategy.md`。
