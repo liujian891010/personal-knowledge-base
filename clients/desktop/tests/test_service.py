@@ -914,6 +914,152 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(api_opener.calls, [])
             self.assertEqual(blob_opener.calls, [])
 
+    def test_ai_writeback_preview_insert_current_note_does_not_write_draft_or_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            request = {
+                "schema_version": "v1",
+                "idempotency_key": "writeback-1",
+                "mode": "insert_current_note",
+                "answer_markdown": "Generated answer.",
+                "instruction": "Summarize the current note",
+                "sources": [
+                    {
+                        "file_id": "file-live",
+                        "path": "Notes/Live.md",
+                        "title": "Live",
+                        "excerpt": "# Live note",
+                    }
+                ],
+                "target": {
+                    "type": "current_note",
+                    "file_id": "file-live",
+                    "insert_position": "append",
+                },
+            }
+
+            preview = service.preview_ai_writeback(request, now_ms=1770000040000)
+
+            self.assertEqual(preview.mode, "insert_current_note")
+            self.assertEqual(preview.target_path, "Notes/Live.md")
+            self.assertEqual(preview.before_hash, "sha256:" + hashlib.sha256(b"# Live note\n").hexdigest())
+            self.assertTrue(preview.confirmation_token.startswith("aiwb1."))
+            self.assertIn("## AI Generated -", preview.rendered_markdown)
+            self.assertIn("Generated answer.", preview.rendered_markdown)
+            self.assertIn("- [[Live]] (`Notes/Live.md`)", preview.rendered_markdown)
+            self.assertIn("+## AI Generated -", preview.diff.text)
+            self.assertFalse(preview.warnings)
+            self.assertEqual((root / "Notes" / "Live.md").read_text(encoding="utf-8"), "# Live note\n")
+            self.assertFalse((root / ".noteapp" / "drafts" / "file-live.draft").exists())
+
+    def test_ai_writeback_apply_insert_current_note_writes_draft_only_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            request = {
+                "schema_version": "v1",
+                "idempotency_key": "writeback-apply-1",
+                "mode": "insert_current_note",
+                "answer_markdown": "Draft-only AI answer.",
+                "sources": [
+                    {
+                        "file_id": "file-live",
+                        "path": "Notes/Live.md",
+                        "title": "Live",
+                    }
+                ],
+                "target": {
+                    "type": "current_note",
+                    "file_id": "file-live",
+                    "insert_position": "append",
+                },
+            }
+            preview = service.preview_ai_writeback(request, now_ms=1770000040000)
+
+            result = service.apply_ai_writeback(
+                {**request, "confirmation_token": preview.confirmation_token},
+                now_ms=1770000040001,
+            )
+
+            draft_text = (root / ".noteapp" / "drafts" / "file-live.draft").read_text(encoding="utf-8")
+            self.assertEqual(result.status, "applied")
+            self.assertEqual(result.file_id, "file-live")
+            self.assertEqual(result.path, "Notes/Live.md")
+            self.assertEqual(result.content_hash, preview.after_hash)
+            self.assertTrue(result.wrote_draft)
+            self.assertFalse(result.wrote_file)
+            self.assertFalse(result.search_index_refreshed)
+            self.assertTrue(result.requires_user_save)
+            self.assertIn("Draft-only AI answer.", draft_text)
+            self.assertEqual(draft_text.count("Draft-only AI answer."), 1)
+            self.assertEqual((root / "Notes" / "Live.md").read_text(encoding="utf-8"), "# Live note\n")
+
+            retry = service.apply_ai_writeback(
+                {**request, "confirmation_token": preview.confirmation_token},
+                now_ms=1770000040002,
+            )
+
+            self.assertEqual(retry.status, "already_applied")
+            self.assertFalse(retry.wrote_draft)
+            self.assertEqual((root / ".noteapp" / "drafts" / "file-live.draft").read_text(encoding="utf-8"), draft_text)
+
+    def test_ai_writeback_apply_rejects_changed_base_after_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            request = {
+                "schema_version": "v1",
+                "idempotency_key": "writeback-base-change",
+                "mode": "insert_current_note",
+                "answer_markdown": "AI answer.",
+                "sources": [
+                    {
+                        "file_id": "file-live",
+                        "path": "Notes/Live.md",
+                    }
+                ],
+                "target": {
+                    "type": "current_note",
+                    "file_id": "file-live",
+                    "insert_position": "append",
+                },
+            }
+            preview = service.preview_ai_writeback(request, now_ms=1770000040000)
+            service.write_workspace_file_draft("file-live", "# User draft changed first\n")
+
+            with self.assertRaisesRegex(ValueError, "ai_writeback_base_changed"):
+                service.apply_ai_writeback(
+                    {**request, "confirmation_token": preview.confirmation_token},
+                    now_ms=1770000040001,
+                )
+
+    def test_ai_writeback_insert_current_note_rejects_locked_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            (root / "Notes" / "Live.md").write_text("---\nlocked: true\n---\n# Live note\n", encoding="utf-8")
+            request = {
+                "schema_version": "v1",
+                "idempotency_key": "writeback-locked",
+                "mode": "insert_current_note",
+                "answer_markdown": "AI answer.",
+                "sources": [
+                    {
+                        "file_id": "file-live",
+                        "path": "Notes/Live.md",
+                    }
+                ],
+                "target": {
+                    "type": "current_note",
+                    "file_id": "file-live",
+                    "insert_position": "append",
+                },
+            }
+
+            with self.assertRaisesRegex(ValueError, "ai_writeback_target_locked"):
+                service.preview_ai_writeback(request, now_ms=1770000040000)
+
     def test_write_workspace_file_content_clears_existing_draft(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

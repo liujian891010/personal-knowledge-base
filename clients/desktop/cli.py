@@ -393,6 +393,12 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("ai-provider-health")
     ai_context_task_parser = subparsers.add_parser("ai-context-task")
     ai_context_task_parser.add_argument("--input-json", required=True)
+    ai_writeback_preview_parser = subparsers.add_parser("ai-writeback-preview")
+    ai_writeback_preview_parser.add_argument("--input-json", required=True)
+    ai_writeback_preview_parser.add_argument("--now-ms", type=int)
+    ai_writeback_apply_parser = subparsers.add_parser("ai-writeback-apply")
+    ai_writeback_apply_parser.add_argument("--input-json", required=True)
+    ai_writeback_apply_parser.add_argument("--now-ms", type=int)
     subparsers.add_parser("local-settings-snapshot")
     write_settings_parser = subparsers.add_parser("write-local-settings")
     write_settings_parser.add_argument("--input-json", required=True)
@@ -762,6 +768,10 @@ def run_cli(
             ),
             max_total_chars=payload.get("max_total_chars") if isinstance(payload.get("max_total_chars"), int) else None,
         )
+    elif args.command == "ai-writeback-preview":
+        result = service.preview_ai_writeback(_load_json_object(Path(args.input_json)), now_ms=args.now_ms)
+    elif args.command == "ai-writeback-apply":
+        result = service.apply_ai_writeback(_load_json_object(Path(args.input_json)), now_ms=args.now_ms)
     elif args.command == "local-settings-snapshot":
         result = service.load_local_settings_snapshot()
     elif args.command == "write-local-settings":

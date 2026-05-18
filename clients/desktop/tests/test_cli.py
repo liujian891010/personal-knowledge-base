@@ -585,6 +585,39 @@ class FakeService:
             },
         }
 
+    def preview_ai_writeback(self, payload, *, now_ms=None):
+        self.calls.append(("ai-writeback-preview", payload, now_ms))
+        return {
+            "schema_version": "v1",
+            "mode": payload.get("mode"),
+            "target_path": "Notes/A.md",
+            "before_hash": "sha256:before",
+            "after_hash": "sha256:after",
+            "confirmation_token": "aiwb1.preview-token",
+            "expires_at_ms": 1770000940000,
+            "rendered_markdown": "## AI Generated - 2026-02-02 08:00\n\nAnswer\n",
+            "diff": {
+                "format": "unified",
+                "text": "--- a/Notes/A.md\n+++ b/Notes/A.md\n",
+            },
+            "warnings": [],
+        }
+
+    def apply_ai_writeback(self, payload, *, now_ms=None):
+        self.calls.append(("ai-writeback-apply", payload, now_ms))
+        return {
+            "schema_version": "v1",
+            "mode": payload.get("mode"),
+            "status": "applied",
+            "file_id": "file-a",
+            "path": "Notes/A.md",
+            "content_hash": "sha256:after",
+            "wrote_draft": True,
+            "wrote_file": False,
+            "search_index_refreshed": False,
+            "requires_user_save": True,
+        }
+
     def load_workspace_file_draft(self, file_id):
         self.calls.append(("workspace-file-draft", file_id))
         return {
@@ -2354,6 +2387,88 @@ class DesktopCliTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_ai_writeback_preview_command_routes_to_service(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "writeback-preview.json"
+            request = {
+                "schema_version": "v1",
+                "idempotency_key": "writeback-cli-1",
+                "mode": "insert_current_note",
+                "answer_markdown": "Answer",
+                "sources": [
+                    {
+                        "file_id": "file-a",
+                        "path": "Notes/A.md",
+                    }
+                ],
+                "target": {
+                    "type": "current_note",
+                    "file_id": "file-a",
+                    "insert_position": "append",
+                },
+            }
+            input_path.write_text(json.dumps(request), encoding="utf-8")
+
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "ai-writeback-preview",
+                "--input-json",
+                str(input_path),
+                "--now-ms",
+                "1770000040000",
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["confirmation_token"], "aiwb1.preview-token")
+        self.assertEqual(self.service.calls, [("ai-writeback-preview", request, 1770000040000)])
+
+    def test_ai_writeback_apply_command_routes_to_service(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "writeback-apply.json"
+            request = {
+                "schema_version": "v1",
+                "idempotency_key": "writeback-cli-1",
+                "mode": "insert_current_note",
+                "answer_markdown": "Answer",
+                "sources": [],
+                "target": {
+                    "type": "current_note",
+                    "file_id": "file-a",
+                    "insert_position": "append",
+                },
+                "confirmation_token": "aiwb1.preview-token",
+            }
+            input_path.write_text(json.dumps(request), encoding="utf-8")
+
+            exit_code, payload = self._run(
+                "--vault-root",
+                "C:/vault",
+                "--base-url",
+                "https://sync.example.com",
+                "--vault-id",
+                "vault-001",
+                "--device-id",
+                "desktop-shanghai",
+                "ai-writeback-apply",
+                "--input-json",
+                str(input_path),
+                "--now-ms",
+                "1770000040001",
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["status"], "applied")
+        self.assertTrue(payload["wrote_draft"])
+        self.assertFalse(payload["wrote_file"])
+        self.assertEqual(self.service.calls, [("ai-writeback-apply", request, 1770000040001)])
 
     def test_workspace_file_draft_command_routes_to_service(self) -> None:
         exit_code, payload = self._run(

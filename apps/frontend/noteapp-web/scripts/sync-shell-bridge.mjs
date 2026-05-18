@@ -136,6 +136,8 @@ It forwards to:
   POST /api/ai/wiki/compile      Compile deterministic local AI Wiki pages
   POST /api/ai/ask               Answer from local AI Wiki citations
   POST /api/ai/context-task      Run an AI task with selected workspace context
+  POST /api/ai/writeback/preview Preview an AI writeback without changing files
+  POST /api/ai/writeback/apply   Apply a confirmed AI writeback
   GET  /api/ai/chat-sessions     List local AI document sessions
   POST /api/ai/chat-sessions     Create a local AI document session
   GET  /api/ai/chat-sessions/:id Read a local AI document session
@@ -1783,6 +1785,36 @@ const server = createServer(async (request, response) => {
       try {
         writeFileSync(inputPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
         const stdout = runDesktopCli(['ai-context-task', '--input-json', inputPath]);
+        jsonResponse(request, response, 200, JSON.parse(stdout));
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
+      }
+      return;
+    }
+
+    if (request.method === 'POST' && routePathname === '/api/ai/writeback/preview') {
+      const rawBody = await readRequestBody(request);
+      const payload = JSON.parse(rawBody);
+      const tempRoot = mkdtempSync(resolve(tmpdir(), 'noteapp-ai-writeback-preview-'));
+      const inputPath = resolve(tempRoot, 'request.json');
+      try {
+        writeFileSync(inputPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+        const stdout = runDesktopCli(['ai-writeback-preview', '--input-json', inputPath]);
+        jsonResponse(request, response, 200, JSON.parse(stdout));
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
+      }
+      return;
+    }
+
+    if (request.method === 'POST' && routePathname === '/api/ai/writeback/apply') {
+      const rawBody = await readRequestBody(request);
+      const payload = JSON.parse(rawBody);
+      const tempRoot = mkdtempSync(resolve(tmpdir(), 'noteapp-ai-writeback-apply-'));
+      const inputPath = resolve(tempRoot, 'request.json');
+      try {
+        writeFileSync(inputPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+        const stdout = runDesktopCli(['ai-writeback-apply', '--input-json', inputPath]);
         jsonResponse(request, response, 200, JSON.parse(stdout));
       } finally {
         rmSync(tempRoot, { recursive: true, force: true });
