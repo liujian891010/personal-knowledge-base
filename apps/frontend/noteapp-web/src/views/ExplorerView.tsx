@@ -1324,6 +1324,20 @@ export default function ExplorerView({
     setSelectedContextFileIds(new Set());
   }
 
+  function openAiSummaryForCurrentNote() {
+    if (!selectedFile || !isAiContextEligibleFile(selectedFile)) {
+      return;
+    }
+    const title = fileName(selectedFile.path);
+    onOpenAiContext({
+      type: 'selected_files',
+      title: `当前笔记：${title}`,
+      fileIds: [selectedFile.file_id],
+      initialInstruction: `总结当前笔记《${title}》，提炼关键结论、重要细节、待办和需要继续追问的问题。`,
+      autoRun: true,
+    });
+  }
+
   useEffect(() => {
     setCollapsedFolders(readCollapsedFolders(folderStorageKey));
     setLoadedFolderStorageKey(folderStorageKey);
@@ -2218,6 +2232,15 @@ export default function ExplorerView({
                     >
                       <Paperclip size={14} />
                       <span>附件</span>
+                    </button>
+                    <button
+                      onClick={openAiSummaryForCurrentNote}
+                      disabled={!selectedFile || !isAiContextEligibleFile(selectedFile)}
+                      title="总结当前笔记"
+                      className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                    >
+                      <Bot size={14} />
+                      <span>总结</span>
                     </button>
                     <button
                       onClick={() => {

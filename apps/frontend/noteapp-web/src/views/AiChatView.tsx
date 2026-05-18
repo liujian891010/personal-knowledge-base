@@ -382,9 +382,13 @@ export default function AiChatView({
     setSessionTitle('新的 AI 文档会话');
     setMessages([]);
     setContext(initialContext);
-    setInput('');
+    const initialInstruction = initialContext.initialInstruction?.trim() ?? '';
+    setInput(initialInstruction);
     setError(null);
     onClearInitialContext();
+    if (initialContext.autoRun && initialInstruction) {
+      void sendMessageWithContext(initialContext, initialInstruction, { forceNewSession: true });
+    }
   }, [initialContext, isSessionLoading, onClearInitialContext]);
 
   React.useEffect(() => {
@@ -552,12 +556,12 @@ export default function AiChatView({
     }
   }
 
-  async function sendMessage() {
-    if (!context) {
-      setError('请先从笔记库选择文件夹或文档加入 AI 上下文。');
-      return;
-    }
-    const instruction = input.trim();
+  async function sendMessageWithContext(
+    activeContext: AiContextDraft,
+    rawInstruction: string,
+    options: { forceNewSession?: boolean } = {},
+  ) {
+    const instruction = rawInstruction.trim();
     if (!instruction) {
       setError('请输入要让 AI 执行的指令。');
       return;
@@ -571,18 +575,18 @@ export default function AiChatView({
     setInput('');
     setIsRunning(true);
     try {
-      let resolvedSessionId = activeSessionId;
+      let resolvedSessionId = options.forceNewSession ? null : activeSessionId;
       if (!resolvedSessionId) {
         const session = await createAiChatSession({
           title: defaultSessionTitle([userMessage]),
-          context,
+          context: activeContext,
           messages: [userMessage],
         });
         skipNextAutoSaveRef.current = true;
         resolvedSessionId = session.id;
         setActiveSessionId(session.id);
         setSessionTitle(session.title);
-        setContext(session.context ?? context);
+        setContext(session.context ?? activeContext);
         setMessages(session.messages ?? [userMessage]);
         setSessions((current) => [sessionSummaryFromSession(session), ...current.filter((item) => item.id !== session.id)]);
       } else {
@@ -594,15 +598,15 @@ export default function AiChatView({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          context: context.type === 'folder'
+          context: activeContext.type === 'folder'
             ? {
               type: 'folder',
-              folder_path: context.folderPath,
+              folder_path: activeContext.folderPath,
               recursive: true,
             }
             : {
               type: 'selected_files',
-              file_ids: context.fileIds,
+              file_ids: activeContext.fileIds,
             },
           instruction,
           output: {
@@ -630,6 +634,14 @@ export default function AiChatView({
     } finally {
       setIsRunning(false);
     }
+  }
+
+  async function sendMessage() {
+    if (!context) {
+      setError('请先从笔记库选择文件夹或文档加入 AI 上下文。');
+      return;
+    }
+    await sendMessageWithContext(context, input);
   }
 
   return (
