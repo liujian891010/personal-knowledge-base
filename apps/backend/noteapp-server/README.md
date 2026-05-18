@@ -18,9 +18,10 @@ This is a local-development AG04 MVP. It implements the frozen sync API shape ne
 10. Ranged blob download capabilities for encrypted bytes
 11. Vault device list / heartbeat state
 12. Tombstone GC eligibility and audit logs for the local JSON store
-13. JSON-backed account sessions with access/refresh token rotation
+13. Repository-backed account sessions with access/refresh token rotation
+14. SQLite repository profile with schema migration and JSON-state import
 
-State is stored locally under `.data/` by default:
+State is stored locally as JSON under `.data/` by default:
 
 ```text
 apps/backend/noteapp-server/.data/
@@ -30,6 +31,21 @@ Override it with:
 
 ```powershell
 $env:NOTEAPP_SERVER_DATA_DIR='C:\tmp\noteapp-server-data'
+```
+
+Enable the SQLite repository profile with:
+
+```powershell
+$env:NOTEAPP_SERVER_STORAGE='sqlite'
+$env:NOTEAPP_SERVER_SQLITE_PATH='C:\tmp\noteapp-server-data\noteapp-server.sqlite3'
+```
+
+`NOTEAPP_SERVER_DATABASE_URL=sqlite:///C:/tmp/noteapp-server-data/noteapp-server.sqlite3` is also accepted. The SQLite profile stores the canonical sync state plus projected metadata tables for users, devices, sessions, vaults, manifests, commits, blobs, capabilities, tombstone GC runs, and file versions.
+
+Import an existing JSON state file into SQLite with:
+
+```powershell
+python apps\backend\noteapp-server\scripts\import_json_state_to_sqlite.py --json-state apps\backend\noteapp-server\.data\sync-state.json --sqlite-db apps\backend\noteapp-server\.data\noteapp-server.sqlite3
 ```
 
 ## Run Locally
@@ -91,10 +107,11 @@ The client requests each authorized range with `X-Noteapp-Range-Offset` and `X-N
 
 This MVP is intentionally not production-ready:
 
-1. Account/session state is a JSON-backed dev profile; no durable database, password flow, external IdP, MFA, or account recovery
-2. No real object storage
-3. Tombstone GC is local-store only; no background worker, metrics, or production retention controls
-4. No cross-process CAS lock beyond the single-process JSON store
+1. Account/session state has no password flow, external IdP, MFA, or account recovery
+2. SQLite is a local-file repository profile; managed DB backup/restore and operational migration rollout are still pending
+3. No real object storage
+4. Tombstone GC has no background worker, metrics, or production retention controls
+5. No cross-process CAS lock beyond optimistic repository version checks
 
 The `V1043-M3-01` production backend architecture is frozen in:
 

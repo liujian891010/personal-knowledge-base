@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from urllib.parse import urlparse
+from unittest.mock import patch
 
 import sys
 
@@ -26,6 +27,31 @@ class NoteappServerMainTests(unittest.TestCase):
     def tearDown(self) -> None:
         server_main.store = self.original_store
         self.temp_dir.cleanup()
+
+    def test_create_store_from_env_uses_sqlite_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            db_path = data_dir / "noteapp-server.sqlite3"
+            with patch.dict(
+                server_main.os.environ,
+                {
+                    "NOTEAPP_SERVER_DATA_DIR": str(data_dir),
+                    "NOTEAPP_SERVER_STORAGE": "sqlite",
+                    "NOTEAPP_SERVER_SQLITE_PATH": str(db_path),
+                },
+            ):
+                created = server_main.create_store_from_env()
+                registered = created.register_device(
+                    {
+                        "device_name": "Desktop",
+                        "platform": "desktop",
+                        "protocol_version": "v1",
+                    }
+                )
+
+            self.assertTrue(db_path.exists())
+            self.assertFalse((data_dir / "sync-state.json").exists())
+            self.assertEqual(created.device_id_for_token(registered["access_token"]), registered["device_id"])
 
     def _register_device(self, **overrides: object) -> dict[str, str]:
         payload = {

@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from sync_repository import JsonStateRepository, StateRepositoryConflict
+
 
 class SyncStoreError(ValueError):
     def __init__(self, code: str, message: str) -> None:
@@ -229,11 +231,12 @@ def finalize_manifest_payload(manifest: dict[str, Any], revision: int) -> dict[s
 
 
 class SyncStore:
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, *, repository: Optional[Any] = None) -> None:
         self.data_dir = data_dir
         self.state_path = data_dir / "sync-state.json"
         self.blob_dir = data_dir / "blobs"
         self.chunk_dir = data_dir / "blob-upload-chunks"
+        self.repository = repository or JsonStateRepository(self.state_path)
         self._lock = threading.RLock()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.blob_dir.mkdir(parents=True, exist_ok=True)
@@ -255,21 +258,17 @@ class SyncStore:
         }
 
     def _load(self) -> dict[str, Any]:
-        if not self.state_path.exists():
-            return self._default_state()
-        with self.state_path.open("r", encoding="utf-8") as handle:
-            state = json.load(handle)
-        for key, default in self._default_state().items():
+        defaults = self._default_state()
+        state = self.repository.load(defaults)
+        for key, default in defaults.items():
             state.setdefault(key, default)
         return state
 
     def _save(self, state: dict[str, Any]) -> None:
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        tmp_path = self.state_path.with_suffix(".json.tmp")
-        with tmp_path.open("w", encoding="utf-8", newline="\n") as handle:
-            json.dump(state, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            handle.write("\n")
-        tmp_path.replace(self.state_path)
+        try:
+            self.repository.save(state)
+        except StateRepositoryConflict as error:
+            raise SyncStoreError(error.code, str(error)) from error
 
     def _ensure_vault(self, state: dict[str, Any], vault_id: str) -> dict[str, Any]:
         return state["vaults"].setdefault(

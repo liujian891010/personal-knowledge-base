@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ SERVER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVER_ROOT))
 
 from sync_store import BlobCapabilityError, CommitConflict, SyncStore, SyncStoreError  # noqa: E402
+from sync_repository import SQLiteStateRepository  # noqa: E402
 
 
 def _manifest(
@@ -170,6 +172,109 @@ class SyncStoreTests(unittest.TestCase):
         with self.assertRaises(SyncStoreError) as context:
             self.store.refresh_session({"refresh_token": registered["refresh_token"]}, now_ms=1_101)
         self.assertEqual(context.exception.code, "refresh_token_expired")
+
+    def test_sqlite_repository_persists_revision_manifest_and_blob_metadata(self) -> None:
+        db_path = Path(self.temp_dir.name) / "noteapp-server.sqlite3"
+        store = SyncStore(Path(self.temp_dir.name), repository=SQLiteStateRepository(db_path))
+        registered = store.register_device(
+            {
+                "account_key": "user@example.test",
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+            }
+        )
+        upload = store.init_blob_upload(
+            "vault-sqlite",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-sqlite",
+                        "encrypted_size": 7,
+                        "content_hash": "sha256:plain",
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id=registered["device_id"],
+        )
+        upload_token = upload["uploads"][0]["upload_url"].rsplit("/", 1)[-1]
+        store.complete_blob_upload(upload_token, b"payload")
+        commit = store.create_commit(
+            "vault-sqlite",
+            {
+                "commit_intent_id": "intent-sqlite",
+                "base_revision": 0,
+                "created_by_device": registered["device_id"],
+                "intent_manifest_hash": "sha256:intent-sqlite",
+                "manifest": _manifest(
+                    "vault-sqlite",
+                    base_revision=0,
+                    blob_id="blob-sqlite",
+                    content_hash="sha256:plain",
+                    created_by_device=registered["device_id"],
+                ),
+                "blob_refs": [{"blob_id": "blob-sqlite", "file_id": "file-1"}],
+            },
+            auth_device_id=registered["device_id"],
+        )
+        self.assertEqual(commit["new_revision"], 1)
+
+        restarted = SyncStore(Path(self.temp_dir.name), repository=SQLiteStateRepository(db_path))
+        self.assertEqual(restarted.device_id_for_token(registered["access_token"]), registered["device_id"])
+        self.assertEqual(restarted.get_vault_head("vault-sqlite")["head_revision"], 1)
+        self.assertEqual(restarted.get_manifest("vault-sqlite", 1)["files"][0]["blob_id"], "blob-sqlite")
+        self.assertEqual(restarted.check_blobs("vault-sqlite", {"blob_ids": ["blob-sqlite"]})["existing_blob_ids"], ["blob-sqlite"])
+        self.assertFalse((Path(self.temp_dir.name) / "sync-state.json").exists())
+
+        connection = sqlite3.connect(db_path)
+        try:
+            self.assertEqual(
+                connection.execute("SELECT head_revision FROM vaults WHERE vault_id = ?", ("vault-sqlite",)).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM manifests WHERE vault_id = ?", ("vault-sqlite",)).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT encrypted_size FROM blobs WHERE blob_id = ?", ("blob-sqlite",)).fetchone()[0],
+                7,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM schema_migrations WHERE version = 1").fetchone()[0],
+                1,
+            )
+        finally:
+            connection.close()
+
+    def test_sqlite_repository_imports_json_state(self) -> None:
+        json_dir = Path(self.temp_dir.name) / "json"
+        json_store = SyncStore(json_dir)
+        registered = json_store.register_device(
+            {
+                "account_key": "user@example.test",
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+            }
+        )
+        json_store.get_vault_head("vault-import")
+
+        db_path = Path(self.temp_dir.name) / "imported.sqlite3"
+        SQLiteStateRepository(db_path).import_json_file(json_dir / "sync-state.json")
+
+        imported = SyncStore(Path(self.temp_dir.name) / "sqlite", repository=SQLiteStateRepository(db_path))
+        self.assertEqual(imported.device_id_for_token(registered["access_token"]), registered["device_id"])
+        self.assertEqual(imported.get_vault_head("vault-import")["head_revision"], 0)
+        connection = sqlite3.connect(db_path)
+        try:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM devices WHERE device_id = ?", (registered["device_id"],)).fetchone()[0],
+                1,
+            )
+        finally:
+            connection.close()
 
     def test_list_vault_devices_and_heartbeat_report_ack_and_inactive_state(self) -> None:
         desktop = self.store.register_device(

@@ -7,6 +7,7 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
+from sync_repository import SQLiteStateRepository, sqlite_path_from_database_url
 from sync_store import BlobCapabilityError, CommitConflict, SyncStore, SyncStoreError
 
 
@@ -14,7 +15,24 @@ def _default_data_dir() -> Path:
     return Path(__file__).resolve().parent / ".data"
 
 
-store = SyncStore(Path(os.environ.get("NOTEAPP_SERVER_DATA_DIR", _default_data_dir())))
+def _sqlite_db_path(data_dir: Path) -> Path:
+    database_url = os.environ.get("NOTEAPP_SERVER_DATABASE_URL")
+    if database_url:
+        return sqlite_path_from_database_url(database_url)
+    return Path(os.environ.get("NOTEAPP_SERVER_SQLITE_PATH", data_dir / "noteapp-server.sqlite3"))
+
+
+def create_store_from_env() -> SyncStore:
+    data_dir = Path(os.environ.get("NOTEAPP_SERVER_DATA_DIR", _default_data_dir()))
+    storage = os.environ.get("NOTEAPP_SERVER_STORAGE", "json").lower()
+    if storage in {"sqlite", "db"}:
+        return SyncStore(data_dir, repository=SQLiteStateRepository(_sqlite_db_path(data_dir)))
+    if storage != "json":
+        raise RuntimeError("NOTEAPP_SERVER_STORAGE must be json or sqlite")
+    return SyncStore(data_dir)
+
+
+store = create_store_from_env()
 app = FastAPI(title="noteapp-server")
 
 
@@ -48,6 +66,7 @@ def _status_code_for_store_error(error: SyncStoreError) -> int:
         "invalid_refresh_token": 401,
         "refresh_token_expired": 401,
         "resumable_upload_session_not_found": 404,
+        "state_write_conflict": 409,
     }
     return status_code_by_code.get(error.code, 400)
 
