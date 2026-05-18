@@ -10,6 +10,7 @@ $ErrorActionPreference = 'Stop'
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Resolve-Path (Join-Path $ScriptRoot '..\..')
 $Python = if ([string]::IsNullOrWhiteSpace($env:PYTHON)) { 'python' } else { $env:PYTHON }
+$RunFromRepoRoot = (Test-Path 'scripts\ci\v1043-acceptance.ps1') -and (Test-Path 'apps\frontend\noteapp-web\package.json')
 
 function Join-RepoPathList {
   param([string[]]$Paths)
@@ -41,6 +42,18 @@ function Invoke-WithEnv {
   }
 }
 
+function Invoke-Native {
+  param(
+    [string]$FilePath,
+    [string[]]$Arguments = @()
+  )
+
+  & $FilePath @Arguments
+  if ($null -ne $global:LASTEXITCODE -and $global:LASTEXITCODE -ne 0) {
+    throw "Command '$FilePath $($Arguments -join ' ')' failed with exit code $global:LASTEXITCODE"
+  }
+}
+
 function Invoke-Step {
   param(
     [string]$Name,
@@ -48,11 +61,19 @@ function Invoke-Step {
   )
 
   Write-Host "==> $Name"
-  Push-Location $RepoRoot
-  try {
+  $global:LASTEXITCODE = 0
+  if ($RunFromRepoRoot) {
     & $Block
-  } finally {
-    Pop-Location
+  } else {
+    Push-Location $RepoRoot
+    try {
+      & $Block
+    } finally {
+      Pop-Location
+    }
+  }
+  if ($null -ne $global:LASTEXITCODE -and $global:LASTEXITCODE -ne 0) {
+    throw "Step '$Name' failed with exit code $global:LASTEXITCODE"
   }
 }
 
@@ -141,17 +162,40 @@ $Steps.Add([pscustomobject]@{
 
 $Steps.Add([pscustomobject]@{
   Name = 'frontend:lint'
-  Run = { npm.cmd --prefix apps\frontend\noteapp-web run lint }
+  Run = {
+    Invoke-Native $Python @(
+      'scripts\ci\run_in_directory.py',
+      'apps\frontend\noteapp-web',
+      'node',
+      'node_modules\typescript\bin\tsc',
+      '--noEmit'
+    )
+  }
 })
 
 $Steps.Add([pscustomobject]@{
   Name = 'frontend:build'
-  Run = { npm.cmd --prefix apps\frontend\noteapp-web run build }
+  Run = {
+    Invoke-Native $Python @(
+      'scripts\ci\run_in_directory.py',
+      'apps\frontend\noteapp-web',
+      'node',
+      'node_modules\vite\bin\vite.js',
+      'build'
+    )
+  }
 })
 
 $Steps.Add([pscustomobject]@{
   Name = 'frontend:entry-policy'
-  Run = { npm.cmd --prefix apps\frontend\noteapp-web run smoke:entry-policy }
+  Run = {
+    Invoke-Native $Python @(
+      'scripts\ci\run_in_directory.py',
+      'apps\frontend\noteapp-web',
+      'node',
+      'scripts\smoke-entry-policy.mjs'
+    )
+  }
 })
 
 $Steps.Add([pscustomobject]@{
@@ -166,13 +210,25 @@ $Steps.Add([pscustomobject]@{
 
 $Steps.Add([pscustomobject]@{
   Name = 'desktop:build-frontend'
-  Run = { npm.cmd --prefix apps\desktop\noteapp-desktop run build:frontend }
+  Run = {
+    Invoke-Native $Python @(
+      'scripts\ci\run_in_directory.py',
+      'apps\desktop\noteapp-desktop',
+      'node',
+      'scripts\build-frontend.mjs'
+    )
+  }
 })
 
 if ($ReleaseArtifacts) {
   $Steps.Add([pscustomobject]@{
     Name = 'desktop:dist-win-signed'
-    Run = { npm.cmd --prefix apps\desktop\noteapp-desktop run dist:win:signed }
+    Run = {
+      Invoke-Native $Python @('scripts\ci\run_in_directory.py', 'apps\desktop\noteapp-desktop', 'node', 'scripts\build-frontend.mjs')
+      Invoke-Native $Python @('scripts\ci\run_in_directory.py', 'apps\desktop\noteapp-desktop', 'node', 'scripts\check-win-signing-env.mjs')
+      Invoke-Native $Python @('scripts\ci\run_in_directory.py', 'apps\desktop\noteapp-desktop', 'node', 'scripts\package-win.mjs', '--win', 'nsis')
+      Invoke-Native $Python @('scripts\ci\run_in_directory.py', 'apps\desktop\noteapp-desktop', 'node', 'scripts\verify-win-signature.mjs')
+    }
   })
 }
 

@@ -30,6 +30,30 @@ from vault_core import FileMapDocument, FileRecord, write_filemap_atomic  # noqa
 from clients.desktop.workspace import DesktopVaultPaths  # noqa: E402
 
 
+def isolated_node_env(base_env: dict[str, str], runtime_root: Path) -> dict[str, str]:
+    home = runtime_root / "home"
+    appdata = runtime_root / "appdata"
+    local_appdata = runtime_root / "local-appdata"
+    temp = runtime_root / "temp"
+    npm_cache = runtime_root / "npm-cache"
+    npmrc = runtime_root / "npmrc"
+    for path in (home, appdata, local_appdata, temp, npm_cache):
+        path.mkdir(parents=True, exist_ok=True)
+    return {
+        **base_env,
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        "APPDATA": str(appdata),
+        "LOCALAPPDATA": str(local_appdata),
+        "TEMP": str(temp),
+        "TMP": str(temp),
+        "npm_config_cache": str(npm_cache),
+        "npm_config_userconfig": str(npmrc),
+        "NPM_CONFIG_CACHE": str(npm_cache),
+        "NPM_CONFIG_USERCONFIG": str(npmrc),
+    }
+
+
 def request_json(
     method: str,
     path: str,
@@ -167,9 +191,12 @@ def assert_bridge_rejects_remote_host(env: dict[str, str]) -> None:
 
 def main() -> int:
     with tempfile.TemporaryDirectory() as data_dir, tempfile.TemporaryDirectory() as work_dir:
-        server_env = dict(os.environ)
-        server_env["NOTEAPP_SERVER_DATA_DIR"] = data_dir
-        server_env["NOTEAPP_SERVER_LOG_LEVEL"] = "WARNING"
+        runtime_env = isolated_node_env(os.environ, Path(work_dir) / "runtime")
+        server_env = {
+            **runtime_env,
+            "NOTEAPP_SERVER_DATA_DIR": data_dir,
+            "NOTEAPP_SERVER_LOG_LEVEL": "WARNING",
+        }
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -195,13 +222,14 @@ def main() -> int:
             settings_output_path = Path(work_dir) / "local-settings-snapshot.json"
             workspace_files_output_path = Path(work_dir) / "workspace-files.json"
             workspace_root_output_path = Path(work_dir) / "workspace-root.json"
+            workspace_registry_output_path = Path(work_dir) / "workspace-registry.json"
             picked_vault_root = Path(work_dir) / "一级目录" / "中文工作区"
             picked_note_path = picked_vault_root / "二级目录" / "中文路径.md"
             picked_note_path.parent.mkdir(parents=True)
             picked_note_path.write_bytes("# 中文标题\n\n从文件夹选择\n".encode("gb18030"))
             pythonpath = os.pathsep.join([str(VAULT_CORE_SRC), str(ROOT)])
             cli_env = {
-                **os.environ,
+                **runtime_env,
                 "PYTHONPATH": pythonpath,
             }
 
@@ -272,7 +300,7 @@ def main() -> int:
             )
 
             snapshot_env = {
-                **os.environ,
+                **runtime_env,
                 "PYTHON": sys.executable,
                 "NOTEAPP_VAULT_ROOT": str(vault_root),
                 "NOTEAPP_SYNC_BASE_URL": BASE_URL,
@@ -285,6 +313,7 @@ def main() -> int:
                 "NOTEAPP_SETTINGS_SNAPSHOT_OUTPUT": str(settings_output_path),
                 "NOTEAPP_WORKSPACE_FILES_OUTPUT": str(workspace_files_output_path),
                 "NOTEAPP_WORKSPACE_ROOT_OUTPUT": str(workspace_root_output_path),
+                "NOTEAPP_WORKSPACE_REGISTRY_OUTPUT": str(workspace_registry_output_path),
                 "NOTEAPP_WORKSPACE_SELECT_ROOT": str(picked_vault_root),
             }
             run_checked(
@@ -451,14 +480,15 @@ def main() -> int:
                 assert written_settings_payload["appearance"]["theme"] == "system", written_settings_payload
                 assert written_settings_payload["ai"]["local_model_status"] == "disabled", written_settings_payload
                 assert written_settings_payload["ai"]["embedding_status"] == "ready", written_settings_payload
-                assert json.loads(settings_path.read_text(encoding="utf-8")) == {
-                    "schema_version": "v1",
-                    "appearance": {"theme": "system"},
-                    "ai": {
-                        "local_model_status": "disabled",
-                        "embedding_status": "ready",
-                    },
-                }
+                persisted_settings = json.loads(settings_path.read_text(encoding="utf-8"))
+                assert persisted_settings["schema_version"] == "v1", persisted_settings
+                assert persisted_settings["appearance"]["theme"] == "system", persisted_settings
+                assert persisted_settings["ai"]["local_model_status"] == "disabled", persisted_settings
+                assert persisted_settings["ai"]["embedding_status"] == "ready", persisted_settings
+                assert persisted_settings["ai"]["provider_api"] == written_settings_payload["ai"]["provider_api"], persisted_settings
+                assert persisted_settings["ai"]["base_url"] == written_settings_payload["ai"]["base_url"], persisted_settings
+                assert persisted_settings["ai"]["model_id"] == written_settings_payload["ai"]["model_id"], persisted_settings
+                assert "api_key" not in persisted_settings["ai"], persisted_settings
                 status, live_settings_payload = request_bridge_json("/api/settings/live")
                 assert status == 200, live_settings_payload
                 assert live_settings_payload == written_settings_payload, live_settings_payload
