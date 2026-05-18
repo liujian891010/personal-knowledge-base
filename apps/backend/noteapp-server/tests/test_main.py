@@ -38,6 +38,7 @@ class NoteappServerMainTests(unittest.TestCase):
                     "NOTEAPP_SERVER_DATA_DIR": str(data_dir),
                     "NOTEAPP_SERVER_STORAGE": "sqlite",
                     "NOTEAPP_SERVER_SQLITE_PATH": str(db_path),
+                    "NOTEAPP_SERVER_BLOB_STORAGE": "local",
                 },
             ):
                 created = server_main.create_store_from_env()

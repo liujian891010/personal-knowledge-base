@@ -11,6 +11,7 @@ import sys
 SERVER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVER_ROOT))
 
+from blob_storage import BlobStorageError, FileSystemBlobStore  # noqa: E402
 from sync_store import BlobCapabilityError, CommitConflict, SyncStore, SyncStoreError  # noqa: E402
 from sync_repository import SQLiteStateRepository  # noqa: E402
 
@@ -80,6 +81,19 @@ def _deleted_manifest(
 
 def _sha256(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+class UnavailableBlobStore:
+    backend_name = "s3"
+
+    def put_object(self, object_key: str, payload: bytes) -> None:
+        raise BlobStorageError(503, "object_storage_unavailable", "Object storage is temporarily unavailable.")
+
+    def read_object(self, object_key: str) -> bytes:
+        raise BlobStorageError(503, "object_storage_unavailable", "Object storage is temporarily unavailable.")
+
+    def read_range(self, object_key: str, *, offset: int, size: int) -> bytes:
+        raise BlobStorageError(503, "object_storage_unavailable", "Object storage is temporarily unavailable.")
 
 
 class SyncStoreTests(unittest.TestCase):
@@ -245,6 +259,16 @@ class SyncStoreTests(unittest.TestCase):
                 connection.execute("SELECT COUNT(*) FROM schema_migrations WHERE version = 1").fetchone()[0],
                 1,
             )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM schema_migrations WHERE version = 2").fetchone()[0],
+                1,
+            )
+            projected_blob = connection.execute(
+                "SELECT object_key, status FROM blobs WHERE blob_id = ?",
+                ("blob-sqlite",),
+            ).fetchone()
+            self.assertTrue(projected_blob[0].startswith("vaults/vault-sqlite/blobs/"))
+            self.assertEqual(projected_blob[1], "available")
         finally:
             connection.close()
 
@@ -585,6 +609,74 @@ class SyncStoreTests(unittest.TestCase):
         )
         download_token = download["downloads"][0]["download_url"].rsplit("/", 1)[-1]
         self.assertEqual(self.store.read_blob_download(download_token), b"payload")
+
+    def test_filesystem_object_storage_uses_service_generated_object_key(self) -> None:
+        object_dir = Path(self.temp_dir.name) / "object-store"
+        store = SyncStore(
+            Path(self.temp_dir.name) / "server",
+            blob_store=FileSystemBlobStore(object_dir, backend_name="filesystem"),
+        )
+        payload = b"payload"
+        upload = store.init_blob_upload(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-object",
+                        "encrypted_size": len(payload),
+                        "content_hash": "sha256:plain",
+                        "encrypted_sha256": _sha256(payload),
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id="device-a",
+        )
+        upload_token = upload["uploads"][0]["upload_url"].rsplit("/", 1)[-1]
+
+        store.complete_blob_upload(upload_token, payload)
+
+        state = store._load()
+        blob = state["blobs"]["blob-object"]
+        self.assertEqual(blob["storage_backend"], "filesystem")
+        self.assertEqual(blob["status"], "available")
+        self.assertEqual(blob["encrypted_sha256"], _sha256(payload))
+        self.assertTrue(blob["object_key"].startswith("vaults/vault-1/blobs/"))
+        self.assertTrue((object_dir / blob["object_key"]).exists())
+
+        download = store.init_blob_download(
+            "vault-1",
+            {"blob_ids": ["blob-object"]},
+            request_base_url="http://127.0.0.1:8000/",
+            device_id="device-a",
+        )
+        download_token = download["downloads"][0]["download_url"].rsplit("/", 1)[-1]
+        self.assertEqual(store.read_blob_download(download_token), payload)
+
+    def test_object_storage_unavailable_is_explainable_and_keeps_upload_capability(self) -> None:
+        store = SyncStore(Path(self.temp_dir.name) / "server", blob_store=UnavailableBlobStore())
+        upload = store.init_blob_upload(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-unavailable",
+                        "encrypted_size": 7,
+                        "content_hash": "sha256:plain",
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id="device-a",
+        )
+        upload_token = upload["uploads"][0]["upload_url"].rsplit("/", 1)[-1]
+
+        with self.assertRaises(BlobCapabilityError) as context:
+            store.complete_blob_upload(upload_token, b"payload")
+
+        self.assertEqual(context.exception.status_code, 503)
+        self.assertEqual(context.exception.code, "object_storage_unavailable")
+        self.assertIn(upload_token, store._load()["capabilities"])
 
     def test_resumable_blob_upload_tracks_chunks_and_completes_blob(self) -> None:
         payload = b"encrypted-payload"

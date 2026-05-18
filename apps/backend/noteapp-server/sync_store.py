@@ -11,7 +11,9 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
+from blob_storage import BlobStorageError, FileSystemBlobStore
 from sync_repository import JsonStateRepository, StateRepositoryConflict
 
 
@@ -122,8 +124,10 @@ def _require_unique_positive_ints(payload: dict[str, Any], key: str) -> list[int
     return result
 
 
-def _blob_filename(blob_id: str) -> str:
-    return hashlib.sha256(blob_id.encode("utf-8")).hexdigest()
+def _blob_object_key(vault_id: str, blob_id: str) -> str:
+    vault_segment = quote(vault_id, safe="")
+    blob_segment = hashlib.sha256(blob_id.encode("utf-8")).hexdigest()
+    return f"vaults/{vault_segment}/blobs/{blob_segment}"
 
 
 def _chunk_filename(session_id: str, chunk_id: str) -> str:
@@ -132,6 +136,14 @@ def _chunk_filename(session_id: str, chunk_id: str) -> str:
 
 def _sha256_payload(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _capability_error_from_blob_storage(error: BlobStorageError) -> BlobCapabilityError:
+    return BlobCapabilityError(error.status_code, error.code, str(error))
+
+
+def _sync_error_from_blob_storage(error: BlobStorageError) -> SyncStoreError:
+    return SyncStoreError(error.code, str(error))
 
 
 def _file_version_id(*, vault_id: str, file_id: str, revision: int, blob_id: str, source: str) -> str:
@@ -231,12 +243,13 @@ def finalize_manifest_payload(manifest: dict[str, Any], revision: int) -> dict[s
 
 
 class SyncStore:
-    def __init__(self, data_dir: Path, *, repository: Optional[Any] = None) -> None:
+    def __init__(self, data_dir: Path, *, repository: Optional[Any] = None, blob_store: Optional[Any] = None) -> None:
         self.data_dir = data_dir
         self.state_path = data_dir / "sync-state.json"
         self.blob_dir = data_dir / "blobs"
         self.chunk_dir = data_dir / "blob-upload-chunks"
         self.repository = repository or JsonStateRepository(self.state_path)
+        self.blob_store = blob_store or FileSystemBlobStore(self.blob_dir, backend_name="local")
         self._lock = threading.RLock()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.blob_dir.mkdir(parents=True, exist_ok=True)
@@ -964,16 +977,23 @@ class SyncStore:
                 blob_id = _require_string(item, "blob_id")
                 encrypted_size = _require_non_negative_int(item, "encrypted_size")
                 content_hash = _require_string(item, "content_hash")
+                encrypted_sha256 = item.get("encrypted_sha256")
+                if encrypted_sha256 is not None and (not isinstance(encrypted_sha256, str) or not encrypted_sha256):
+                    raise SyncStoreError("invalid_request", "encrypted_sha256 must be a non-empty string when provided")
                 capability_token = secrets.token_urlsafe(32)
-                state["capabilities"][capability_token] = {
+                capability = {
                     "kind": "upload",
                     "vault_id": vault_id,
                     "blob_id": blob_id,
                     "encrypted_size": encrypted_size,
                     "content_hash": content_hash,
+                    "object_key": _blob_object_key(vault_id, blob_id),
                     "device_id": device_id,
                     "expires_at_ms": _now_ms() + 15 * 60 * 1000,
                 }
+                if isinstance(encrypted_sha256, str):
+                    capability["encrypted_sha256"] = encrypted_sha256
+                state["capabilities"][capability_token] = capability
                 uploads.append(
                     {
                         "blob_id": blob_id,
@@ -994,14 +1014,30 @@ class SyncStore:
             if len(payload) != expected_size:
                 raise BlobCapabilityError(400, "blob_size_mismatch", "Uploaded blob size does not match capability.")
             blob_id = capability["blob_id"]
-            filename = _blob_filename(blob_id)
-            path = self.blob_dir / filename
-            path.write_bytes(payload)
+            encrypted_sha256 = _sha256_payload(payload)
+            expected_sha256 = capability.get("encrypted_sha256")
+            if isinstance(expected_sha256, str) and encrypted_sha256 != expected_sha256:
+                state["capabilities"][capability_token] = capability
+                self._save(state)
+                raise BlobCapabilityError(400, "blob_hash_mismatch", "Uploaded blob encrypted_sha256 does not match capability.")
+            object_key = capability.get("object_key")
+            if not isinstance(object_key, str):
+                object_key = _blob_object_key(capability["vault_id"], blob_id)
+            try:
+                self.blob_store.put_object(object_key, payload)
+            except BlobStorageError as error:
+                state["capabilities"][capability_token] = capability
+                self._save(state)
+                raise _capability_error_from_blob_storage(error) from error
             state["blobs"][blob_id] = {
                 "blob_id": blob_id,
-                "filename": filename,
+                "vault_id": capability.get("vault_id"),
+                "object_key": object_key,
+                "storage_backend": self.blob_store.backend_name,
+                "status": "available",
                 "encrypted_size": len(payload),
                 "content_hash": capability.get("content_hash"),
+                "encrypted_sha256": encrypted_sha256,
                 "uploaded_at_ms": _now_ms(),
             }
             self._save(state)
@@ -1316,10 +1352,12 @@ class SyncStore:
             blob = state["blobs"].get(capability["blob_id"])
             if not isinstance(blob, dict):
                 raise BlobCapabilityError(404, "blob_not_found", "Blob was not found.")
-            path = self.blob_dir / blob["filename"]
-            if not path.exists():
-                raise BlobCapabilityError(404, "blob_not_found", "Blob payload was not found.")
-            payload = path.read_bytes()
+            try:
+                payload = self.blob_store.read_object(self._object_key_for_blob(blob))
+            except BlobStorageError as error:
+                state["capabilities"][capability_token] = capability
+                self._save(state)
+                raise _capability_error_from_blob_storage(error) from error
             self._save(state)
             return payload
 
@@ -1334,12 +1372,10 @@ class SyncStore:
             blob = state["blobs"].get(capability["blob_id"])
             if not isinstance(blob, dict):
                 raise BlobCapabilityError(404, "blob_not_found", "Blob was not found.")
-            path = self.blob_dir / blob["filename"]
-            if not path.exists():
-                raise BlobCapabilityError(404, "blob_not_found", "Blob payload was not found.")
-            with path.open("rb") as handle:
-                handle.seek(offset)
-                payload = handle.read(size)
+            try:
+                payload = self.blob_store.read_range(self._object_key_for_blob(blob), offset=offset, size=size)
+            except BlobStorageError as error:
+                raise _capability_error_from_blob_storage(error) from error
             if len(payload) != size:
                 raise BlobCapabilityError(416, "range_not_satisfiable", "Blob payload does not contain requested range.")
             self._save(state)
@@ -1647,13 +1683,23 @@ class SyncStore:
         if content_hash is not None and blob.get("content_hash") != content_hash:
             raise SyncStoreError("blob_metadata_mismatch", "Existing blob content_hash does not match request")
         existing_sha256 = blob.get("encrypted_sha256")
-        if existing_sha256 is None and isinstance(blob.get("filename"), str):
-            blob_path = self.blob_dir / blob["filename"]
-            if blob_path.exists():
-                existing_sha256 = _sha256_payload(blob_path.read_bytes())
-                blob["encrypted_sha256"] = existing_sha256
+        if existing_sha256 is None:
+            try:
+                existing_sha256 = _sha256_payload(self.blob_store.read_object(self._object_key_for_blob(blob)))
+            except BlobStorageError as error:
+                raise _sync_error_from_blob_storage(error) from error
+            blob["encrypted_sha256"] = existing_sha256
         if existing_sha256 is not None and existing_sha256 != encrypted_sha256:
             raise SyncStoreError("blob_metadata_mismatch", "Existing blob encrypted_sha256 does not match request")
+
+    def _object_key_for_blob(self, blob: dict[str, Any]) -> str:
+        object_key = blob.get("object_key")
+        if isinstance(object_key, str) and object_key:
+            return object_key
+        filename = blob.get("filename")
+        if isinstance(filename, str) and filename:
+            return filename
+        raise BlobStorageError(404, "object_not_found", "Blob object key was not found in metadata.")
 
     def _find_resumable_upload_session(
         self,
@@ -1818,12 +1864,17 @@ class SyncStore:
             raise SyncStoreError("blob_hash_mismatch", "Uploaded blob encrypted_sha256 does not match session metadata")
 
         blob_id = session["blob_id"]
-        filename = _blob_filename(blob_id)
-        path = self.blob_dir / filename
-        path.write_bytes(blob_payload)
+        object_key = _blob_object_key(session["vault_id"], blob_id)
+        try:
+            self.blob_store.put_object(object_key, bytes(blob_payload))
+        except BlobStorageError as error:
+            raise _sync_error_from_blob_storage(error) from error
         state["blobs"][blob_id] = {
             "blob_id": blob_id,
-            "filename": filename,
+            "vault_id": session.get("vault_id"),
+            "object_key": object_key,
+            "storage_backend": self.blob_store.backend_name,
+            "status": "available",
             "encrypted_size": len(blob_payload),
             "content_hash": session.get("content_hash"),
             "encrypted_sha256": encrypted_sha256,

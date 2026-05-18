@@ -7,6 +7,7 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
+from blob_storage import FileSystemBlobStore, S3CompatibleBlobStore
 from sync_repository import SQLiteStateRepository, sqlite_path_from_database_url
 from sync_store import BlobCapabilityError, CommitConflict, SyncStore, SyncStoreError
 
@@ -22,14 +23,38 @@ def _sqlite_db_path(data_dir: Path) -> Path:
     return Path(os.environ.get("NOTEAPP_SERVER_SQLITE_PATH", data_dir / "noteapp-server.sqlite3"))
 
 
+def _required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"{name} is required")
+    return value
+
+
+def create_blob_store_from_env(data_dir: Path) -> object:
+    backend = os.environ.get("NOTEAPP_SERVER_BLOB_STORAGE", "local").lower()
+    if backend in {"local", "filesystem"}:
+        root = Path(os.environ.get("NOTEAPP_SERVER_OBJECT_STORAGE_DIR", data_dir / "blobs"))
+        return FileSystemBlobStore(root, backend_name=backend)
+    if backend in {"s3", "oss"}:
+        return S3CompatibleBlobStore(
+            endpoint=_required_env("NOTEAPP_SERVER_OBJECT_ENDPOINT"),
+            bucket=_required_env("NOTEAPP_SERVER_OBJECT_BUCKET"),
+            region=_required_env("NOTEAPP_SERVER_OBJECT_REGION"),
+            access_key_id=_required_env("NOTEAPP_SERVER_OBJECT_ACCESS_KEY_ID"),
+            secret_access_key=_required_env("NOTEAPP_SERVER_OBJECT_SECRET_ACCESS_KEY"),
+        )
+    raise RuntimeError("NOTEAPP_SERVER_BLOB_STORAGE must be local, filesystem, s3, or oss")
+
+
 def create_store_from_env() -> SyncStore:
     data_dir = Path(os.environ.get("NOTEAPP_SERVER_DATA_DIR", _default_data_dir()))
+    blob_store = create_blob_store_from_env(data_dir)
     storage = os.environ.get("NOTEAPP_SERVER_STORAGE", "json").lower()
     if storage in {"sqlite", "db"}:
-        return SyncStore(data_dir, repository=SQLiteStateRepository(_sqlite_db_path(data_dir)))
+        return SyncStore(data_dir, repository=SQLiteStateRepository(_sqlite_db_path(data_dir)), blob_store=blob_store)
     if storage != "json":
         raise RuntimeError("NOTEAPP_SERVER_STORAGE must be json or sqlite")
-    return SyncStore(data_dir)
+    return SyncStore(data_dir, blob_store=blob_store)
 
 
 store = create_store_from_env()
@@ -64,6 +89,9 @@ def _status_code_for_store_error(error: SyncStoreError) -> int:
         "file_version_not_found": 404,
         "invalid_access_token": 401,
         "invalid_refresh_token": 401,
+        "object_not_found": 404,
+        "object_storage_error": 502,
+        "object_storage_unavailable": 503,
         "refresh_token_expired": 401,
         "resumable_upload_session_not_found": 404,
         "state_write_conflict": 409,

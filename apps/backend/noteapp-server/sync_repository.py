@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 
 REPOSITORY_VERSION_KEY = "_repository_version"
-SQLITE_SCHEMA_VERSION = 1
+SQLITE_SCHEMA_VERSION = 2
 
 
 class StateRepositoryConflict(RuntimeError):
@@ -95,7 +95,16 @@ class SQLiteStateRepository:
                 INSERT OR IGNORE INTO schema_migrations(version, name, applied_at_ms)
                 VALUES (?, ?, ?)
                 """,
-                (SQLITE_SCHEMA_VERSION, "initial_sync_repository_schema", applied_at_ms),
+                (1, "initial_sync_repository_schema", applied_at_ms),
+            )
+            _ensure_column(connection, "blobs", "object_key", "TEXT")
+            _ensure_column(connection, "blobs", "status", "TEXT")
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO schema_migrations(version, name, applied_at_ms)
+                VALUES (?, ?, ?)
+                """,
+                (SQLITE_SCHEMA_VERSION, "object_storage_blob_metadata", applied_at_ms),
             )
             connection.commit()
 
@@ -185,6 +194,12 @@ def _as_str(payload: dict[str, Any], key: str) -> Optional[str]:
 
 def _as_bool_int(payload: dict[str, Any], key: str) -> int:
     return 1 if bool(payload.get(key)) else 0
+
+
+def _ensure_column(connection: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
+    columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
 
 
 def _replace_projection(connection: sqlite3.Connection, state: dict[str, Any]) -> None:
@@ -450,12 +465,14 @@ def _project_blobs(connection: sqlite3.Connection, state: dict[str, Any]) -> Non
             continue
         connection.execute(
             """
-            INSERT INTO blobs(blob_id, filename, encrypted_size, content_hash, encrypted_sha256, uploaded_at_ms, payload_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO blobs(blob_id, filename, object_key, status, encrypted_size, content_hash, encrypted_sha256, uploaded_at_ms, payload_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 blob_id,
                 _as_str(blob, "filename"),
+                _as_str(blob, "object_key"),
+                _as_str(blob, "status"),
                 _as_int(blob, "encrypted_size"),
                 _as_str(blob, "content_hash"),
                 _as_str(blob, "encrypted_sha256"),
@@ -644,6 +661,8 @@ CREATE TABLE IF NOT EXISTS vault_acks (
 CREATE TABLE IF NOT EXISTS blobs (
     blob_id TEXT PRIMARY KEY,
     filename TEXT,
+    object_key TEXT,
+    status TEXT,
     encrypted_size INTEGER,
     content_hash TEXT,
     encrypted_sha256 TEXT,

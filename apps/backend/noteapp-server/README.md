@@ -20,6 +20,7 @@ This is a local-development AG04 MVP. It implements the frozen sync API shape ne
 12. Tombstone GC eligibility and audit logs for the local JSON store
 13. Repository-backed account sessions with access/refresh token rotation
 14. SQLite repository profile with schema migration and JSON-state import
+15. Object-storage-backed encrypted blob persistence with local filesystem and S3/OSS-compatible profiles
 
 State is stored locally as JSON under `.data/` by default:
 
@@ -46,6 +47,24 @@ Import an existing JSON state file into SQLite with:
 
 ```powershell
 python apps\backend\noteapp-server\scripts\import_json_state_to_sqlite.py --json-state apps\backend\noteapp-server\.data\sync-state.json --sqlite-db apps\backend\noteapp-server\.data\noteapp-server.sqlite3
+```
+
+Blob payloads are stored under the local `.data/blobs` filesystem object store by default. Use a separate filesystem object-store root with:
+
+```powershell
+$env:NOTEAPP_SERVER_BLOB_STORAGE='filesystem'
+$env:NOTEAPP_SERVER_OBJECT_STORAGE_DIR='C:\tmp\noteapp-object-store'
+```
+
+Use an S3/OSS-compatible bucket through the server-controlled streaming proxy with:
+
+```powershell
+$env:NOTEAPP_SERVER_BLOB_STORAGE='s3'
+$env:NOTEAPP_SERVER_OBJECT_ENDPOINT='https://s3.example.com'
+$env:NOTEAPP_SERVER_OBJECT_BUCKET='noteapp-vault-blobs'
+$env:NOTEAPP_SERVER_OBJECT_REGION='us-east-1'
+$env:NOTEAPP_SERVER_OBJECT_ACCESS_KEY_ID='...'
+$env:NOTEAPP_SERVER_OBJECT_SECRET_ACCESS_KEY='...'
 ```
 
 ## Run Locally
@@ -79,13 +98,13 @@ python tests\e2e\sync_server_smoke.py
 
 ## Blob Boundary
 
-`upload-init` and `download-init` return short-lived local capability URLs under:
+`upload-init` and `download-init` return short-lived server-controlled capability URLs under:
 
 ```text
 /_capabilities/blobs/{token}
 ```
 
-This is not an object-storage integration. It is a local substitute that lets the existing `CapabilityBlobUploader` and `CapabilityBlobDownloader` exercise the same upload/download contract.
+The capability endpoints validate server-side capability state before streaming encrypted bytes into or out of the configured blob store. They do not expose long-lived public object URLs or require clients to construct object keys.
 
 `resumable-upload-init` and `resumable-upload-complete` add encrypted chunk upload recovery. Chunks are uploaded to:
 
@@ -109,7 +128,7 @@ This MVP is intentionally not production-ready:
 
 1. Account/session state has no password flow, external IdP, MFA, or account recovery
 2. SQLite is a local-file repository profile; managed DB backup/restore and operational migration rollout are still pending
-3. No real object storage
+3. S3/OSS mode uses a server streaming proxy; production credential rotation, bucket lifecycle rules, and observability are still pending
 4. Tombstone GC has no background worker, metrics, or production retention controls
 5. No cross-process CAS lock beyond optimistic repository version checks
 
@@ -119,4 +138,4 @@ The `V1043-M3-01` production backend architecture is frozen in:
 docs/develop/v1.0.43-production-backend-architecture.md
 ```
 
-Future production work should treat this JSON store as a dev/test profile and move account, device, vault, revision, blob metadata, capability, tombstone GC, and `file_versions` state behind a durable repository layer.
+Future production work should keep JSON/local filesystem as dev/test profiles and harden the SQLite/S3-compatible repository path with CAS locking, operational migrations, monitoring, backup, and recovery.
