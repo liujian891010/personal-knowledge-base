@@ -23,6 +23,10 @@ interface TrashSnapshot {
   total_count: number;
 }
 
+type PendingTrashAction =
+  | { kind: 'empty' }
+  | { kind: 'purge'; item: TrashItem };
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -118,6 +122,7 @@ export default function TrashView() {
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [pendingTrashAction, setPendingTrashAction] = useState<PendingTrashAction | null>(null);
 
   const loadTrash = async () => {
     setIsLoading(true);
@@ -163,6 +168,23 @@ export default function TrashView() {
     }
   }
 
+  async function confirmPendingTrashAction() {
+    const action = pendingTrashAction;
+    if (!action) {
+      return;
+    }
+    setPendingTrashAction(null);
+    if (action.kind === 'empty') {
+      await mutateTrash('/api/workspace/trash/empty', { method: 'POST' });
+      return;
+    }
+    await mutateTrash(`/api/workspace/trash/${encodeURIComponent(action.item.file_id)}`, { method: 'DELETE' });
+  }
+
+  const emptyStateText = query.trim()
+    ? '没有匹配当前搜索的回收站项目。清除搜索条件或刷新后再试。'
+    : '回收站为空。被删除的文档和附件会先出现在这里，确认后再永久清除。';
+
   return (
     <div className="flex h-full flex-col overflow-hidden bg-[#1a1a2e]">
       <div className="flex-shrink-0 border-b border-[#0f3460] bg-[#16213e] px-6 py-6 shadow-lg shadow-black/20 md:px-8">
@@ -176,7 +198,7 @@ export default function TrashView() {
               这里显示从工作区移入 `.noteapp/trash` 的文档和附件。恢复会回到原路径，原路径被占用时会失败以避免覆盖。
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               onClick={loadTrash}
               disabled={isLoading}
@@ -186,7 +208,7 @@ export default function TrashView() {
               刷新
             </button>
             <button
-              onClick={() => void mutateTrash('/api/workspace/trash/empty', { method: 'POST' })}
+              onClick={() => setPendingTrashAction({ kind: 'empty' })}
               disabled={isLoading || snapshot.items.length === 0}
               className="flex w-fit items-center gap-2 rounded-lg border border-[#e94560]/40 bg-[#e94560]/10 px-4 py-2 text-[13px] font-medium text-[#ffb3c0] transition-colors hover:text-white disabled:opacity-50"
             >
@@ -228,7 +250,7 @@ export default function TrashView() {
             </div>
             <div className="divide-y divide-[#0f3460]">
               {filteredItems.length === 0 ? (
-                <div className="p-8 text-center text-[13px] text-slate-500">回收站为空。</div>
+                <div className="p-8 text-center text-[13px] leading-6 text-slate-500">{emptyStateText}</div>
               ) : (
                 filteredItems.map((item) => (
                   <div key={item.file_id} className="group grid grid-cols-1 items-center gap-4 p-4 transition-colors hover:bg-[#1f2b4a] md:grid-cols-12">
@@ -260,7 +282,7 @@ export default function TrashView() {
                         恢复
                       </button>
                       <button
-                        onClick={() => void mutateTrash(`/api/workspace/trash/${encodeURIComponent(item.file_id)}`, { method: 'DELETE' })}
+                        onClick={() => setPendingTrashAction({ kind: 'purge', item })}
                         disabled={isLoading}
                         className="rounded border border-[#e94560]/30 bg-[#e94560]/10 px-3 py-1.5 text-xs font-medium text-[#ffb3c0] transition-colors hover:text-white disabled:opacity-50"
                       >
@@ -274,6 +296,49 @@ export default function TrashView() {
           </div>
         </div>
       </div>
+      {pendingTrashAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-[#e94560]/40 bg-[#16213e] p-5 shadow-2xl shadow-black/50">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-[#e94560]/30 bg-[#e94560]/10 text-[#ffb3c0]">
+                <AlertCircle size={20} />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-[16px] font-bold text-white">
+                  {pendingTrashAction.kind === 'empty' ? '清空回收站' : '永久清除文件'}
+                </h2>
+                <p className="mt-2 text-[13px] leading-6 text-slate-300">
+                  {pendingTrashAction.kind === 'empty'
+                    ? `将永久删除回收站中的 ${snapshot.total_count} 个项目。执行后无法在本应用内恢复，请确认这些文件不再需要。`
+                    : `将永久删除回收站副本：${fileName(pendingTrashAction.item.path)}。执行后无法从回收站恢复到原路径。`}
+                </p>
+                {pendingTrashAction.kind === 'purge' && (
+                  <p className="mt-2 break-all font-mono text-[11px] text-slate-500">
+                    {pendingTrashAction.item.path}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingTrashAction(null)}
+                className="rounded border border-[#0f3460] bg-[#121316] px-4 py-2 text-[12px] font-semibold text-slate-300 hover:text-white"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={isLoading}
+                onClick={() => void confirmPendingTrashAction()}
+                className="rounded border border-[#e94560]/40 bg-[#e94560] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#ff5d76] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                确认永久删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -23,6 +23,7 @@ function extractNavItemsBlock(appSource) {
 const appSource = readProjectFile('src/App.tsx');
 const explorerSource = readProjectFile('src/views/ExplorerView.tsx');
 const graphSource = readProjectFile('src/views/GraphView.tsx');
+const trashSource = readProjectFile('src/views/TrashView.tsx');
 const settingsSource = readProjectFile('src/views/SettingsView.tsx');
 const localSettingsSource = readProjectFile('src/useLocalSettingsSnapshot.ts');
 const navItemsBlock = extractNavItemsBlock(appSource);
@@ -123,6 +124,10 @@ assert(
 assert(
   graphSource.includes('useWorkspaceLinksController'),
   'GraphView is not wired to workspace links',
+);
+assert(
+  trashSource.includes('pendingTrashAction') && trashSource.includes('confirmPendingTrashAction'),
+  'TrashView high-risk delete actions do not require a consequence confirmation',
 );
 assert(
   graphSource.includes('links?.outgoing') && graphSource.includes('links?.backlinks'),
