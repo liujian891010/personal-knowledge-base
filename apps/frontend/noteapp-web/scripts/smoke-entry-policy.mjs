@@ -113,6 +113,14 @@ assert(
   'Explorer delete action is not enabled for attachment trash flow',
 );
 assert(
+  explorerSource.includes('explainWorkspaceSearchResult') && explorerSource.includes('renderHighlightedSearchText'),
+  'Explorer search results do not expose explainable matching and highlighting',
+);
+assert(
+  explorerSource.includes('await loadLinks(created.file_id)'),
+  'Explorer unresolved wiki-link creation does not refresh the created note backlinks',
+);
+assert(
   graphSource.includes('useWorkspaceLinksController'),
   'GraphView is not wired to workspace links',
 );

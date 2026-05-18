@@ -34,6 +34,7 @@ import { useSyncShellController } from '../useSyncShellSnapshot';
 import type { AiContextDraft } from '../aiContext';
 import type { SyncShellSummary } from '../syncShell';
 import type { WorkspaceFileEntry } from '../workspaceFiles';
+import type { WorkspaceSearchResult } from '../workspaceSearch';
 import type {
   WorkspaceFileVersionContent,
   WorkspaceFileVersionDiff,
@@ -124,6 +125,74 @@ function notePathFromWikiLink(linkText: string): string {
   const target = linkText.split('|', 1)[0].split('#', 1)[0].trim();
   const safeName = target.replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-').replace(/\s+/g, ' ').trim();
   return `Notes/${safeName || 'Untitled'}.md`;
+}
+
+interface SearchResultExplanation {
+  matchedFields: string[];
+  matchedTerms: string[];
+  fallbackReason: string;
+}
+
+function searchTerms(query: string): string[] {
+  const terms = query
+    .trim()
+    .toLocaleLowerCase()
+    .split(/\s+/)
+    .map((term) => term.replace(/^"+|"+$/g, '').trim())
+    .filter(Boolean);
+  return Array.from(new Set(terms));
+}
+
+function explainWorkspaceSearchResult(
+  result: WorkspaceSearchResult,
+  query: string,
+): SearchResultExplanation {
+  const terms = searchTerms(query);
+  const fields = [
+    { label: 'title', text: result.title },
+    { label: 'path', text: result.path },
+    { label: 'snippet', text: result.snippet },
+  ];
+  const matchedFields = fields
+    .filter((field) => terms.some((term) => field.text.toLocaleLowerCase().includes(term)))
+    .map((field) => field.label);
+  const matchedTerms = terms.filter((term) => (
+    fields.some((field) => field.text.toLocaleLowerCase().includes(term))
+  ));
+
+  return {
+    matchedFields,
+    matchedTerms,
+    fallbackReason: matchedFields.length > 0
+      ? ''
+      : 'ranked by workspace search index',
+  };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function renderHighlightedSearchText(text: string, terms: string[]): React.ReactNode {
+  const normalizedTerms = terms
+    .map((term) => term.trim())
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  if (normalizedTerms.length === 0) {
+    return text;
+  }
+  const matcher = new RegExp(`(${normalizedTerms.map(escapeRegExp).join('|')})`, 'ig');
+  return text.split(matcher).map((part, index) => {
+    if (!part) {
+      return null;
+    }
+    const matched = normalizedTerms.some((term) => part.toLocaleLowerCase() === term.toLocaleLowerCase());
+    return matched ? (
+      <mark key={`${part}-${index}`} className="rounded bg-[#e94560]/25 px-0.5 text-[#ffd1d8]">
+        {part}
+      </mark>
+    ) : part;
+  });
 }
 
 function relativePathBetweenFiles(fromFilePath: string, targetPath: string): string {
@@ -1299,6 +1368,13 @@ export default function ExplorerView({
     }
     return fileIds;
   }, [searchResults, visibleFiles]);
+  const explainedSearchResults = useMemo(
+    () => searchResults.map((result) => ({
+      result,
+      explanation: explainWorkspaceSearchResult(result, searchQuery),
+    })),
+    [searchQuery, searchResults],
+  );
 
   function toggleContextFile(fileId: string) {
     setSelectedContextFileIds((current) => {
@@ -1705,6 +1781,7 @@ export default function ExplorerView({
       const path = notePathFromWikiLink(linkText);
       const created = await createNote(path, `# ${fileName(path).replace(/\.(md|markdown)$/i, '')}\n`);
       await loadLinks(selectedFile.file_id);
+      await loadLinks(created.file_id);
       await refreshSyncStatus();
       openWorkspaceFile(created.file_id);
       setEditorMode('edit');
@@ -1945,16 +2022,40 @@ export default function ExplorerView({
               {!searchError && searchResults.length === 0 && !isSearching && (
                 <div className="px-3 py-2 text-[11px] text-slate-500">No local matches.</div>
               )}
-              {searchResults.map((result) => (
+              {explainedSearchResults.map(({ result, explanation }) => (
                 <button
                   key={result.file_id}
                   onClick={() => openWorkspaceFile(result.file_id)}
                   className="block w-full border-b border-[#0f3460]/60 px-3 py-2 text-left last:border-b-0 hover:bg-[#1f2b4a]"
                   title={result.path}
                 >
-                  <div className="truncate text-[12px] font-semibold text-[#e3e2e6]">{result.title}</div>
-                  <div className="mt-1 truncate font-mono text-[10px] text-slate-500">{result.path}</div>
-                  <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-400">{result.snippet}</div>
+                  <div className="truncate text-[12px] font-semibold text-[#e3e2e6]">
+                    {renderHighlightedSearchText(result.title, explanation.matchedTerms)}
+                  </div>
+                  <div className="mt-1 truncate font-mono text-[10px] text-slate-500">
+                    {renderHighlightedSearchText(result.path, explanation.matchedTerms)}
+                  </div>
+                  <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-400">
+                    {renderHighlightedSearchText(result.snippet, explanation.matchedTerms)}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {(explanation.matchedFields.length > 0 ? explanation.matchedFields : [explanation.fallbackReason]).map((label) => (
+                      <span
+                        key={label}
+                        className="rounded border border-[#0f3460] bg-[#121316] px-1.5 py-0.5 text-[10px] font-medium text-[#a9c8fc]"
+                      >
+                        {label}
+                      </span>
+                    ))}
+                    {explanation.matchedTerms.slice(0, 4).map((term) => (
+                      <span
+                        key={term}
+                        className="rounded border border-[#43474f]/60 bg-[#1e2023] px-1.5 py-0.5 text-[10px] text-slate-400"
+                      >
+                        {term}
+                      </span>
+                    ))}
+                  </div>
                 </button>
               ))}
             </div>
