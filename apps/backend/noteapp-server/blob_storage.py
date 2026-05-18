@@ -5,6 +5,7 @@ import hmac
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -42,6 +43,33 @@ class FileSystemBlobStore:
             handle.seek(offset)
             return handle.read(size)
 
+    def diagnostics(self) -> dict[str, object]:
+        probe_key = f"_health/{uuid.uuid4().hex}.probe"
+        probe_path: Optional[Path] = None
+        try:
+            probe_path = self._path_for_key(probe_key)
+            self.put_object(probe_key, b"ok")
+            ok = self.read_object(probe_key) == b"ok"
+            return {
+                "ok": ok,
+                "backend": self.backend_name,
+                "type": "filesystem",
+                "root_dir": str(self.root_dir),
+                "checked": True,
+            }
+        except Exception as error:
+            return {
+                "ok": False,
+                "backend": self.backend_name,
+                "type": "filesystem",
+                "root_dir": str(self.root_dir),
+                "checked": True,
+                "error": str(error),
+            }
+        finally:
+            if probe_path is not None:
+                probe_path.unlink(missing_ok=True)
+
     def _path_for_key(self, object_key: str) -> Path:
         parts = [part for part in object_key.replace("\\", "/").split("/") if part]
         if not parts or any(part in {".", ".."} for part in parts):
@@ -71,6 +99,18 @@ class S3CompatibleBlobStore:
         self.access_key_id = access_key_id
         self.secret_access_key = secret_access_key
         self.backend_name = "s3"
+
+    def diagnostics(self) -> dict[str, object]:
+        return {
+            "ok": True,
+            "backend": self.backend_name,
+            "type": "s3-compatible",
+            "endpoint": self.endpoint,
+            "bucket": self.bucket,
+            "region": self.region,
+            "checked": False,
+            "status": "configured_not_probed",
+        }
 
     def put_object(self, object_key: str, payload: bytes) -> None:
         self._request("PUT", object_key, payload=payload)

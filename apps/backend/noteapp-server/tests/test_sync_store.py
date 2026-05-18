@@ -11,7 +11,10 @@ import sys
 
 SERVER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVER_ROOT))
+sys.path.insert(0, str(SERVER_ROOT / "scripts"))
 
+import backup_sqlite  # noqa: E402
+import restore_sqlite  # noqa: E402
 from blob_storage import BlobStorageError, FileSystemBlobStore  # noqa: E402
 from sync_store import BlobCapabilityError, CommitConflict, SyncStore, SyncStoreError  # noqa: E402
 from sync_repository import SQLiteStateRepository  # noqa: E402
@@ -128,6 +131,24 @@ class SyncStoreTests(unittest.TestCase):
         state = self.store._load()
         self.assertEqual(state["devices"][response["device_id"]]["user_id"], response["user_id"])
         self.assertEqual(len(state["users"]), 1)
+
+    def test_diagnostics_reports_repository_blob_store_and_state_counts(self) -> None:
+        self.store.register_device(
+            {
+                "account_key": "user@example.test",
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+            }
+        )
+
+        diagnostics = self.store.diagnostics()
+
+        self.assertTrue(diagnostics["ok"])
+        self.assertEqual(diagnostics["repository"]["type"], "json")
+        self.assertTrue(diagnostics["blob_store"]["ok"])
+        self.assertEqual(diagnostics["state"]["user_count"], 1)
+        self.assertEqual(diagnostics["state"]["device_count"], 1)
 
     def test_access_token_expiry_and_refresh_rotation(self) -> None:
         registered = self.store.register_device(
@@ -272,6 +293,27 @@ class SyncStoreTests(unittest.TestCase):
             self.assertEqual(projected_blob[1], "available")
         finally:
             connection.close()
+
+    def test_sqlite_backup_and_restore_scripts_round_trip_state(self) -> None:
+        db_path = Path(self.temp_dir.name) / "source.sqlite3"
+        store = SyncStore(Path(self.temp_dir.name) / "source", repository=SQLiteStateRepository(db_path))
+        registered = store.register_device(
+            {
+                "account_key": "user@example.test",
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+            }
+        )
+        backup_path = Path(self.temp_dir.name) / "backup.sqlite3"
+        restored_path = Path(self.temp_dir.name) / "restored.sqlite3"
+
+        backup_sqlite.backup_sqlite(db_path, backup_path)
+        restore_sqlite.restore_sqlite(backup_path, restored_path)
+
+        restored = SyncStore(Path(self.temp_dir.name) / "restored", repository=SQLiteStateRepository(restored_path))
+        self.assertEqual(restored.device_id_for_token(registered["access_token"]), registered["device_id"])
+        self.assertTrue(restored.diagnostics()["ok"])
 
     def test_sqlite_repository_imports_json_state(self) -> None:
         json_dir = Path(self.temp_dir.name) / "json"

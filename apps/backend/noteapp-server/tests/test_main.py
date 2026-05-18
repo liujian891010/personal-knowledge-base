@@ -21,6 +21,7 @@ class NoteappServerMainTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.original_store = server_main.store
+        server_main.metrics.reset()
         server_main.store = SyncStore(Path(self.temp_dir.name))
         self.client = TestClient(server_main.app)
 
@@ -53,6 +54,38 @@ class NoteappServerMainTests(unittest.TestCase):
             self.assertTrue(db_path.exists())
             self.assertFalse((data_dir / "sync-state.json").exists())
             self.assertEqual(created.device_id_for_token(registered["access_token"]), registered["device_id"])
+            diagnostics = created.diagnostics()
+            self.assertTrue(diagnostics["ok"])
+            self.assertEqual(diagnostics["repository"]["type"], "sqlite")
+            self.assertEqual(diagnostics["repository"]["applied_schema_version"], 2)
+
+    def test_health_dependencies_reports_runtime_components(self) -> None:
+        health = self.client.get("/health", headers={"x-request-id": "req-health"})
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(health.json(), {"ok": True})
+        self.assertEqual(health.headers["x-request-id"], "req-health")
+
+        details = self.client.get("/health/dependencies")
+        self.assertEqual(details.status_code, 200)
+        payload = details.json()
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["process"]["ok"])
+        self.assertEqual(payload["repository"]["type"], "json")
+        self.assertTrue(payload["blob_store"]["ok"])
+        self.assertTrue(payload["state"]["ok"])
+
+    def test_request_metrics_include_errors_and_request_id(self) -> None:
+        before = server_main.metrics.snapshot()["requests_total"]
+
+        response = self.client.get("/vaults/vault-1/head", headers={"x-request-id": "req-missing-auth"})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.headers["x-request-id"], "req-missing-auth")
+        self.assertEqual(response.headers["x-noteapp-error-code"], "missing_authorization")
+        metrics = self.client.get("/metrics").json()
+        self.assertGreaterEqual(metrics["requests_total"], before + 1)
+        self.assertGreaterEqual(metrics["errors_total"], 1)
+        self.assertGreater(metrics["error_rate"], 0)
 
     def _register_device(self, **overrides: object) -> dict[str, str]:
         payload = {

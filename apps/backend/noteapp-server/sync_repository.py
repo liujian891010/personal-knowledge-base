@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -24,6 +25,25 @@ class StateRepositoryConflict(RuntimeError):
 class JsonStateRepository:
     def __init__(self, state_path: Path) -> None:
         self.state_path = state_path
+
+    def diagnostics(self) -> dict[str, Any]:
+        parent = self.state_path.parent
+        parent_exists = parent.exists()
+        state_exists = self.state_path.exists()
+        writable = parent_exists and os.access(parent, os.W_OK)
+        readable = not state_exists or os.access(self.state_path, os.R_OK)
+        return {
+            "ok": parent_exists and writable and readable,
+            "type": "json",
+            "path": str(self.state_path),
+            "exists": state_exists,
+            "parent_exists": parent_exists,
+            "writable": writable,
+            "readable": readable,
+            "schema_version": None,
+            "migration_versions": [],
+            "applied_schema_version": None,
+        }
 
     def load(self, default_state: dict[str, Any]) -> dict[str, Any]:
         if not self.state_path.exists():
@@ -57,6 +77,37 @@ class SQLiteStateRepository:
             raise ValueError("The SQLite repository profile requires a file-backed database path.")
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.migrate()
+
+    def diagnostics(self) -> dict[str, Any]:
+        try:
+            with self._connection() as connection:
+                quick_check = connection.execute("PRAGMA quick_check").fetchone()[0]
+                migration_rows = connection.execute(
+                    "SELECT version, name, applied_at_ms FROM schema_migrations ORDER BY version"
+                ).fetchall()
+                state_row = connection.execute("SELECT version, updated_at_ms FROM sync_state WHERE id = ?", ("current",)).fetchone()
+        except Exception as error:
+            return {
+                "ok": False,
+                "type": "sqlite",
+                "path": str(self.db_path),
+                "schema_version": SQLITE_SCHEMA_VERSION,
+                "error": str(error),
+            }
+
+        migration_versions = [int(row["version"]) for row in migration_rows]
+        return {
+            "ok": quick_check == "ok",
+            "type": "sqlite",
+            "path": str(self.db_path),
+            "exists": self.db_path.exists(),
+            "schema_version": SQLITE_SCHEMA_VERSION,
+            "migration_versions": migration_versions,
+            "applied_schema_version": max(migration_versions) if migration_versions else 0,
+            "state_version": None if state_row is None else int(state_row["version"]),
+            "state_updated_at_ms": None if state_row is None else int(state_row["updated_at_ms"]),
+            "quick_check": quick_check,
+        }
 
     def load(self, default_state: dict[str, Any]) -> dict[str, Any]:
         with self._connection() as connection:

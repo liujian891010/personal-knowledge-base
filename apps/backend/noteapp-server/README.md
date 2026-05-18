@@ -21,6 +21,7 @@ This is a local-development AG04 MVP. It implements the frozen sync API shape ne
 13. Repository-backed account sessions with access/refresh token rotation
 14. SQLite repository profile with schema migration and JSON-state import
 15. Object-storage-backed encrypted blob persistence with local filesystem and S3/OSS-compatible profiles
+16. Operational readiness endpoints, structured request logs, runtime metrics, and SQLite backup/restore scripts
 
 State is stored locally as JSON under `.data/` by default:
 
@@ -33,6 +34,8 @@ Override it with:
 ```powershell
 $env:NOTEAPP_SERVER_DATA_DIR='C:\tmp\noteapp-server-data'
 ```
+
+Copy `.env.example` as the deployment baseline for database, object storage, token secret, CORS, and log-level settings.
 
 Enable the SQLite repository profile with:
 
@@ -81,6 +84,18 @@ Health check:
 http://127.0.0.1:8000/health
 ```
 
+Dependency diagnostics:
+
+```text
+http://127.0.0.1:8000/health/dependencies
+```
+
+Runtime metrics:
+
+```text
+http://127.0.0.1:8000/metrics
+```
+
 ## Test
 
 From the repository root:
@@ -89,6 +104,28 @@ From the repository root:
 python -m unittest apps\backend\noteapp-server\tests\test_sync_store.py
 python tests\e2e\sync_server_smoke.py
 ```
+
+## Operations
+
+Set `NOTEAPP_SERVER_LOG_LEVEL=INFO` to emit one structured JSON request log per HTTP request. Logs include `request_id`, `user_id`, `device_id`, `vault_id`, `error_code`, and `duration_ms`. Incoming `X-Request-Id` is propagated to the response; otherwise the server generates one.
+
+`GET /health` stays intentionally small for load balancers. `GET /health/dependencies` checks process state, repository health, object storage health, and SQLite migration versions. Filesystem blob storage performs a short read/write/delete probe; S3/OSS-compatible storage reports configuration without a destructive bucket probe.
+
+`GET /metrics` returns JSON counters for requests, error rate, commit conflicts, blob upload failures, capability expiry/revocation events, and tombstone GC deletion count.
+
+Create a consistent SQLite backup with:
+
+```powershell
+python apps\backend\noteapp-server\scripts\backup_sqlite.py --sqlite-db apps\backend\noteapp-server\.data\noteapp-server.sqlite3 --backup-dir backups\noteapp-server
+```
+
+Restore into a fresh destination with:
+
+```powershell
+python apps\backend\noteapp-server\scripts\restore_sqlite.py --backup-path backups\noteapp-server\noteapp-server-YYYYMMDDTHHMMSSZ.sqlite3 --sqlite-db apps\backend\noteapp-server\.data\noteapp-server-restored.sqlite3
+```
+
+Use `--force` only during a planned recovery drill, because it replaces the destination database. Object storage backups should use bucket versioning plus lifecycle retention; destructive schema rollbacks are not supported, so migrations must remain forward compatible.
 
 ## Auth Boundary
 
@@ -127,10 +164,10 @@ The client requests each authorized range with `X-Noteapp-Range-Offset` and `X-N
 This MVP is intentionally not production-ready:
 
 1. Account/session state has no password flow, external IdP, MFA, or account recovery
-2. SQLite is a local-file repository profile; managed DB backup/restore and operational migration rollout are still pending
-3. S3/OSS mode uses a server streaming proxy; production credential rotation, bucket lifecycle rules, and observability are still pending
-4. Tombstone GC has no background worker, metrics, or production retention controls
-5. CAS locking is implemented for the SQLite repository profile; distributed multi-node locking, metrics, and operational alerts are still pending
+2. SQLite is a local-file repository profile; managed DB migration rollout and hosted backup scheduling are still pending
+3. S3/OSS mode uses a server streaming proxy; production credential rotation and bucket lifecycle automation are still pending
+4. Tombstone GC has no background worker or production retention controls
+5. CAS locking is implemented for the SQLite repository profile; distributed multi-node locking and operational alerts are still pending
 
 The `V1043-M3-01` production backend architecture is frozen in:
 

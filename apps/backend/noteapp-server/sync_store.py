@@ -14,7 +14,7 @@ from typing import Any, Callable, Optional, TypeVar
 from urllib.parse import quote
 
 from blob_storage import BlobStorageError, FileSystemBlobStore
-from sync_repository import JsonStateRepository, StateRepositoryConflict
+from sync_repository import JsonStateRepository, REPOSITORY_VERSION_KEY, StateRepositoryConflict
 
 
 class SyncStoreError(ValueError):
@@ -283,6 +283,60 @@ class SyncStore:
             self.repository.save(state)
         except StateRepositoryConflict as error:
             raise SyncStoreError(error.code, str(error)) from error
+
+    def diagnostics(self) -> dict[str, Any]:
+        repository = self._component_diagnostics(self.repository)
+        blob_store = self._component_diagnostics(self.blob_store)
+        try:
+            with self._lock:
+                state = self._load()
+            now_ms = _now_ms()
+            capabilities = state.get("capabilities", {})
+            if not isinstance(capabilities, dict):
+                capabilities = {}
+            state_diagnostics = {
+                "ok": True,
+                "schema_version": state.get("schema_version"),
+                "repository_version": state.get(REPOSITORY_VERSION_KEY),
+                "user_count": self._dict_count(state.get("users")),
+                "device_count": self._dict_count(state.get("devices")),
+                "vault_count": self._dict_count(state.get("vaults")),
+                "blob_count": self._dict_count(state.get("blobs")),
+                "capability_count": len(capabilities),
+                "expired_capability_count": sum(
+                    1
+                    for capability in capabilities.values()
+                    if isinstance(capability, dict) and capability.get("expires_at_ms", 0) < now_ms
+                ),
+                "resumable_upload_session_count": self._dict_count(state.get("resumable_upload_sessions")),
+            }
+        except Exception as error:
+            state_diagnostics = {
+                "ok": False,
+                "error": str(error),
+            }
+
+        return {
+            "ok": bool(repository.get("ok", True) and blob_store.get("ok", True) and state_diagnostics.get("ok", False)),
+            "data_dir": str(self.data_dir),
+            "repository": repository,
+            "blob_store": blob_store,
+            "state": state_diagnostics,
+        }
+
+    def _component_diagnostics(self, component: Any) -> dict[str, Any]:
+        diagnostics = getattr(component, "diagnostics", None)
+        if callable(diagnostics):
+            result = diagnostics()
+            if isinstance(result, dict):
+                return result
+        return {
+            "ok": True,
+            "type": component.__class__.__name__,
+        }
+
+    def _dict_count(self, value: Any) -> int:
+        return len(value) if isinstance(value, dict) else 0
 
     def _update_state(self, mutator: Callable[[dict[str, Any]], T]) -> T:
         try:

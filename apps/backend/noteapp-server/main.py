@@ -1,15 +1,128 @@
 from __future__ import annotations
 
 import os
+import json
+import logging
+import threading
+import time
+import uuid
+from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from blob_storage import FileSystemBlobStore, S3CompatibleBlobStore
 from sync_repository import SQLiteStateRepository, sqlite_path_from_database_url
 from sync_store import BlobCapabilityError, CommitConflict, SyncStore, SyncStoreError
+
+
+class RuntimeMetrics:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._counters: Counter[str] = Counter()
+        self._status_codes: Counter[str] = Counter()
+        self._methods: Counter[str] = Counter()
+        self.started_at_ms = 0
+        self.reset()
+
+    def reset(self) -> None:
+        with self._lock:
+            self.started_at_ms = _now_ms()
+            self._counters = Counter()
+            self._status_codes = Counter()
+            self._methods = Counter()
+
+    def record_request(self, *, method: str, route_path: str, status_code: int, error_code: Optional[str]) -> None:
+        with self._lock:
+            self._counters["requests_total"] += 1
+            self._status_codes[str(status_code)] += 1
+            self._methods[method] += 1
+            if status_code >= 400:
+                self._counters["errors_total"] += 1
+            if route_path == "/vaults/{vault_id}/commits" and method == "POST":
+                self._counters["commit_attempts_total"] += 1
+                if error_code in {"base_revision_conflict", "manifest_conflict"}:
+                    self._counters["commit_conflicts_total"] += 1
+            if route_path in {
+                "/_capabilities/blobs/{capability_token}",
+                "/_capabilities/blobs/resumable-upload/{session_id}",
+            } and method == "PUT":
+                self._counters["blob_upload_attempts_total"] += 1
+                if status_code >= 400:
+                    self._counters["blob_upload_failures_total"] += 1
+            if error_code == "capability_expired":
+                self._counters["capability_expired_total"] += 1
+            if error_code == "capability_not_found" and route_path.startswith("/_capabilities/"):
+                self._counters["capability_missing_or_revoked_total"] += 1
+
+    def record_capability_revocation_event(self) -> None:
+        with self._lock:
+            self._counters["capability_revocation_events_total"] += 1
+
+    def record_tombstone_gc(self, reclaimed_count: int) -> None:
+        with self._lock:
+            self._counters["tombstone_gc_deleted_total"] += max(0, reclaimed_count)
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            counters = Counter(self._counters)
+            status_codes = dict(self._status_codes)
+            methods = dict(self._methods)
+            started_at_ms = self.started_at_ms
+        requests_total = counters["requests_total"]
+        commit_attempts_total = counters["commit_attempts_total"]
+        blob_upload_attempts_total = counters["blob_upload_attempts_total"]
+        return {
+            "ok": True,
+            "started_at_ms": started_at_ms,
+            "uptime_ms": max(0, _now_ms() - started_at_ms),
+            "requests_total": requests_total,
+            "errors_total": counters["errors_total"],
+            "error_rate": _rate(counters["errors_total"], requests_total),
+            "status_codes": status_codes,
+            "methods": methods,
+            "commit_attempts_total": commit_attempts_total,
+            "commit_conflicts_total": counters["commit_conflicts_total"],
+            "commit_conflict_rate": _rate(counters["commit_conflicts_total"], commit_attempts_total),
+            "blob_upload_attempts_total": blob_upload_attempts_total,
+            "blob_upload_failures_total": counters["blob_upload_failures_total"],
+            "blob_upload_failure_rate": _rate(counters["blob_upload_failures_total"], blob_upload_attempts_total),
+            "capability_expired_total": counters["capability_expired_total"],
+            "capability_missing_or_revoked_total": counters["capability_missing_or_revoked_total"],
+            "capability_revocation_events_total": counters["capability_revocation_events_total"],
+            "tombstone_gc_deleted_total": counters["tombstone_gc_deleted_total"],
+        }
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _rate(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(numerator / denominator, 6)
+
+
+logger = logging.getLogger("noteapp.server")
+metrics = RuntimeMetrics()
+
+
+def _configure_logging() -> None:
+    level_name = os.environ.get("NOTEAPP_SERVER_LOG_LEVEL", "WARNING").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(handler)
+    logger.setLevel(level)
+    logger.propagate = False
+
+
+_configure_logging()
 
 
 def _default_data_dir() -> Path:
@@ -57,26 +170,51 @@ def create_store_from_env() -> SyncStore:
     return SyncStore(data_dir, blob_store=blob_store)
 
 
+def _cors_origins_from_env() -> list[str]:
+    raw_value = os.environ.get("NOTEAPP_SERVER_CORS_ORIGINS", "").strip()
+    if not raw_value:
+        return []
+    if raw_value == "*":
+        return ["*"]
+    return [origin.strip() for origin in raw_value.split(",") if origin.strip()]
+
+
 store = create_store_from_env()
 app = FastAPI(title="noteapp-server")
+cors_origins = _cors_origins_from_env()
+if cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 @app.exception_handler(HTTPException)
-async def http_exception_to_contract_error(_: Request, exc: HTTPException) -> JSONResponse:
+async def http_exception_to_contract_error(request: Request, exc: HTTPException) -> JSONResponse:
     if isinstance(exc.detail, dict) and "code" in exc.detail and "message" in exc.detail:
-        return JSONResponse(status_code=exc.status_code, content=exc.detail)
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"code": "http_error", "message": str(exc.detail)},
-    )
+        request.state.error_code = exc.detail["code"]
+        return _contract_error_response(exc.status_code, exc.detail["code"], exc.detail["message"])
+    request.state.error_code = "http_error"
+    return _contract_error_response(exc.status_code, "http_error", str(exc.detail))
 
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"code": code, "message": message})
 
 
+def _contract_error_response(status_code: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"code": code, "message": message},
+        headers={"x-noteapp-error-code": code},
+    )
+
+
 def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
-    return JSONResponse(status_code=status_code, content={"code": code, "message": message})
+    return _contract_error_response(status_code, code, message)
 
 
 def _status_code_for_store_error(error: SyncStoreError) -> int:
@@ -103,6 +241,57 @@ def _store_error_response(error: SyncStoreError) -> JSONResponse:
     return _error_response(_status_code_for_store_error(error), error.code, str(error))
 
 
+@app.middleware("http")
+async def request_observability_middleware(request: Request, call_next: Any) -> Response:
+    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+    request.state.request_id = request_id
+    started = time.perf_counter()
+    status_code = 500
+    error_code: Optional[str] = None
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        error_code = response.headers.get("x-noteapp-error-code") or getattr(request.state, "error_code", None)
+        response.headers["x-request-id"] = request_id
+        return response
+    except Exception as error:
+        error_code = getattr(error, "code", "unhandled_exception")
+        raise
+    finally:
+        duration_ms = round((time.perf_counter() - started) * 1000, 3)
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", request.url.path)
+        try:
+            vault_id = request.path_params.get("vault_id")
+        except Exception:
+            vault_id = None
+        metrics.record_request(
+            method=request.method,
+            route_path=route_path,
+            status_code=status_code,
+            error_code=error_code,
+        )
+        logger.info(
+            json.dumps(
+                {
+                    "event": "http_request",
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "route": route_path,
+                    "status_code": status_code,
+                    "duration_ms": duration_ms,
+                    "user_id": getattr(request.state, "user_id", None),
+                    "device_id": getattr(request.state, "device_id", None),
+                    "vault_id": vault_id,
+                    "error_code": error_code,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+
+
 def _bearer_token(request: Request) -> Optional[str]:
     authorization = request.headers.get("authorization")
     if not authorization:
@@ -121,6 +310,8 @@ def _required_auth_context(request: Request) -> dict[str, str]:
         context = store.authorize_access_token(token)
     except SyncStoreError as error:
         raise _error(_status_code_for_store_error(error), error.code, str(error)) from error
+    request.state.user_id = context["user_id"]
+    request.state.device_id = context["device_id"]
     store.touch_device(context["device_id"])
     return context
 
@@ -158,6 +349,29 @@ def _required_string_header(request: Request, name: str) -> str:
 @app.get("/health")
 def health() -> dict[str, bool]:
     return {"ok": True}
+
+
+@app.get("/health/dependencies")
+def health_dependencies(response: Response) -> dict[str, Any]:
+    store_diagnostics = store.diagnostics()
+    payload = {
+        "ok": bool(store_diagnostics.get("ok")),
+        "process": {
+            "ok": True,
+            "pid": os.getpid(),
+            "uptime_ms": metrics.snapshot()["uptime_ms"],
+            "log_level": os.environ.get("NOTEAPP_SERVER_LOG_LEVEL", "WARNING").upper(),
+        },
+        **store_diagnostics,
+    }
+    if not payload["ok"]:
+        response.status_code = 503
+    return payload
+
+
+@app.get("/metrics")
+def runtime_metrics() -> dict[str, Any]:
+    return metrics.snapshot()
 
 
 @app.post("/devices/register")
@@ -201,6 +415,7 @@ def delete_device(device_id: str, request: Request) -> Response:
             raise _error(404, "device_not_found", "Device was not found.")
     except SyncStoreError as error:
         raise _error(_status_code_for_store_error(error), error.code, str(error)) from error
+    metrics.record_capability_revocation_event()
     return Response(status_code=204)
 
 
@@ -234,7 +449,10 @@ def run_tombstone_gc(vault_id: str, request: Request, payload: Optional[dict[str
             raise _error(400, "invalid_request", f"{key} must be an integer")
         options[key] = body[key]
     try:
-        return store.run_tombstone_gc(vault_id, **options)
+        result = store.run_tombstone_gc(vault_id, **options)
+        reclaimed_count = result.get("reclaimed_count", 0)
+        metrics.record_tombstone_gc(reclaimed_count if isinstance(reclaimed_count, int) else 0)
+        return result
     except SyncStoreError as error:
         return _store_error_response(error)
 
@@ -261,7 +479,11 @@ def create_commit(vault_id: str, payload: dict[str, Any], request: Request) -> J
         result = store.create_commit(vault_id, _body_mapping(payload), auth_device_id=device_id)
         return JSONResponse(status_code=200, content=result)
     except CommitConflict as conflict:
-        return JSONResponse(status_code=409, content=conflict.payload)
+        return JSONResponse(
+            status_code=409,
+            content=conflict.payload,
+            headers={"x-noteapp-error-code": conflict.payload["code"]},
+        )
     except SyncStoreError as error:
         return _store_error_response(error)
 
