@@ -36,14 +36,24 @@ def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"code": code, "message": message})
 
 
-def _store_error_response(error: SyncStoreError) -> JSONResponse:
+def _status_code_for_store_error(error: SyncStoreError) -> int:
     status_code_by_code = {
+        "access_token_expired": 401,
         "blob_not_found": 404,
+        "device_forbidden": 403,
         "device_not_found": 404,
+        "device_revoked": 403,
         "file_version_not_found": 404,
+        "invalid_access_token": 401,
+        "invalid_refresh_token": 401,
+        "refresh_token_expired": 401,
         "resumable_upload_session_not_found": 404,
     }
-    return _error_response(status_code_by_code.get(error.code, 400), error.code, str(error))
+    return status_code_by_code.get(error.code, 400)
+
+
+def _store_error_response(error: SyncStoreError) -> JSONResponse:
+    return _error_response(_status_code_for_store_error(error), error.code, str(error))
 
 
 def _bearer_token(request: Request) -> Optional[str]:
@@ -56,26 +66,20 @@ def _bearer_token(request: Request) -> Optional[str]:
     return token
 
 
-def _authorized_device_id(request: Request) -> Optional[str]:
-    token = _bearer_token(request)
-    if token is None:
-        return None
-    device_id = store.device_id_for_token(token)
-    if device_id is None:
-        raise _error(403, "device_revoked", "Device token is invalid or revoked.")
-    store.touch_device(device_id)
-    return device_id
-
-
-def _required_authorized_device_id(request: Request) -> str:
+def _required_auth_context(request: Request) -> dict[str, str]:
     token = _bearer_token(request)
     if token is None:
         raise _error(401, "missing_authorization", "Authorization bearer token is required.")
-    device_id = store.device_id_for_token(token)
-    if device_id is None:
-        raise _error(403, "device_revoked", "Device token is invalid or revoked.")
-    store.touch_device(device_id)
-    return device_id
+    try:
+        context = store.authorize_access_token(token)
+    except SyncStoreError as error:
+        raise _error(_status_code_for_store_error(error), error.code, str(error)) from error
+    store.touch_device(context["device_id"])
+    return context
+
+
+def _required_authorized_device_id(request: Request) -> str:
+    return _required_auth_context(request)["device_id"]
 
 
 def _body_mapping(payload: Any) -> dict[str, Any]:
@@ -117,11 +121,39 @@ def register_device(payload: dict[str, Any]) -> dict[str, Any]:
         raise _error(400, error.code, str(error)) from error
 
 
+@app.post("/auth/login")
+def login(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return store.register_device(_body_mapping(payload))
+    except SyncStoreError as error:
+        raise _error(400, error.code, str(error)) from error
+
+
+@app.post("/auth/refresh")
+def refresh_token(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return store.refresh_session(_body_mapping(payload))
+    except SyncStoreError as error:
+        return _store_error_response(error)
+
+
+@app.post("/auth/logout")
+def logout(request: Request) -> Response:
+    token = _bearer_token(request)
+    if token is None:
+        raise _error(401, "missing_authorization", "Authorization bearer token is required.")
+    store.revoke_session_for_token(token)
+    return Response(status_code=204)
+
+
 @app.delete("/devices/{device_id}")
 def delete_device(device_id: str, request: Request) -> Response:
-    _required_authorized_device_id(request)
-    if not store.delete_device(device_id):
-        raise _error(404, "device_not_found", "Device was not found.")
+    actor_device_id = _required_authorized_device_id(request)
+    try:
+        if not store.delete_device(device_id, actor_device_id=actor_device_id):
+            raise _error(404, "device_not_found", "Device was not found.")
+    except SyncStoreError as error:
+        raise _error(_status_code_for_store_error(error), error.code, str(error)) from error
     return Response(status_code=204)
 
 
@@ -162,13 +194,13 @@ def run_tombstone_gc(vault_id: str, request: Request, payload: Optional[dict[str
 
 @app.get("/vaults/{vault_id}/head")
 def get_vault_head(vault_id: str, request: Request) -> dict[str, Any]:
-    _authorized_device_id(request)
+    _required_authorized_device_id(request)
     return store.get_vault_head(vault_id)
 
 
 @app.get("/vaults/{vault_id}/manifests/{revision}")
 def get_manifest(vault_id: str, revision: int, request: Request) -> dict[str, Any]:
-    _authorized_device_id(request)
+    _required_authorized_device_id(request)
     manifest = store.get_manifest(vault_id, revision)
     if manifest is None:
         raise _error(404, "manifest_not_found", "Manifest revision was not found.")
@@ -177,7 +209,7 @@ def get_manifest(vault_id: str, revision: int, request: Request) -> dict[str, An
 
 @app.post("/vaults/{vault_id}/commits")
 def create_commit(vault_id: str, payload: dict[str, Any], request: Request) -> JSONResponse:
-    device_id = _authorized_device_id(request)
+    device_id = _required_authorized_device_id(request)
     try:
         result = store.create_commit(vault_id, _body_mapping(payload), auth_device_id=device_id)
         return JSONResponse(status_code=200, content=result)
@@ -189,7 +221,7 @@ def create_commit(vault_id: str, payload: dict[str, Any], request: Request) -> J
 
 @app.post("/vaults/{vault_id}/commits/resolve-intent")
 def resolve_commit_intent(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
-    _authorized_device_id(request)
+    _required_authorized_device_id(request)
     try:
         return store.resolve_commit_intent(vault_id, _body_mapping(payload))
     except SyncStoreError as error:
@@ -198,7 +230,7 @@ def resolve_commit_intent(vault_id: str, payload: dict[str, Any], request: Reque
 
 @app.post("/vaults/{vault_id}/ack")
 def ack_revisions(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
-    device_id = _authorized_device_id(request)
+    device_id = _required_authorized_device_id(request)
     try:
         return store.ack_revisions(vault_id, _body_mapping(payload), device_id=device_id)
     except SyncStoreError as error:
@@ -207,7 +239,7 @@ def ack_revisions(vault_id: str, payload: dict[str, Any], request: Request) -> d
 
 @app.post("/vaults/{vault_id}/file-versions/list")
 def list_file_versions(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
-    _authorized_device_id(request)
+    _required_authorized_device_id(request)
     try:
         return store.list_file_versions(vault_id, _body_mapping(payload))
     except SyncStoreError as error:
@@ -216,7 +248,7 @@ def list_file_versions(vault_id: str, payload: dict[str, Any], request: Request)
 
 @app.patch("/vaults/{vault_id}/file-versions/{version_id}")
 def update_file_version(vault_id: str, version_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
-    _authorized_device_id(request)
+    _required_authorized_device_id(request)
     try:
         return store.update_file_version(vault_id, version_id, _body_mapping(payload))
     except SyncStoreError as error:
@@ -225,7 +257,7 @@ def update_file_version(vault_id: str, version_id: str, payload: dict[str, Any],
 
 @app.post("/vaults/{vault_id}/blobs/check")
 def check_blobs(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
-    _authorized_device_id(request)
+    _required_authorized_device_id(request)
     try:
         return store.check_blobs(vault_id, _body_mapping(payload))
     except SyncStoreError as error:
@@ -234,7 +266,7 @@ def check_blobs(vault_id: str, payload: dict[str, Any], request: Request) -> dic
 
 @app.post("/vaults/{vault_id}/blobs/upload-init")
 def init_blob_upload(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
-    device_id = _authorized_device_id(request)
+    device_id = _required_authorized_device_id(request)
     try:
         return store.init_blob_upload(vault_id, _body_mapping(payload), request_base_url=str(request.base_url), device_id=device_id)
     except SyncStoreError as error:
@@ -243,7 +275,7 @@ def init_blob_upload(vault_id: str, payload: dict[str, Any], request: Request) -
 
 @app.post("/vaults/{vault_id}/blobs/resumable-upload-init")
 def init_resumable_blob_upload(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
-    device_id = _authorized_device_id(request)
+    device_id = _required_authorized_device_id(request)
     try:
         return store.init_resumable_blob_upload(
             vault_id,
@@ -257,7 +289,7 @@ def init_resumable_blob_upload(vault_id: str, payload: dict[str, Any], request: 
 
 @app.post("/vaults/{vault_id}/blobs/resumable-upload-complete")
 def complete_resumable_blob_upload(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
-    _authorized_device_id(request)
+    _required_authorized_device_id(request)
     try:
         return store.complete_resumable_blob_upload(vault_id, _body_mapping(payload))
     except SyncStoreError as error:
@@ -266,7 +298,7 @@ def complete_resumable_blob_upload(vault_id: str, payload: dict[str, Any], reque
 
 @app.post("/vaults/{vault_id}/blobs/download-init")
 def init_blob_download(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
-    device_id = _authorized_device_id(request)
+    device_id = _required_authorized_device_id(request)
     try:
         return store.init_blob_download(vault_id, _body_mapping(payload), request_base_url=str(request.base_url), device_id=device_id)
     except SyncStoreError as error:
@@ -275,7 +307,7 @@ def init_blob_download(vault_id: str, payload: dict[str, Any], request: Request)
 
 @app.post("/vaults/{vault_id}/blobs/resumable-download-init")
 def init_resumable_blob_download(vault_id: str, payload: dict[str, Any], request: Request) -> dict[str, Any]:
-    device_id = _authorized_device_id(request)
+    device_id = _required_authorized_device_id(request)
     try:
         return store.init_resumable_blob_download(
             vault_id,

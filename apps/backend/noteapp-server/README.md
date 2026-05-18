@@ -6,7 +6,7 @@ Python FastAPI sync server for the NoteApp V1 sync loop.
 
 This is a local-development AG04 MVP. It implements the frozen sync API shape needed by the existing desktop client:
 
-1. Device registration and device revocation
+1. Device registration, account bootstrap, and device revocation
 2. Vault head lookup
 3. Manifest fetch by revision
 4. CAS commit
@@ -18,6 +18,7 @@ This is a local-development AG04 MVP. It implements the frozen sync API shape ne
 10. Ranged blob download capabilities for encrypted bytes
 11. Vault device list / heartbeat state
 12. Tombstone GC eligibility and audit logs for the local JSON store
+13. JSON-backed account sessions with access/refresh token rotation
 
 State is stored locally under `.data/` by default:
 
@@ -56,9 +57,9 @@ python tests\e2e\sync_server_smoke.py
 
 ## Auth Boundary
 
-`POST /devices/register` returns a bearer token. Authenticated API calls validate that token, and `DELETE /devices/{deviceId}` revokes the token plus outstanding blob capabilities for that device.
+`POST /devices/register` and `POST /auth/login` create a local account session and return an access token, refresh token, and expiry timestamps. Vault-level APIs require `Authorization: Bearer <access_token>`; missing, invalid, expired, or revoked tokens are rejected before vault operations run.
 
-For local desktop-client bootstrapping, calls without `Authorization` are still accepted. That keeps the current CLI examples usable until a proper login/device bootstrap flow is wired into the app.
+`POST /auth/refresh` rotates both the access token and refresh token. `POST /auth/logout` revokes the current session. `DELETE /devices/{deviceId}` is limited to the current account and revokes the device session, refresh token, and outstanding blob capabilities for that device.
 
 ## Blob Boundary
 
@@ -90,12 +91,10 @@ The client requests each authorized range with `X-Noteapp-Range-Offset` and `X-N
 
 This MVP is intentionally not production-ready:
 
-1. No account model
-2. No durable database
-3. No real object storage
-4. No token expiry enforcement beyond capability expiry
-5. Tombstone GC is local-store only; no background worker, metrics, or production retention controls
-6. No cross-process CAS lock beyond the single-process JSON store
+1. Account/session state is a JSON-backed dev profile; no durable database, password flow, external IdP, MFA, or account recovery
+2. No real object storage
+3. Tombstone GC is local-store only; no background worker, metrics, or production retention controls
+4. No cross-process CAS lock beyond the single-process JSON store
 
 The `V1043-M3-01` production backend architecture is frozen in:
 

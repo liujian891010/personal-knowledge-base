@@ -42,6 +42,8 @@ DEFAULT_FILE_VERSION_RETENTION_POLICY = {
     "keep_latest": 50,
     "keep_pinned": True,
 }
+DEFAULT_ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000
+DEFAULT_REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000
 DEFAULT_DEVICE_INACTIVE_AFTER_MS = 7 * 24 * 60 * 60 * 1000
 DEFAULT_TOMBSTONE_GC_MIN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 MAX_TOMBSTONE_GC_LOGS = 100
@@ -54,6 +56,19 @@ def _now_ms() -> int:
 def _expires_at(minutes: int = 15) -> str:
     value = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     return value.isoformat().replace("+00:00", "Z")
+
+
+def _iso_at_ms(value: int) -> str:
+    return datetime.fromtimestamp(value / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _optional_positive_int(payload: dict[str, Any], key: str, default: int) -> int:
+    if key not in payload:
+        return default
+    value = payload.get(key)
+    if not isinstance(value, int) or value <= 0:
+        raise SyncStoreError("invalid_request", f"{key} must be a positive integer")
+    return value
 
 
 def _require_string(payload: dict[str, Any], key: str) -> str:
@@ -227,8 +242,12 @@ class SyncStore:
     def _default_state(self) -> dict[str, Any]:
         return {
             "schema_version": "server-dev-v1",
+            "users": {},
+            "user_logins": {},
             "devices": {},
+            "sessions": {},
             "tokens": {},
+            "refresh_tokens": {},
             "vaults": {},
             "blobs": {},
             "capabilities": {},
@@ -298,16 +317,98 @@ class SyncStore:
             active_device_ids.append(device_id)
         return active_device_ids
 
-    def device_id_for_token(self, token: str) -> Optional[str]:
+    def _ensure_user(self, state: dict[str, Any], *, account_key: str, display_name: str, now_ms: int) -> dict[str, Any]:
+        user_id = state["user_logins"].get(account_key)
+        if isinstance(user_id, str):
+            user = state["users"].get(user_id)
+            if isinstance(user, dict):
+                user["display_name"] = display_name or user.get("display_name") or account_key
+                user["updated_at_ms"] = now_ms
+                return user
+
+        user_id = f"user_{uuid.uuid4().hex}"
+        user = {
+            "user_id": user_id,
+            "account_key": account_key,
+            "display_name": display_name or account_key,
+            "status": "active",
+            "created_at_ms": now_ms,
+            "updated_at_ms": now_ms,
+        }
+        state["users"][user_id] = user
+        state["user_logins"][account_key] = user_id
+        return user
+
+    def _session_token_response(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        access_token: str,
+        refresh_token: str,
+        access_expires_at_ms: int,
+        refresh_expires_at_ms: int,
+    ) -> dict[str, Any]:
+        return {
+            "user_id": user_id,
+            "device_id": device_id,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "expires_at": _iso_at_ms(access_expires_at_ms),
+            "refresh_expires_at": _iso_at_ms(refresh_expires_at_ms),
+        }
+
+    def _revoke_device_sessions_locked(self, state: dict[str, Any], device_id: str, *, revoked_at_ms: int) -> None:
+        for session in state["sessions"].values():
+            if not isinstance(session, dict) or session.get("device_id") != device_id:
+                continue
+            session["revoked_at_ms"] = revoked_at_ms
+            refresh_token = session.get("refresh_token")
+            if isinstance(refresh_token, str):
+                state["refresh_tokens"].pop(refresh_token, None)
+
+    def authorize_access_token(self, token: str, *, now_ms: Optional[int] = None) -> dict[str, str]:
+        resolved_now_ms = _now_ms() if now_ms is None else now_ms
         with self._lock:
             state = self._load()
-            device_id = state["tokens"].get(token)
-            if not isinstance(device_id, str):
-                return None
+            session_id = state["tokens"].get(token)
+            if isinstance(session_id, str):
+                session = state["sessions"].get(session_id)
+                if isinstance(session, dict):
+                    device_id = session.get("device_id")
+                    user_id = session.get("user_id")
+                    if not isinstance(device_id, str) or not isinstance(user_id, str):
+                        raise SyncStoreError("invalid_access_token", "Access token is invalid")
+                    device = state["devices"].get(device_id)
+                    if (
+                        not isinstance(device, dict)
+                        or device.get("revoked")
+                        or session.get("revoked_at_ms") is not None
+                    ):
+                        raise SyncStoreError("device_revoked", "Device token is invalid or revoked")
+                    expires_at_ms = session.get("access_expires_at_ms")
+                    if not isinstance(expires_at_ms, int) or expires_at_ms <= resolved_now_ms:
+                        raise SyncStoreError("access_token_expired", "Access token has expired")
+                    return {"user_id": user_id, "device_id": device_id, "session_id": session_id}
+
+                # Compatibility for pre-M3 JSON states where tokens mapped directly to device IDs.
+                device_id = session_id
+            else:
+                raise SyncStoreError("invalid_access_token", "Access token is invalid")
+
             device = state["devices"].get(device_id)
             if not isinstance(device, dict) or device.get("revoked"):
-                return None
-            return device_id
+                raise SyncStoreError("device_revoked", "Device token is invalid or revoked")
+            user_id = device.get("user_id")
+            if not isinstance(user_id, str):
+                user_id = "legacy-user"
+            return {"user_id": user_id, "device_id": device_id, "session_id": ""}
+
+    def device_id_for_token(self, token: str, *, now_ms: Optional[int] = None) -> Optional[str]:
+        try:
+            return self.authorize_access_token(token, now_ms=now_ms)["device_id"]
+        except SyncStoreError:
+            return None
 
     def touch_device(self, device_id: Optional[str], *, now_ms: Optional[int] = None) -> None:
         if not device_id:
@@ -321,46 +422,177 @@ class SyncStore:
             device["last_seen_at_ms"] = resolved_now_ms
             self._save(state)
 
-    def register_device(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def register_device(self, payload: dict[str, Any], *, now_ms: Optional[int] = None) -> dict[str, Any]:
         device_name = _require_string(payload, "device_name")
         platform = _require_string(payload, "platform")
         if platform not in {"desktop", "mobile", "web"}:
             raise SyncStoreError("invalid_platform", "platform must be desktop, mobile, or web")
+        account_key = payload.get("account_key", payload.get("login_key", "local-dev"))
+        if not isinstance(account_key, str) or not account_key:
+            raise SyncStoreError("invalid_request", "account_key must be a non-empty string when provided")
+        display_name = payload.get("display_name")
+        if display_name is None:
+            display_name = account_key
+        if not isinstance(display_name, str) or not display_name:
+            raise SyncStoreError("invalid_request", "display_name must be a non-empty string when provided")
+        access_token_ttl_ms = _optional_positive_int(payload, "access_token_ttl_ms", DEFAULT_ACCESS_TOKEN_TTL_MS)
+        refresh_token_ttl_ms = _optional_positive_int(payload, "refresh_token_ttl_ms", DEFAULT_REFRESH_TOKEN_TTL_MS)
 
         device_id = f"dev_{uuid.uuid4().hex}"
-        token = secrets.token_urlsafe(32)
-        now_ms = _now_ms()
+        session_id = f"sess_{uuid.uuid4().hex}"
+        access_token = secrets.token_urlsafe(32)
+        refresh_token = secrets.token_urlsafe(32)
+        resolved_now_ms = _now_ms() if now_ms is None else now_ms
+        access_expires_at_ms = resolved_now_ms + access_token_ttl_ms
+        refresh_expires_at_ms = resolved_now_ms + refresh_token_ttl_ms
         with self._lock:
             state = self._load()
+            user = self._ensure_user(
+                state,
+                account_key=account_key,
+                display_name=display_name,
+                now_ms=resolved_now_ms,
+            )
+            user_id = user["user_id"]
             state["devices"][device_id] = {
                 "device_id": device_id,
+                "user_id": user_id,
                 "device_name": device_name,
                 "platform": platform,
                 "app_version": payload.get("app_version"),
                 "protocol_version": payload.get("protocol_version", "v1"),
-                "access_token": token,
+                "session_id": session_id,
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "access_token_expires_at_ms": access_expires_at_ms,
+                "refresh_token_expires_at_ms": refresh_expires_at_ms,
                 "revoked": False,
-                "registered_at_ms": now_ms,
-                "last_seen_at_ms": now_ms,
+                "registered_at_ms": resolved_now_ms,
+                "last_seen_at_ms": resolved_now_ms,
             }
-            state["tokens"][token] = device_id
+            state["sessions"][session_id] = {
+                "session_id": session_id,
+                "user_id": user_id,
+                "device_id": device_id,
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "access_expires_at_ms": access_expires_at_ms,
+                "refresh_expires_at_ms": refresh_expires_at_ms,
+                "created_at_ms": resolved_now_ms,
+                "updated_at_ms": resolved_now_ms,
+                "revoked_at_ms": None,
+            }
+            state["tokens"][access_token] = session_id
+            state["refresh_tokens"][refresh_token] = session_id
             self._save(state)
-        return {
-            "device_id": device_id,
-            "access_token": token,
-            "expires_at": _expires_at(minutes=60 * 24 * 30),
-        }
+        return self._session_token_response(
+            user_id=user_id,
+            device_id=device_id,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            access_expires_at_ms=access_expires_at_ms,
+            refresh_expires_at_ms=refresh_expires_at_ms,
+        )
 
-    def delete_device(self, device_id: str) -> bool:
+    def refresh_session(self, payload: dict[str, Any], *, now_ms: Optional[int] = None) -> dict[str, Any]:
+        refresh_token = _require_string(payload, "refresh_token")
+        access_token_ttl_ms = _optional_positive_int(payload, "access_token_ttl_ms", DEFAULT_ACCESS_TOKEN_TTL_MS)
+        refresh_token_ttl_ms = _optional_positive_int(payload, "refresh_token_ttl_ms", DEFAULT_REFRESH_TOKEN_TTL_MS)
+        resolved_now_ms = _now_ms() if now_ms is None else now_ms
+        with self._lock:
+            state = self._load()
+            session_id = state["refresh_tokens"].get(refresh_token)
+            if not isinstance(session_id, str):
+                raise SyncStoreError("invalid_refresh_token", "Refresh token is invalid")
+            session = state["sessions"].get(session_id)
+            if not isinstance(session, dict):
+                state["refresh_tokens"].pop(refresh_token, None)
+                raise SyncStoreError("invalid_refresh_token", "Refresh token is invalid")
+            device_id = session.get("device_id")
+            user_id = session.get("user_id")
+            if not isinstance(device_id, str) or not isinstance(user_id, str):
+                raise SyncStoreError("invalid_refresh_token", "Refresh token is invalid")
+            device = state["devices"].get(device_id)
+            if (
+                not isinstance(device, dict)
+                or device.get("revoked")
+                or session.get("revoked_at_ms") is not None
+            ):
+                raise SyncStoreError("device_revoked", "Device token is invalid or revoked")
+            refresh_expires_at_ms = session.get("refresh_expires_at_ms")
+            if not isinstance(refresh_expires_at_ms, int) or refresh_expires_at_ms <= resolved_now_ms:
+                state["refresh_tokens"].pop(refresh_token, None)
+                raise SyncStoreError("refresh_token_expired", "Refresh token has expired")
+
+            old_access_token = session.get("access_token")
+            if isinstance(old_access_token, str):
+                state["tokens"].pop(old_access_token, None)
+            state["refresh_tokens"].pop(refresh_token, None)
+
+            access_token = secrets.token_urlsafe(32)
+            next_refresh_token = secrets.token_urlsafe(32)
+            access_expires_at_ms = resolved_now_ms + access_token_ttl_ms
+            next_refresh_expires_at_ms = resolved_now_ms + refresh_token_ttl_ms
+            session.update(
+                {
+                    "access_token": access_token,
+                    "refresh_token": next_refresh_token,
+                    "access_expires_at_ms": access_expires_at_ms,
+                    "refresh_expires_at_ms": next_refresh_expires_at_ms,
+                    "updated_at_ms": resolved_now_ms,
+                }
+            )
+            device["access_token"] = access_token
+            device["refresh_token"] = next_refresh_token
+            device["access_token_expires_at_ms"] = access_expires_at_ms
+            device["refresh_token_expires_at_ms"] = next_refresh_expires_at_ms
+            device["last_seen_at_ms"] = resolved_now_ms
+            state["tokens"][access_token] = session_id
+            state["refresh_tokens"][next_refresh_token] = session_id
+            self._save(state)
+        return self._session_token_response(
+            user_id=user_id,
+            device_id=device_id,
+            access_token=access_token,
+            refresh_token=next_refresh_token,
+            access_expires_at_ms=access_expires_at_ms,
+            refresh_expires_at_ms=next_refresh_expires_at_ms,
+        )
+
+    def revoke_session_for_token(self, token: str, *, now_ms: Optional[int] = None) -> bool:
+        resolved_now_ms = _now_ms() if now_ms is None else now_ms
+        with self._lock:
+            state = self._load()
+            session_id = state["tokens"].pop(token, None)
+            if not isinstance(session_id, str):
+                return False
+            session = state["sessions"].get(session_id)
+            if not isinstance(session, dict):
+                return False
+            session["revoked_at_ms"] = resolved_now_ms
+            refresh_token = session.get("refresh_token")
+            if isinstance(refresh_token, str):
+                state["refresh_tokens"].pop(refresh_token, None)
+            self._save(state)
+            return True
+
+    def delete_device(self, device_id: str, *, actor_device_id: Optional[str] = None) -> bool:
         with self._lock:
             state = self._load()
             device = state["devices"].get(device_id)
             if not isinstance(device, dict):
                 return False
+            if actor_device_id is not None:
+                actor_device = state["devices"].get(actor_device_id)
+                if not isinstance(actor_device, dict) or actor_device.get("user_id") != device.get("user_id"):
+                    raise SyncStoreError("device_forbidden", "Device does not belong to the current user")
             device["revoked"] = True
-            token = device.get("access_token")
-            if isinstance(token, str):
-                state["tokens"].pop(token, None)
+            revoked_at_ms = _now_ms()
+            device["revoked_at_ms"] = revoked_at_ms
+            self._revoke_device_sessions_locked(state, device_id, revoked_at_ms=revoked_at_ms)
+            legacy_refresh_token = device.get("refresh_token")
+            if isinstance(legacy_refresh_token, str):
+                state["refresh_tokens"].pop(legacy_refresh_token, None)
             state["capabilities"] = {
                 token: capability
                 for token, capability in state["capabilities"].items()

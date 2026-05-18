@@ -27,20 +27,142 @@ class NoteappServerMainTests(unittest.TestCase):
         server_main.store = self.original_store
         self.temp_dir.cleanup()
 
-    def _register_device(self) -> dict[str, str]:
+    def _register_device(self, **overrides: object) -> dict[str, str]:
+        payload = {
+            "device_name": "Desktop",
+            "platform": "desktop",
+            "protocol_version": "v1",
+        }
+        payload.update(overrides)
         response = self.client.post(
             "/devices/register",
+            json=payload,
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["device_id"])
+        self.assertTrue(payload["user_id"])
+        self.assertTrue(payload["access_token"])
+        self.assertTrue(payload["refresh_token"])
+        return payload
+
+    def test_login_creates_authorized_session(self) -> None:
+        response = self.client.post(
+            "/auth/login",
             json={
+                "account_key": "user@example.test",
+                "display_name": "Example User",
                 "device_name": "Desktop",
                 "platform": "desktop",
                 "protocol_version": "v1",
             },
         )
+
         self.assertEqual(response.status_code, 200)
         payload = response.json()
+        self.assertTrue(payload["user_id"])
         self.assertTrue(payload["device_id"])
         self.assertTrue(payload["access_token"])
-        return payload
+        self.assertTrue(payload["refresh_token"])
+
+        head = self.client.get(
+            "/vaults/vault-1/head",
+            headers={"Authorization": f"Bearer {payload['access_token']}"},
+        )
+        self.assertEqual(head.status_code, 200)
+
+    def test_vault_endpoints_reject_missing_authorization(self) -> None:
+        blocked_requests = [
+            ("GET", "/vaults/vault-1/head", None),
+            ("GET", "/vaults/vault-1/manifests/1", None),
+            ("POST", "/vaults/vault-1/blobs/check", {}),
+            ("POST", "/vaults/vault-1/blobs/upload-init", {}),
+            ("POST", "/vaults/vault-1/blobs/download-init", {}),
+            ("POST", "/vaults/vault-1/blobs/resumable-upload-init", {}),
+            ("POST", "/vaults/vault-1/blobs/resumable-upload-complete", {}),
+            ("POST", "/vaults/vault-1/blobs/resumable-download-init", {}),
+            ("POST", "/vaults/vault-1/commits", {}),
+            ("POST", "/vaults/vault-1/commits/resolve-intent", {}),
+            ("POST", "/vaults/vault-1/ack", {}),
+            ("POST", "/vaults/vault-1/file-versions/list", {}),
+            ("PATCH", "/vaults/vault-1/file-versions/fv-1", {}),
+            ("GET", "/vaults/vault-1/devices", None),
+            ("POST", "/vaults/vault-1/devices/heartbeat", {}),
+            ("POST", "/vaults/vault-1/tombstones/gc", {}),
+        ]
+        for method, path, body in blocked_requests:
+            request_kwargs = {}
+            if body is not None:
+                request_kwargs["json"] = body
+            response = self.client.request(method, path, **request_kwargs)
+            self.assertEqual(response.status_code, 401, path)
+            self.assertEqual(response.json()["code"], "missing_authorization")
+
+    def test_refresh_rotates_access_and_refresh_tokens(self) -> None:
+        registered = self._register_device()
+
+        refreshed = self.client.post(
+            "/auth/refresh",
+            json={"refresh_token": registered["refresh_token"]},
+        )
+        self.assertEqual(refreshed.status_code, 200)
+        payload = refreshed.json()
+        self.assertEqual(payload["user_id"], registered["user_id"])
+        self.assertEqual(payload["device_id"], registered["device_id"])
+        self.assertNotEqual(payload["access_token"], registered["access_token"])
+        self.assertNotEqual(payload["refresh_token"], registered["refresh_token"])
+
+        old_access = self.client.get(
+            "/vaults/vault-1/head",
+            headers={"Authorization": f"Bearer {registered['access_token']}"},
+        )
+        self.assertEqual(old_access.status_code, 401)
+        self.assertEqual(old_access.json()["code"], "invalid_access_token")
+
+        old_refresh = self.client.post(
+            "/auth/refresh",
+            json={"refresh_token": registered["refresh_token"]},
+        )
+        self.assertEqual(old_refresh.status_code, 401)
+        self.assertEqual(old_refresh.json()["code"], "invalid_refresh_token")
+
+        new_access = self.client.get(
+            "/vaults/vault-1/head",
+            headers={"Authorization": f"Bearer {payload['access_token']}"},
+        )
+        self.assertEqual(new_access.status_code, 200)
+
+    def test_logout_revokes_current_session(self) -> None:
+        registered = self._register_device()
+        headers = {"Authorization": f"Bearer {registered['access_token']}"}
+
+        logged_out = self.client.post("/auth/logout", headers=headers)
+        self.assertEqual(logged_out.status_code, 204)
+
+        blocked = self.client.get("/vaults/vault-1/head", headers=headers)
+        self.assertEqual(blocked.status_code, 401)
+        self.assertEqual(blocked.json()["code"], "invalid_access_token")
+
+        refresh = self.client.post("/auth/refresh", json={"refresh_token": registered["refresh_token"]})
+        self.assertEqual(refresh.status_code, 401)
+        self.assertEqual(refresh.json()["code"], "invalid_refresh_token")
+
+    def test_delete_device_rejects_cross_account_actor(self) -> None:
+        actor = self._register_device(account_key="alice@example.test")
+        target = self._register_device(account_key="bob@example.test")
+
+        forbidden = self.client.delete(
+            f"/devices/{target['device_id']}",
+            headers={"Authorization": f"Bearer {actor['access_token']}"},
+        )
+        self.assertEqual(forbidden.status_code, 403)
+        self.assertEqual(forbidden.json()["code"], "device_forbidden")
+
+        target_head = self.client.get(
+            "/vaults/vault-1/head",
+            headers={"Authorization": f"Bearer {target['access_token']}"},
+        )
+        self.assertEqual(target_head.status_code, 200)
 
     def test_delete_device_revokes_protected_endpoints_and_download_capabilities(self) -> None:
         registered = self._register_device()

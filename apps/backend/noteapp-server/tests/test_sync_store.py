@@ -10,7 +10,7 @@ import sys
 SERVER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVER_ROOT))
 
-from sync_store import BlobCapabilityError, CommitConflict, SyncStore  # noqa: E402
+from sync_store import BlobCapabilityError, CommitConflict, SyncStore, SyncStoreError  # noqa: E402
 
 
 def _manifest(
@@ -91,18 +91,85 @@ class SyncStoreTests(unittest.TestCase):
     def test_register_device_and_resolve_token(self) -> None:
         response = self.store.register_device(
             {
+                "account_key": "user@example.test",
                 "device_name": "Desktop",
                 "platform": "desktop",
                 "protocol_version": "v1",
             }
         )
 
+        self.assertTrue(response["user_id"])
         self.assertTrue(response["device_id"])
         self.assertTrue(response["access_token"])
+        self.assertTrue(response["refresh_token"])
+        self.assertTrue(response["expires_at"])
+        self.assertTrue(response["refresh_expires_at"])
         self.assertEqual(
             self.store.device_id_for_token(response["access_token"]),
             response["device_id"],
         )
+        state = self.store._load()
+        self.assertEqual(state["devices"][response["device_id"]]["user_id"], response["user_id"])
+        self.assertEqual(len(state["users"]), 1)
+
+    def test_access_token_expiry_and_refresh_rotation(self) -> None:
+        registered = self.store.register_device(
+            {
+                "account_key": "user@example.test",
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+                "access_token_ttl_ms": 100,
+                "refresh_token_ttl_ms": 10_000,
+            },
+            now_ms=1_000,
+        )
+
+        self.assertEqual(
+            self.store.device_id_for_token(registered["access_token"], now_ms=1_050),
+            registered["device_id"],
+        )
+        self.assertIsNone(self.store.device_id_for_token(registered["access_token"], now_ms=1_101))
+        with self.assertRaises(SyncStoreError) as expired:
+            self.store.authorize_access_token(registered["access_token"], now_ms=1_101)
+        self.assertEqual(expired.exception.code, "access_token_expired")
+
+        refreshed = self.store.refresh_session(
+            {
+                "refresh_token": registered["refresh_token"],
+                "access_token_ttl_ms": 200,
+                "refresh_token_ttl_ms": 10_000,
+            },
+            now_ms=1_200,
+        )
+
+        self.assertEqual(refreshed["user_id"], registered["user_id"])
+        self.assertEqual(refreshed["device_id"], registered["device_id"])
+        self.assertNotEqual(refreshed["access_token"], registered["access_token"])
+        self.assertNotEqual(refreshed["refresh_token"], registered["refresh_token"])
+        self.assertIsNone(self.store.device_id_for_token(registered["access_token"], now_ms=1_250))
+        with self.assertRaises(SyncStoreError) as old_refresh:
+            self.store.refresh_session({"refresh_token": registered["refresh_token"]}, now_ms=1_250)
+        self.assertEqual(old_refresh.exception.code, "invalid_refresh_token")
+        self.assertEqual(
+            self.store.device_id_for_token(refreshed["access_token"], now_ms=1_300),
+            registered["device_id"],
+        )
+
+    def test_expired_refresh_token_is_rejected(self) -> None:
+        registered = self.store.register_device(
+            {
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+                "refresh_token_ttl_ms": 100,
+            },
+            now_ms=1_000,
+        )
+
+        with self.assertRaises(SyncStoreError) as context:
+            self.store.refresh_session({"refresh_token": registered["refresh_token"]}, now_ms=1_101)
+        self.assertEqual(context.exception.code, "refresh_token_expired")
 
     def test_list_vault_devices_and_heartbeat_report_ack_and_inactive_state(self) -> None:
         desktop = self.store.register_device(
@@ -334,6 +401,9 @@ class SyncStoreTests(unittest.TestCase):
         self.assertTrue(self.store.delete_device(registered["device_id"]))
 
         self.assertIsNone(self.store.device_id_for_token(registered["access_token"]))
+        with self.assertRaises(SyncStoreError) as refresh_context:
+            self.store.refresh_session({"refresh_token": registered["refresh_token"]})
+        self.assertEqual(refresh_context.exception.code, "invalid_refresh_token")
         with self.assertRaises(BlobCapabilityError) as context:
             self.store.complete_blob_upload(capability_token, b"payload")
         self.assertEqual(context.exception.code, "capability_not_found")
