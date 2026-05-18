@@ -199,6 +199,114 @@ class SyncStoreTests(unittest.TestCase):
         self.assertEqual([item["device_id"] for item in listed["devices"]], [desktop["device_id"]])
         self.assertNotIn(phone["device_id"], [item["device_id"] for item in listed["devices"]])
 
+    def test_device_enters_active_set_after_first_commit_or_ack(self) -> None:
+        desktop = self.store.register_device(
+            {
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+            }
+        )
+        phone = self.store.register_device(
+            {
+                "device_name": "Phone",
+                "platform": "mobile",
+                "protocol_version": "v1",
+            }
+        )
+        desktop_id = desktop["device_id"]
+        phone_id = phone["device_id"]
+
+        self.store.get_vault_head("vault-1")
+        state = self.store._load()
+        state["vaults"]["vault-1"]["acks"] = {}
+        self.store._save(state)
+
+        self.store.init_blob_upload(
+            "vault-1",
+            {
+                "blobs": [
+                    {
+                        "blob_id": "blob-1",
+                        "encrypted_size": 7,
+                        "content_hash": "sha256:plain",
+                    }
+                ]
+            },
+            request_base_url="http://127.0.0.1:8000/",
+            device_id=desktop_id,
+        )
+        state = self.store._load()
+        capability_token = next(iter(state["capabilities"]))
+        self.store.complete_blob_upload(capability_token, b"payload")
+
+        before_commit = self.store.list_vault_devices(
+            "vault-1",
+            current_device_id=desktop_id,
+            now_ms=1770000005000,
+        )
+        self.assertEqual(before_commit["devices"], [])
+
+        committed = self.store.create_commit(
+            "vault-1",
+            {
+                "commit_intent_id": "intent-join-1",
+                "base_revision": 0,
+                "created_by_device": desktop_id,
+                "intent_manifest_hash": "sha256:intent-join-1",
+                "manifest": _manifest("vault-1", base_revision=0, created_by_device=desktop_id),
+                "blob_refs": [{"blob_id": "blob-1", "file_id": "file-1"}],
+            },
+            auth_device_id=desktop_id,
+        )
+        self.assertEqual(committed["acked_revision_for_device"], 1)
+
+        after_commit = self.store.list_vault_devices(
+            "vault-1",
+            current_device_id=desktop_id,
+            now_ms=1770000006000,
+        )
+        self.assertEqual([item["device_id"] for item in after_commit["devices"]], [desktop_id])
+        self.assertEqual(after_commit["devices"][0]["acked_revision"], 1)
+
+        acked = self.store.ack_revisions("vault-1", {"revisions": [1]}, device_id=phone_id)
+        self.assertEqual(acked["max_acked_revision"], 1)
+
+        after_ack = self.store.list_vault_devices(
+            "vault-1",
+            current_device_id=desktop_id,
+            now_ms=1770000007000,
+        )
+        self.assertEqual([item["device_id"] for item in after_ack["devices"]], [desktop_id, phone_id])
+        self.assertEqual(after_ack["devices"][1]["acked_revision"], 1)
+
+        self.store.create_commit(
+            "vault-1",
+            {
+                "commit_intent_id": "intent-join-2",
+                "base_revision": 1,
+                "created_by_device": desktop_id,
+                "intent_manifest_hash": "sha256:intent-join-2",
+                "manifest": _deleted_manifest(
+                    "vault-1",
+                    base_revision=1,
+                    deleted_at=1,
+                    created_at=1770000008000,
+                    created_by_device=desktop_id,
+                ),
+                "blob_refs": [],
+            },
+            auth_device_id=desktop_id,
+        )
+
+        gc_result = self.store.run_tombstone_gc(
+            "vault-1",
+            now_ms=1770000009000,
+            min_retention_ms=0,
+        )
+        self.assertCountEqual(gc_result["active_device_ids"], [desktop_id, phone_id])
+        self.assertEqual(gc_result["blocked_tombstones"][0]["blocked_by_devices"][0]["device_id"], phone_id)
+
     def test_delete_device_revokes_token_and_device_capabilities(self) -> None:
         registered = self.store.register_device(
             {
