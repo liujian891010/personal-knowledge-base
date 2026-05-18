@@ -1286,6 +1286,17 @@ export default function ExplorerView({
     () => visibleFiles.filter((file) => selectedContextFileIds.has(file.file_id) && isAiContextEligibleFile(file)),
     [selectedContextFileIds, visibleFiles],
   );
+  const searchContextFileIds = useMemo(() => {
+    const visibleById = new Map(visibleFiles.map((file) => [file.file_id, file]));
+    const fileIds: string[] = [];
+    for (const result of searchResults) {
+      const file = visibleById.get(result.file_id);
+      if (file && isAiContextEligibleFile(file) && !fileIds.includes(file.file_id)) {
+        fileIds.push(file.file_id);
+      }
+    }
+    return fileIds;
+  }, [searchResults, visibleFiles]);
 
   function toggleContextFile(fileId: string) {
     setSelectedContextFileIds((current) => {
@@ -1334,6 +1345,20 @@ export default function ExplorerView({
       title: `当前笔记：${title}`,
       fileIds: [selectedFile.file_id],
       initialInstruction: `总结当前笔记《${title}》，提炼关键结论、重要细节、待办和需要继续追问的问题。`,
+      autoRun: true,
+    });
+  }
+
+  function openAiSummaryForSearchResults() {
+    const query = searchQuery.trim();
+    if (!query || searchContextFileIds.length === 0) {
+      return;
+    }
+    onOpenAiContext({
+      type: 'selected_files',
+      title: `搜索结果：${query}`,
+      fileIds: searchContextFileIds,
+      initialInstruction: `总结搜索“${query}”命中的文档，归纳共同结论、分歧点、可行动事项，并在回答中保留来源线索。`,
       autoRun: true,
     });
   }
@@ -1897,8 +1922,20 @@ export default function ExplorerView({
           </label>
           {searchQuery.trim() && (
             <div className="mt-2 rounded border border-[#0f3460] bg-[#16213e]">
-              <div className="border-b border-[#0f3460] px-3 py-2 font-mono text-[10px] uppercase tracking-wider text-slate-500">
-                {isSearching ? 'Searching' : `${searchResultCount} results`}
+              <div className="flex items-center justify-between gap-2 border-b border-[#0f3460] px-3 py-2">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                  {isSearching ? 'Searching' : `${searchResultCount} results`}
+                </span>
+                <button
+                  type="button"
+                  onClick={openAiSummaryForSearchResults}
+                  disabled={isSearching || searchContextFileIds.length === 0}
+                  className="inline-flex h-7 items-center justify-center gap-1.5 rounded border border-[#0f3460] bg-[#121316] px-2 text-[11px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  title="总结当前搜索结果"
+                >
+                  <Bot size={12} />
+                  <span>总结</span>
+                </button>
               </div>
               {searchError && (
                 <div className="px-3 py-2 text-[11px] text-[#ffb782]">{searchError}</div>

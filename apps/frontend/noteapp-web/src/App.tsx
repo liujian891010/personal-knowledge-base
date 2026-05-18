@@ -699,6 +699,7 @@ export default function App() {
                   initialContext={initialAiContext}
                   onClearInitialContext={() => setInitialAiContext(null)}
                   onOpenExplorer={openExplorerWithContext}
+                  onOpenWorkspacePath={openWorkspacePath}
                 />
               )}
               {currentView === 'ai-wiki' && <AiWikiView onOpenWorkspacePath={openWorkspacePath} />}
