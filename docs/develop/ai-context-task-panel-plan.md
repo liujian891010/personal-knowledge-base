@@ -194,6 +194,8 @@ created_at: 2026-05-11T00:00:00+08:00
 
 ## 明天优先级
 
+写回 API 设计已在 `docs/develop/v1.0.43-ai-writeback-api-design.md` 冻结；后续 `insert_current_note` 和 `create_note` 输出动作按该文档实现。
+
 当前进展：
 
 1. `folder + preview` 已实现：文件夹行可将该文件夹下 Markdown 加入 AI 文档页，用户可持续输入任意指令后生成结果。
