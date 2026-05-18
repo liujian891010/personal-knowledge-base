@@ -9,6 +9,7 @@ import {
   readAiChatSession,
   saveAiChatSession,
   type AiChatMessage,
+  type AiChatProviderDiagnostic,
   type AiChatSession,
   type AiChatSessionSummary,
   type AiChatTaskResult,
@@ -217,6 +218,27 @@ async function responseErrorMessage(response: Response): Promise<string> {
   return `request failed: ${response.status}`;
 }
 
+async function responseErrorDiagnostic(response: Response, requestId: string): Promise<AiChatProviderDiagnostic> {
+  try {
+    const payload: unknown = await response.json();
+    if (isObject(payload) && typeof payload.message === 'string') {
+      const code = typeof payload.code === 'string' ? `${payload.code}: ` : '';
+      return {
+        requestId,
+        statusCode: response.status,
+        summary: `${code}${payload.message}`,
+      };
+    }
+  } catch {
+    // Fall through to status text.
+  }
+  return {
+    requestId,
+    statusCode: response.status,
+    summary: response.statusText || `HTTP ${response.status}`,
+  };
+}
+
 function parseAiContextTaskResult(payload: unknown): AiChatTaskResult {
   if (!isObject(payload) || !Array.isArray(payload.sources)) {
     throw new Error('AI context task response must include sources');
@@ -259,6 +281,10 @@ function fileName(path: string): string {
 
 function createMessageId(): string {
   return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createRequestId(): string {
+  return `ai_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function defaultSessionTitle(messages: AiChatMessage[]): string {
@@ -505,6 +531,7 @@ export default function AiChatView({
     () => (context ? files.filter((file) => context.fileIds.includes(file.file_id)) : []),
     [context, files],
   );
+  const hasPendingAssistant = messages.some((message) => message.role === 'assistant' && message.pending);
 
   function removeContextFile(fileId: string) {
     setContext((current) => {
@@ -558,6 +585,50 @@ export default function AiChatView({
     }
   }
 
+  function updateAssistantMessage(messageId: string, patch: Partial<Extract<AiChatMessage, { role: 'assistant' }>>) {
+    setMessages((current) => current.map((message) => (
+      message.id === messageId && message.role === 'assistant'
+        ? { ...message, ...patch }
+        : message
+    )));
+  }
+
+  async function streamAssistantMessage(
+    messageId: string,
+    result: AiChatTaskResult,
+    requestId: string,
+    requestedAt: number,
+  ) {
+    const answer = result.answer || 'AI provider returned an empty answer.';
+    const firstTokenMs = Date.now() - requestedAt;
+    const step = Math.max(8, Math.ceil(answer.length / 72));
+    updateAssistantMessage(messageId, {
+      content: answer.slice(0, step),
+      diagnostic: {
+        requestId,
+        statusCode: 200,
+        firstTokenMs,
+        summary: result.model_status,
+      },
+    });
+    for (let index = step * 2; index < answer.length; index += step) {
+      await new Promise((resolve) => window.setTimeout(resolve, 18));
+      updateAssistantMessage(messageId, { content: answer.slice(0, index) });
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 18));
+    updateAssistantMessage(messageId, {
+      content: answer,
+      result,
+      pending: false,
+      diagnostic: {
+        requestId,
+        statusCode: 200,
+        firstTokenMs,
+        summary: result.model_status,
+      },
+    });
+  }
+
   async function sendMessageWithContext(
     activeContext: AiContextDraft,
     rawInstruction: string,
@@ -574,8 +645,23 @@ export default function AiChatView({
       content: instruction,
       createdAt: Date.now(),
     };
+    const requestId = createRequestId();
+    const assistantMessageId = createMessageId();
+    const pendingAssistantMessage: AiChatMessage = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      createdAt: Date.now(),
+      pending: true,
+      diagnostic: {
+        requestId,
+        summary: 'waiting_for_first_token',
+      },
+    };
     setInput('');
     setIsRunning(true);
+    const requestedAt = Date.now();
+    let errorAlreadyRendered = false;
     try {
       let resolvedSessionId = options.forceNewSession ? null : activeSessionId;
       if (!resolvedSessionId) {
@@ -589,15 +675,16 @@ export default function AiChatView({
         setActiveSessionId(session.id);
         setSessionTitle(session.title);
         setContext(session.context ?? activeContext);
-        setMessages(session.messages ?? [userMessage]);
+        setMessages([...(session.messages ?? [userMessage]), pendingAssistantMessage]);
         setSessions((current) => [sessionSummaryFromSession(session), ...current.filter((item) => item.id !== session.id)]);
       } else {
-        setMessages((current) => [...current, userMessage]);
+        setMessages((current) => [...current, userMessage, pendingAssistantMessage]);
       }
       const response = await fetch(`${syncBridgeUrl}/api/ai/context-task`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'X-Noteapp-Request-Id': requestId,
         },
         body: JSON.stringify({
           context: activeContext.type === 'folder'
@@ -617,22 +704,31 @@ export default function AiChatView({
         }),
       });
       if (!response.ok) {
-        throw new Error(await responseErrorMessage(response));
+        const diagnostic = await responseErrorDiagnostic(response, requestId);
+        errorAlreadyRendered = true;
+        updateAssistantMessage(assistantMessageId, {
+          content: `AI 请求失败：${diagnostic.summary}`,
+          pending: false,
+          diagnostic,
+        });
+        throw new Error(`AI 请求失败（HTTP ${diagnostic.statusCode ?? 'unknown'}，Request ${requestId}）：${diagnostic.summary}`);
       }
       const result = parseAiContextTaskResult(await response.json());
-      setMessages((current) => [
-        ...current,
-        {
-          id: createMessageId(),
-          role: 'assistant',
-          content: result.answer,
-          createdAt: Date.now(),
-          result,
-        },
-      ]);
+      await streamAssistantMessage(assistantMessageId, result, requestId, requestedAt);
       setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      const summary = nextError instanceof Error ? nextError.message : String(nextError);
+      if (!errorAlreadyRendered) {
+        updateAssistantMessage(assistantMessageId, {
+          content: `AI 请求失败：${summary}`,
+          pending: false,
+          diagnostic: {
+            requestId,
+            summary,
+          },
+        });
+      }
+      setError(summary);
     } finally {
       setIsRunning(false);
     }
@@ -806,8 +902,29 @@ export default function AiChatView({
                   >
                     {message.role === 'assistant' ? (
                       <>
-                        <MarkdownPreview markdown={message.content} />
-                        {message.result.sources.length > 0 && (
+                        {message.content ? (
+                          <MarkdownPreview markdown={message.content} />
+                        ) : (
+                          <div className="flex items-center gap-2 text-[13px] text-slate-400">
+                            <Loader2 size={15} className="animate-spin text-[#a9c8fc]" />
+                            等待首 token...
+                          </div>
+                        )}
+                        {message.pending && message.content && (
+                          <div className="mt-3 flex items-center gap-2 text-[12px] text-slate-500">
+                            <Loader2 size={13} className="animate-spin text-[#a9c8fc]" />
+                            正在流式输出...
+                          </div>
+                        )}
+                        {message.diagnostic && (
+                          <div className="mt-3 flex flex-wrap gap-2 border-t border-[#0f3460] pt-3 font-mono text-[10px] text-slate-500">
+                            <span>request {message.diagnostic.requestId}</span>
+                            {typeof message.diagnostic.statusCode === 'number' && <span>HTTP {message.diagnostic.statusCode}</span>}
+                            {typeof message.diagnostic.firstTokenMs === 'number' && <span>first-token {message.diagnostic.firstTokenMs}ms</span>}
+                            <span>{message.diagnostic.summary}</span>
+                          </div>
+                        )}
+                        {message.result && message.result.sources.length > 0 && (
                           <div className="mt-4 border-t border-[#0f3460] pt-3">
                             <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                               来源
@@ -847,7 +964,7 @@ export default function AiChatView({
                   )}
                 </div>
               ))}
-              {isRunning && (
+              {isRunning && !hasPendingAssistant && (
                 <div className="flex justify-start gap-3">
                   <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg border border-[#0f3460] bg-[#16213e] text-[#a9c8fc]">
                     <Bot size={17} />

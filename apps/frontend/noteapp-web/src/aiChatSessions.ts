@@ -31,9 +31,24 @@ export interface AiChatTaskResult {
   };
 }
 
+export interface AiChatProviderDiagnostic {
+  requestId: string;
+  statusCode?: number;
+  firstTokenMs?: number;
+  summary: string;
+}
+
 export type AiChatMessage =
   | { id: string; role: 'user'; content: string; createdAt: number }
-  | { id: string; role: 'assistant'; content: string; createdAt: number; result: AiChatTaskResult };
+  | {
+    id: string;
+    role: 'assistant';
+    content: string;
+    createdAt: number;
+    result?: AiChatTaskResult;
+    pending?: boolean;
+    diagnostic?: AiChatProviderDiagnostic;
+  };
 
 export interface AiChatSession {
   schemaVersion: 'v1';
