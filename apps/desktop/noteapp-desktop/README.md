@@ -106,3 +106,14 @@ npm run dist:mac
 ```powershell
 $env:PYTHON='C:\Path\To\python.exe'
 ```
+
+## 诊断导出
+
+桌面端顶部栏提供“诊断”按钮。导出的 JSON 诊断包包含：
+
+1. `desktop-runtime.log` 尾部日志
+2. bridge `/health` 与 `/health/dependencies` 结果
+3. `bridge-state` 快照文件预览
+4. 应用版本、运行路径、bridge 端口与进程归属
+
+bridge 异常退出或启动失败时，先导出诊断包，再结合错误弹窗中的提示检查 Python、端口占用和工作区路径。

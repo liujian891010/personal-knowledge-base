@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -32,6 +32,10 @@ function desktopLogPath() {
   return path.join(app.getPath('userData'), 'desktop-runtime.log');
 }
 
+function bridgeStateDir() {
+  return path.join(app.getPath('userData'), 'bridge-state');
+}
+
 function writeDesktopLog(message) {
   try {
     const targetPath = desktopLogPath();
@@ -40,6 +44,109 @@ function writeDesktopLog(message) {
   } catch {
     // Ignore logging failures.
   }
+}
+
+function readTextFileTail(filePath, maxBytes = 256 * 1024) {
+  if (!existsSync(filePath)) {
+    return null;
+  }
+  const payload = readFileSync(filePath);
+  return payload.subarray(Math.max(0, payload.length - maxBytes)).toString('utf8');
+}
+
+function readBridgeStateFiles() {
+  const stateDir = bridgeStateDir();
+  if (!existsSync(stateDir)) {
+    return {};
+  }
+  const entries = {};
+  for (const entry of readdirSync(stateDir, { withFileTypes: true })) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const filePath = path.join(stateDir, entry.name);
+    const stat = statSync(filePath);
+    entries[entry.name] = {
+      path: filePath,
+      size_bytes: stat.size,
+      mtime_ms: stat.mtimeMs,
+      preview: readTextFileTail(filePath, 128 * 1024),
+    };
+  }
+  return entries;
+}
+
+async function fetchDiagnosticJson(url) {
+  try {
+    const response = await fetch(url, { cache: 'no-store' });
+    const contentType = response.headers.get('content-type') || '';
+    const body = contentType.includes('application/json')
+      ? await response.json()
+      : await response.text();
+    return {
+      ok: response.ok,
+      status: response.status,
+      body,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function createDesktopDiagnostics() {
+  return {
+    schema_version: 'v1',
+    generated_at: new Date().toISOString(),
+    app: {
+      version: app.getVersion(),
+      packaged: app.isPackaged,
+      platform: process.platform,
+      arch: process.arch,
+      electron: process.versions.electron,
+      node: process.versions.node,
+    },
+    bridge: {
+      host: bridgeHost,
+      port: bridgePort,
+      base_url: bridgeBaseUrl,
+      owned_by_desktop: ownsBridgeProcess,
+      pid: bridgeProcess?.pid ?? null,
+      health: await fetchDiagnosticJson(`${bridgeBaseUrl}/health`),
+      dependencies: await fetchDiagnosticJson(`${bridgeBaseUrl}/health/dependencies`),
+    },
+    paths: {
+      user_data: app.getPath('userData'),
+      runtime_root: runtimeRoot(),
+      web_app_root: webAppRoot(),
+      bridge_script: bridgeScriptPath(),
+      frontend_dist: frontendDistPath(),
+      desktop_log: desktopLogPath(),
+      bridge_state_dir: bridgeStateDir(),
+    },
+    logs: {
+      desktop_runtime: readTextFileTail(desktopLogPath()),
+    },
+    bridge_state: readBridgeStateFiles(),
+  };
+}
+
+async function exportDesktopDiagnostics() {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const result = await dialog.showSaveDialog(mainWindow ?? undefined, {
+    title: '导出桌面诊断包',
+    defaultPath: `NoteAI-diagnostics-${timestamp}.json`,
+    filters: [{ name: 'JSON diagnostics', extensions: ['json'] }],
+  });
+  if (result.canceled || !result.filePath) {
+    return { canceled: true, path: null };
+  }
+  const diagnostics = await createDesktopDiagnostics();
+  writeFileSync(result.filePath, `${JSON.stringify(diagnostics, null, 2)}\n`, 'utf8');
+  writeDesktopLog(`diagnostics exported to ${result.filePath}`);
+  return { canceled: false, path: result.filePath };
 }
 
 function runtimeRoot() {
@@ -384,6 +491,10 @@ ipcMain.handle('noteapp:select-workspace-folder', async () => {
     return { canceled: true, path: null };
   }
   return { canceled: false, path: result.filePaths[0] ?? null };
+});
+
+ipcMain.handle('noteapp:export-diagnostics', async () => {
+  return exportDesktopDiagnostics();
 });
 
 app.on('window-all-closed', () => {

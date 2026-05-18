@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Bot,
+  FileDown,
   FolderOpen,
   KeyRound,
   Loader2,
@@ -21,6 +22,7 @@ import AiWikiView from './views/AiWikiView';
 import AiChatView from './views/AiChatView';
 import GraphView from './views/GraphView';
 import type { AiContextDraft } from './aiContext';
+import { exportDesktopDiagnostics, getDesktopApi } from './desktop';
 import { invalidateLocalSettingsCache } from './useLocalSettingsSnapshot';
 import { invalidateWorkspaceFilesCache } from './useWorkspaceFiles';
 import { useWorkspaceRegistryController, type RegisteredWorkspace } from './useWorkspaceRegistry';
@@ -330,15 +332,46 @@ function TopBar({
   onDeleteWorkspace: (workspaceId: string) => void | Promise<void>;
 }) {
   const userName = userNameFromUserInfo(userInfo);
+  const canExportDiagnostics = Boolean(getDesktopApi()?.exportDiagnostics);
+  const [diagnosticExportStatus, setDiagnosticExportStatus] = useState<string | null>(null);
   const [isWorkspaceDialogOpen, setIsWorkspaceDialogOpen] = useState(false);
   const [workspaceToDelete, setWorkspaceToDelete] = useState<RegisteredWorkspace | null>(null);
   const [workspaceToActivate, setWorkspaceToActivate] = useState<RegisteredWorkspace | null>(null);
+
+  async function handleExportDiagnostics() {
+    setDiagnosticExportStatus(null);
+    try {
+      const result = await exportDesktopDiagnostics();
+      if (!result || result.canceled) {
+        return;
+      }
+      setDiagnosticExportStatus(`诊断已导出：${result.path}`);
+    } catch (error) {
+      setDiagnosticExportStatus(error instanceof Error ? error.message : String(error));
+    }
+  }
 
   return (
     <>
     <header className="sticky top-0 z-30 flex h-16 w-full flex-shrink-0 items-center justify-between border-b border-[#0f3460] bg-[#16213e]/80 px-4 backdrop-blur-md md:px-6">
       <div className="min-w-0 flex-1" />
       <div className="flex min-w-0 items-center gap-2">
+        {diagnosticExportStatus && (
+          <span className="hidden max-w-56 truncate rounded-lg border border-[#0f3460] bg-[#121316] px-3 py-2 text-[11px] text-slate-400 lg:inline" title={diagnosticExportStatus}>
+            {diagnosticExportStatus}
+          </span>
+        )}
+        {canExportDiagnostics && (
+          <button
+            type="button"
+            onClick={() => void handleExportDiagnostics()}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 transition-colors hover:text-white"
+            title="导出桌面诊断包"
+          >
+            <FileDown size={14} />
+            <span className="hidden lg:inline">诊断</span>
+          </button>
+        )}
         <div className="hidden min-w-0 items-center gap-2 rounded-lg border border-[#0f3460] bg-[#121316] px-3 py-2 text-[12px] text-slate-300 sm:flex">
           <UserRound size={14} className="flex-shrink-0 text-[#a9c8fc]" />
           <span className="max-w-40 truncate" title={userName}>{userName}</span>

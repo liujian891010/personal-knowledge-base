@@ -21,6 +21,7 @@ function extractNavItemsBlock(appSource) {
 }
 
 const appSource = readProjectFile('src/App.tsx');
+const desktopSource = readProjectFile('src/desktop.ts');
 const explorerSource = readProjectFile('src/views/ExplorerView.tsx');
 const graphSource = readProjectFile('src/views/GraphView.tsx');
 const trashSource = readProjectFile('src/views/TrashView.tsx');
@@ -68,6 +69,10 @@ assert(
 assert(
   appSource.includes('onDeleteWorkspace={(workspaceId) => void handleDeleteWorkspace(workspaceId)}'),
   'TopBar is not wired to the real workspace delete handler',
+);
+assert(
+  desktopSource.includes('exportDesktopDiagnostics') && appSource.includes('handleExportDiagnostics'),
+  'Desktop diagnostics export is not exposed from the main shell',
 );
 assert(
   explorerSource.includes('useSyncShellController(source === \'bridge\')'),
