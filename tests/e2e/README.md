@@ -40,6 +40,27 @@ $env:PYTHONPATH='packages/vault-core/src;.'
 python tests\e2e\desktop_sync_smoke.py
 ```
 
+## Desktop Sync Stability
+
+`desktop_sync_stability.py` starts the local FastAPI sync server with the SQLite repository profile by default and runs:
+
+1. single-file continuous commit and pull verification, defaulting to 1000 iterations
+2. long-offline old-device delete regression, ensuring a stale clean device does not recreate a tombstoned file and removes the canonical file after reconnect
+
+Run the full release stability gate:
+
+```powershell
+$env:PYTHONPATH='packages/vault-core/src;.'
+python tests\e2e\desktop_sync_stability.py --iterations 1000
+```
+
+Run a short local check:
+
+```powershell
+$env:PYTHONPATH='packages/vault-core/src;.'
+python tests\e2e\desktop_sync_stability.py --iterations 5 --progress-every 1
+```
+
 ## Sync Server Production Smoke
 
 `sync_server_production_smoke.py` starts the FastAPI sync server with the SQLite repository profile and runs the production-backend regression gates:

@@ -16,6 +16,12 @@ powershell -ExecutionPolicy Bypass -File scripts\ci\v1043-acceptance.ps1
 powershell -ExecutionPolicy Bypass -File scripts\ci\v1043-acceptance.ps1 -ReleaseArtifacts
 ```
 
+运行 1000 次连续同步与长期离线回归：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\ci\v1043-acceptance.ps1 -Stability
+```
+
 ## 验收矩阵
 
 完整矩阵见 [`v1.0.43-acceptance-matrix.md`](v1.0.43-acceptance-matrix.md)。

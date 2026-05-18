@@ -1,6 +1,8 @@
 param(
   [switch]$List,
-  [switch]$ReleaseArtifacts
+  [switch]$ReleaseArtifacts,
+  [switch]$Stability,
+  [int]$StabilityIterations = 1000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -171,6 +173,17 @@ if ($ReleaseArtifacts) {
   $Steps.Add([pscustomobject]@{
     Name = 'desktop:dist-win-signed'
     Run = { npm.cmd --prefix apps\desktop\noteapp-desktop run dist:win:signed }
+  })
+}
+
+if ($Stability) {
+  $Steps.Add([pscustomobject]@{
+    Name = 'stability:desktop-sync'
+    Run = {
+      Invoke-WithEnv @{ PYTHONPATH = $DesktopPythonPath } {
+        & $Python tests\e2e\desktop_sync_stability.py --iterations $StabilityIterations
+      }
+    }
   })
 }
 
