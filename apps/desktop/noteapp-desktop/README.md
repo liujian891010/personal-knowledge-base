@@ -55,6 +55,30 @@ npm.cmd run dist:win
 
 产物输出到 `apps/desktop/noteapp-desktop/release/`。
 
+#### Windows 正式签名
+
+正式发布必须使用 Authenticode 证书构建，并在产物生成后验签。脚本接受 electron-builder 标准变量，也接受 `WIN_` 前缀变量并自动转发：
+
+```powershell
+cd apps\desktop\noteapp-desktop
+$env:CSC_LINK='C:\certs\noteai-code-signing.pfx'
+$env:CSC_KEY_PASSWORD='<pfx-password>'
+npm.cmd run dist:win:signed
+```
+
+也可以使用：
+
+```powershell
+$env:WIN_CSC_LINK='C:\certs\noteai-code-signing.pfx'
+$env:WIN_CSC_KEY_PASSWORD='<pfx-password>'
+```
+
+`dist:win:signed` 会先检查证书环境变量，再调用 electron-builder，最后对 `release/*.exe` 执行 `Get-AuthenticodeSignature`。任一安装包签名状态不是 `Valid` 时命令会失败。已有产物可单独验签：
+
+```powershell
+npm.cmd run verify:win-signature
+```
+
 ### macOS
 
 macOS 安装包需要在 macOS 主机上构建；Electron Builder 不支持在 Windows 上直接产出 macOS `dmg` / `zip`。

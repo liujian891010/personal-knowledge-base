@@ -12,6 +12,8 @@
     "build:frontend": "node scripts/build-frontend.mjs",
     "pack:win": "npm.cmd run build:frontend && node scripts/package-win.mjs --dir --win nsis",
     "dist:win": "npm.cmd run build:frontend && node scripts/package-win.mjs --win nsis",
+    "dist:win:signed": "npm.cmd run build:frontend && node scripts/check-win-signing-env.mjs && node scripts/package-win.mjs --win nsis && node scripts/verify-win-signature.mjs",
+    "verify:win-signature": "node scripts/verify-win-signature.mjs",
     "pack:mac": "npm run build:frontend && node scripts/package-mac.mjs --dir --mac",
     "dist:mac": "npm run build:frontend && node scripts/package-mac.mjs --mac dmg zip"
   },
