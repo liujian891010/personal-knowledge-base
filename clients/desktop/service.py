@@ -613,6 +613,34 @@ def _markdown_frontmatter_flag(text: str, key: str) -> bool:
     return value.strip().strip("\"'").lower() == "true"
 
 
+def _safe_ai_writeback_note_title(value: str) -> str:
+    sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "-", value).strip(" .")
+    sanitized = re.sub(r"\s+", " ", sanitized)
+    if not sanitized:
+        return "AI Note"
+    return sanitized[:80].strip(" .") or "AI Note"
+
+
+def _normalize_ai_writeback_new_note_path(value: str) -> str:
+    raw_value = value.strip().replace("\\", "/")
+    if not raw_value:
+        raise ValueError("ai_writeback_invalid_request: target_path must be non-empty")
+    path = PurePosixPath(raw_value)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"ai_writeback_invalid_request: target_path is not safe: {value!r}")
+    if path.suffix.lower() not in {".md", ".markdown"}:
+        path = path.with_suffix(".md")
+    parts_lower = tuple(part.lower() for part in path.parts)
+    if not parts_lower:
+        raise ValueError("ai_writeback_invalid_request: target_path must be non-empty")
+    if parts_lower[0] in {NOTEAPP_DIRNAME.lower(), ".ai", "attachments"}:
+        raise ValueError(f"ai_writeback_invalid_request: target_path is reserved: {value!r}")
+    normalized = path.as_posix()
+    if not _is_existing_workspace_import_path(normalized):
+        raise ValueError(f"ai_writeback_invalid_request: target_path is not importable: {value!r}")
+    return normalized
+
+
 def _stable_json_text(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -623,7 +651,7 @@ def _ai_writeback_signature_payload(
     device_id: str,
     mode: str,
     target_key: str,
-    before_hash: str,
+    before_hash: Optional[str],
     after_hash: str,
     request_hash: str,
     idempotency_key: str,
@@ -648,7 +676,7 @@ def _build_ai_writeback_confirmation_token(
     device_id: str,
     mode: str,
     target_key: str,
-    before_hash: str,
+    before_hash: Optional[str],
     after_hash: str,
     request_hash: str,
     idempotency_key: str,
@@ -695,13 +723,14 @@ def _parse_ai_writeback_confirmation_token(token: str) -> dict[str, Any]:
     required_string_keys = {
         "mode",
         "target_key",
-        "before_hash",
         "after_hash",
         "request_hash",
         "idempotency_key",
         "signature",
     }
     if any(not isinstance(payload.get(key), str) or not payload.get(key) for key in required_string_keys):
+        raise ValueError("ai_writeback_missing_confirmation: invalid confirmation token")
+    if payload.get("before_hash") is not None and not isinstance(payload.get("before_hash"), str):
         raise ValueError("ai_writeback_missing_confirmation: invalid confirmation token")
     if not isinstance(payload.get("expires_at_ms"), int):
         raise ValueError("ai_writeback_missing_confirmation: invalid confirmation token")
@@ -2441,18 +2470,49 @@ class DesktopSyncService:
     ) -> DesktopAiWritebackPreview:
         parsed = self._parse_ai_writeback_request(request, require_confirmation=False)
         now = now_ms if now_ms is not None else _current_time_ms()
+        if parsed["mode"] == "insert_current_note":
+            return self._preview_ai_writeback_insert_current_note(parsed, now_ms=now)
+        if parsed["mode"] == "create_note":
+            return self._preview_ai_writeback_create_note(parsed, now_ms=now)
+        raise ValueError(f"ai_writeback_invalid_request: unsupported AI writeback mode: {parsed['mode']}")
+
+    def apply_ai_writeback(
+        self,
+        request: Mapping[str, Any],
+        *,
+        now_ms: Optional[int] = None,
+    ) -> DesktopAiWritebackApplyResult:
+        parsed = self._parse_ai_writeback_request(request, require_confirmation=True)
+        token_payload = _parse_ai_writeback_confirmation_token(parsed["confirmation_token"])
+        now = now_ms if now_ms is not None else _current_time_ms()
+        if now > token_payload["expires_at_ms"]:
+            raise ValueError("ai_writeback_missing_confirmation: confirmation token expired")
+        if token_payload["mode"] != parsed["mode"] or token_payload["idempotency_key"] != parsed["idempotency_key"]:
+            raise ValueError("ai_writeback_missing_confirmation: confirmation token does not match request")
+        if parsed["mode"] == "insert_current_note":
+            return self._apply_ai_writeback_insert_current_note(parsed, token_payload)
+        if parsed["mode"] == "create_note":
+            return self._apply_ai_writeback_create_note(parsed, token_payload, now_ms=now)
+        raise ValueError(f"ai_writeback_invalid_request: unsupported AI writeback mode: {parsed['mode']}")
+
+    def _preview_ai_writeback_insert_current_note(
+        self,
+        parsed: Mapping[str, Any],
+        *,
+        now_ms: int,
+    ) -> DesktopAiWritebackPreview:
         target_key = f"current_note:{parsed['file_id']}"
         _, target_path, base_text, protected_texts = self._load_ai_writeback_current_note_base(parsed["file_id"])
         self._ensure_ai_writeback_target_unlocked(protected_texts)
         rendered_markdown = self._render_ai_writeback_insert_current_note_block(
             parsed["answer_markdown"],
             parsed["sources"],
-            now_ms=now,
+            now_ms=now_ms,
         )
         after_text = self._append_ai_writeback_block(base_text, rendered_markdown)
         before_hash = _compute_content_hash(base_text.encode("utf-8"))
         after_hash = _compute_content_hash(after_text.encode("utf-8"))
-        expires_at_ms = now + _AI_WRITEBACK_PREVIEW_TTL_MS
+        expires_at_ms = now_ms + _AI_WRITEBACK_PREVIEW_TTL_MS
         request_hash = self._ai_writeback_request_hash(parsed, target_key=target_key)
         confirmation_token = _build_ai_writeback_confirmation_token(
             vault_id=self.vault_id,
@@ -2484,24 +2544,58 @@ class DesktopSyncService:
             warnings=warnings,
         )
 
-    def apply_ai_writeback(
+    def _preview_ai_writeback_create_note(
         self,
-        request: Mapping[str, Any],
+        parsed: Mapping[str, Any],
         *,
-        now_ms: Optional[int] = None,
-    ) -> DesktopAiWritebackApplyResult:
-        parsed = self._parse_ai_writeback_request(request, require_confirmation=True)
-        token_payload = _parse_ai_writeback_confirmation_token(parsed["confirmation_token"])
-        now = now_ms if now_ms is not None else _current_time_ms()
-        if now > token_payload["expires_at_ms"]:
-            raise ValueError("ai_writeback_missing_confirmation: confirmation token expired")
+        now_ms: int,
+    ) -> DesktopAiWritebackPreview:
+        target_path = self._resolve_ai_writeback_create_note_target_path(parsed, now_ms=now_ms)
+        target_key = f"new_note:{target_path}"
+        rendered_markdown = self._render_ai_writeback_create_note_text(parsed, target_path=target_path, now_ms=now_ms)
+        after_hash = _compute_content_hash(rendered_markdown.encode("utf-8"))
+        expires_at_ms = now_ms + _AI_WRITEBACK_PREVIEW_TTL_MS
+        request_hash = self._ai_writeback_request_hash(parsed, target_key=target_key)
+        confirmation_token = _build_ai_writeback_confirmation_token(
+            vault_id=self.vault_id,
+            device_id=self.config.device_id,
+            mode=parsed["mode"],
+            target_key=target_key,
+            before_hash=None,
+            after_hash=after_hash,
+            request_hash=request_hash,
+            idempotency_key=parsed["idempotency_key"],
+            expires_at_ms=expires_at_ms,
+        )
+        warnings = []
+        if not parsed["sources"]:
+            warnings.append("source_free_output")
+        return DesktopAiWritebackPreview(
+            schema_version="v1",
+            mode=parsed["mode"],
+            target_path=target_path,
+            before_hash=None,
+            after_hash=after_hash,
+            confirmation_token=confirmation_token,
+            expires_at_ms=expires_at_ms,
+            rendered_markdown=rendered_markdown,
+            diff=DesktopAiWritebackDiff(
+                format="unified",
+                text=self._unified_ai_writeback_diff("", rendered_markdown, target_path=target_path),
+            ),
+            warnings=warnings,
+        )
 
-        target_key = f"current_note:{parsed['file_id']}"
+    def _verify_ai_writeback_confirmation(
+        self,
+        parsed: Mapping[str, Any],
+        token_payload: Mapping[str, Any],
+        *,
+        target_key: str,
+    ) -> str:
         request_hash = self._ai_writeback_request_hash(parsed, target_key=target_key)
         if (
-            token_payload["mode"] != parsed["mode"]
-            or token_payload["target_key"] != target_key
-            or token_payload["idempotency_key"] != parsed["idempotency_key"]
+            token_payload["target_key"] != target_key
             or token_payload["request_hash"] != request_hash
         ):
             raise ValueError("ai_writeback_missing_confirmation: confirmation token does not match request")
@@ -2522,7 +2616,15 @@ class DesktopSyncService:
         ).hexdigest()
         if token_payload["signature"] != expected_signature:
             raise ValueError("ai_writeback_missing_confirmation: confirmation token signature mismatch")
+        return request_hash
 
+    def _apply_ai_writeback_insert_current_note(
+        self,
+        parsed: Mapping[str, Any],
+        token_payload: Mapping[str, Any],
+    ) -> DesktopAiWritebackApplyResult:
+        target_key = f"current_note:{parsed['file_id']}"
+        self._verify_ai_writeback_confirmation(parsed, token_payload, target_key=target_key)
         _, target_path, base_text, protected_texts = self._load_ai_writeback_current_note_base(parsed["file_id"])
         current_hash = _compute_content_hash(base_text.encode("utf-8"))
         if current_hash == token_payload["after_hash"]:
@@ -2568,13 +2670,72 @@ class DesktopSyncService:
             requires_user_save=True,
         )
 
+    def _apply_ai_writeback_create_note(
+        self,
+        parsed: Mapping[str, Any],
+        token_payload: Mapping[str, Any],
+        *,
+        now_ms: int,
+    ) -> DesktopAiWritebackApplyResult:
+        target_key = str(token_payload["target_key"])
+        if not target_key.startswith("new_note:"):
+            raise ValueError("ai_writeback_missing_confirmation: confirmation token target mismatch")
+        target_path = target_key.removeprefix("new_note:")
+        if _normalize_ai_writeback_new_note_path(target_path) != target_path:
+            raise ValueError("ai_writeback_missing_confirmation: confirmation token target mismatch")
+        self._verify_ai_writeback_confirmation(parsed, token_payload, target_key=target_key)
+        preview_now_ms = int(token_payload["expires_at_ms"]) - _AI_WRITEBACK_PREVIEW_TTL_MS
+        rendered_markdown = self._render_ai_writeback_create_note_text(
+            parsed,
+            target_path=target_path,
+            now_ms=preview_now_ms,
+        )
+        after_hash = _compute_content_hash(rendered_markdown.encode("utf-8"))
+        if after_hash != token_payload["after_hash"]:
+            raise ValueError("ai_writeback_missing_confirmation: confirmation token does not match rendered output")
+        content_path = _resolve_workspace_file_path(self.workspace.vault_root, target_path)
+        if content_path.exists():
+            if content_path.is_file() and _compute_content_hash(content_path.read_bytes()) == after_hash:
+                record = self._workspace_file_record_for_path(target_path)
+                if record is not None:
+                    return DesktopAiWritebackApplyResult(
+                        schema_version="v1",
+                        mode=parsed["mode"],
+                        status="already_applied",
+                        file_id=record.file_id,
+                        path=target_path,
+                        content_hash=after_hash,
+                        wrote_draft=False,
+                        wrote_file=False,
+                        search_index_refreshed=False,
+                        requires_user_save=False,
+                    )
+            raise ValueError("ai_writeback_base_changed: target note path changed after preview")
+        created = self.create_workspace_note(
+            target_path,
+            text=rendered_markdown,
+            now_ms=now_ms,
+        )
+        return DesktopAiWritebackApplyResult(
+            schema_version="v1",
+            mode=parsed["mode"],
+            status="applied",
+            file_id=created.file.file_id,
+            path=target_path,
+            content_hash=after_hash,
+            wrote_draft=False,
+            wrote_file=True,
+            search_index_refreshed=True,
+            requires_user_save=False,
+        )
+
     def _parse_ai_writeback_request(self, request: Mapping[str, Any], *, require_confirmation: bool) -> dict[str, Any]:
         if not isinstance(request, Mapping):
             raise ValueError("ai_writeback_invalid_request: request must be an object")
         if request.get("schema_version") != "v1":
             raise ValueError("ai_writeback_invalid_request: schema_version must be v1")
         mode = request.get("mode")
-        if mode != "insert_current_note":
+        if mode not in {"insert_current_note", "create_note"}:
             raise ValueError(f"ai_writeback_invalid_request: unsupported AI writeback mode: {mode}")
         idempotency_key = request.get("idempotency_key")
         if not isinstance(idempotency_key, str) or not idempotency_key.strip():
@@ -2585,28 +2746,39 @@ class DesktopSyncService:
         target = request.get("target")
         if not isinstance(target, Mapping):
             raise ValueError("ai_writeback_invalid_request: target is required")
-        if target.get("type") != "current_note":
-            raise ValueError("ai_writeback_invalid_request: target.type must be current_note")
-        if target.get("insert_position") != "append":
-            raise ValueError("ai_writeback_invalid_request: insert_position must be append")
-        file_id = target.get("file_id")
-        if not isinstance(file_id, str) or not file_id:
-            raise ValueError("ai_writeback_invalid_request: target.file_id is required")
         sources = self._parse_ai_writeback_sources(request.get("sources", []))
         confirmation_token = request.get("confirmation_token")
         if require_confirmation and (not isinstance(confirmation_token, str) or not confirmation_token.strip()):
             raise ValueError("ai_writeback_missing_confirmation: confirmation_token is required")
         instruction = request.get("instruction")
-        return {
+        parsed = {
             "schema_version": "v1",
             "mode": mode,
             "idempotency_key": idempotency_key.strip(),
             "answer_markdown": answer_markdown.strip(),
             "instruction": instruction if isinstance(instruction, str) else "",
             "sources": sources,
-            "file_id": file_id,
             "confirmation_token": confirmation_token.strip() if isinstance(confirmation_token, str) else "",
         }
+        if mode == "insert_current_note":
+            if target.get("type") != "current_note":
+                raise ValueError("ai_writeback_invalid_request: target.type must be current_note")
+            if target.get("insert_position") != "append":
+                raise ValueError("ai_writeback_invalid_request: insert_position must be append")
+            file_id = target.get("file_id")
+            if not isinstance(file_id, str) or not file_id:
+                raise ValueError("ai_writeback_invalid_request: target.file_id is required")
+            parsed["file_id"] = file_id
+            return parsed
+        if target.get("type") != "new_note":
+            raise ValueError("ai_writeback_invalid_request: target.type must be new_note")
+        target_path = target.get("target_path")
+        title = target.get("title")
+        folder_path = target.get("folder_path")
+        parsed["target_path"] = target_path if isinstance(target_path, str) and target_path.strip() else None
+        parsed["title"] = title if isinstance(title, str) and title.strip() else None
+        parsed["folder_path"] = folder_path if isinstance(folder_path, str) and folder_path.strip() else None
+        return parsed
 
     def _parse_ai_writeback_sources(self, value: Any) -> list[DesktopAiWritebackSource]:
         if not isinstance(value, list):
@@ -2648,6 +2820,42 @@ class DesktopSyncService:
             protected_texts.append(draft.text)
         return record, record.path, base_text, protected_texts
 
+    def _workspace_file_record_for_path(self, path: str) -> Optional[FileRecord]:
+        snapshot = self.load_snapshot()
+        return next((record for record in snapshot.document.files if record.status == "active" and record.path == path), None)
+
+    def _resolve_ai_writeback_create_note_target_path(self, parsed: Mapping[str, Any], *, now_ms: int) -> str:
+        requested_path = parsed.get("target_path")
+        if isinstance(requested_path, str) and requested_path:
+            normalized = _normalize_ai_writeback_new_note_path(requested_path)
+        else:
+            title = parsed.get("title") if isinstance(parsed.get("title"), str) else ""
+            if not title:
+                title = parsed.get("instruction") if isinstance(parsed.get("instruction"), str) else ""
+            safe_title = _safe_ai_writeback_note_title(title or "AI Note")
+            folder = parsed.get("folder_path") if isinstance(parsed.get("folder_path"), str) else ""
+            normalized_folder = _normalize_ai_context_folder_path(folder or "AI Notes")
+            if not normalized_folder:
+                normalized_folder = "AI Notes"
+            date_prefix = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+            normalized = _normalize_ai_writeback_new_note_path(f"{normalized_folder}/{date_prefix} {safe_title}.md")
+        return self._next_available_ai_writeback_note_path(normalized)
+
+    def _next_available_ai_writeback_note_path(self, normalized_path: str) -> str:
+        snapshot = self.load_snapshot()
+        active_paths = {record.path for record in snapshot.document.files if record.status != "deleted"}
+        base_path = PurePosixPath(normalized_path)
+        stem = base_path.stem
+        suffix = base_path.suffix or ".md"
+        parent = base_path.parent
+        index = 1
+        while True:
+            candidate = normalized_path if index == 1 else (parent / f"{stem}-{index}{suffix}").as_posix()
+            content_path = _resolve_workspace_file_path(self.workspace.vault_root, candidate)
+            if candidate not in active_paths and not content_path.exists():
+                return candidate
+            index += 1
+
     def _ensure_ai_writeback_target_unlocked(self, texts: Iterable[str]) -> None:
         if any(_markdown_frontmatter_flag(text, "locked") for text in texts):
             raise ValueError("ai_writeback_target_locked: target has locked frontmatter")
@@ -2660,6 +2868,10 @@ class DesktopSyncService:
             "idempotency_key": parsed["idempotency_key"],
             "instruction": parsed["instruction"],
             "answer_markdown": parsed["answer_markdown"],
+            "file_id": parsed.get("file_id"),
+            "target_path": parsed.get("target_path"),
+            "title": parsed.get("title"),
+            "folder_path": parsed.get("folder_path"),
             "sources": [
                 {
                     "file_id": source.file_id,
@@ -2686,11 +2898,44 @@ class DesktopSyncService:
             answer_markdown.strip(),
         ]
         if sources:
-            lines.extend(["", "### Sources", ""])
-            for source in sources:
-                title = source.title or _note_title_from_path(source.path)
-                lines.append(f"- [[{title}]] (`{source.path}`)")
+            lines.extend(self._render_ai_writeback_source_lines(sources))
         return "\n".join(lines).rstrip() + "\n"
+
+    def _render_ai_writeback_create_note_text(
+        self,
+        parsed: Mapping[str, Any],
+        *,
+        target_path: str,
+        now_ms: int,
+    ) -> str:
+        created_at = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        title = parsed.get("title") if isinstance(parsed.get("title"), str) and parsed.get("title") else ""
+        title = title or _note_title_from_path(target_path)
+        sources = parsed["sources"]
+        lines = [
+            "---",
+            "type: ai_generated_note",
+            f"created_at: {created_at}",
+            f"source_count: {len(sources)}",
+            "user_edited: false",
+            "locked: false",
+            "---",
+            "",
+            f"# {title}",
+            "",
+            parsed["answer_markdown"].strip(),
+        ]
+        if sources:
+            lines.extend(self._render_ai_writeback_source_lines(sources))
+        return "\n".join(lines).rstrip() + "\n"
+
+    @staticmethod
+    def _render_ai_writeback_source_lines(sources: list[DesktopAiWritebackSource]) -> list[str]:
+        lines = ["", "### Sources", ""]
+        for source in sources:
+            title = source.title or _note_title_from_path(source.path)
+            lines.append(f"- [[{title}]] (`{source.path}`)")
+        return lines
 
     @staticmethod
     def _append_ai_writeback_block(base_text: str, rendered_markdown: str) -> str:

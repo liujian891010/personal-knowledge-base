@@ -1060,6 +1060,160 @@ class DesktopSyncServiceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "ai_writeback_target_locked"):
                 service.preview_ai_writeback(request, now_ms=1770000040000)
 
+    def test_ai_writeback_preview_create_note_does_not_write_file_or_filemap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            request = {
+                "schema_version": "v1",
+                "idempotency_key": "writeback-create-preview",
+                "mode": "create_note",
+                "answer_markdown": "Knowledge page body.",
+                "instruction": "Save a knowledge note",
+                "sources": [
+                    {
+                        "file_id": "file-live",
+                        "path": "Notes/Live.md",
+                        "title": "Live",
+                    }
+                ],
+                "target": {
+                    "type": "new_note",
+                    "title": "Knowledge Summary",
+                },
+            }
+
+            preview = service.preview_ai_writeback(request, now_ms=1770000040000)
+
+            self.assertEqual(preview.mode, "create_note")
+            self.assertEqual(preview.target_path, "AI Notes/2026-02-02 Knowledge Summary.md")
+            self.assertIsNone(preview.before_hash)
+            self.assertIn("type: ai_generated_note", preview.rendered_markdown)
+            self.assertIn("source_count: 1", preview.rendered_markdown)
+            self.assertIn("# Knowledge Summary", preview.rendered_markdown)
+            self.assertIn("Knowledge page body.", preview.rendered_markdown)
+            self.assertIn("+type: ai_generated_note", preview.diff.text)
+            self.assertFalse((root / "AI Notes" / "2026-02-02 Knowledge Summary.md").exists())
+            self.assertNotIn(
+                "AI Notes/2026-02-02 Knowledge Summary.md",
+                [record.path for record in load_filemap(service.workspace.paths.filemap_path).files],
+            )
+
+    def test_ai_writeback_apply_create_note_writes_filemap_and_search_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            request = {
+                "schema_version": "v1",
+                "idempotency_key": "writeback-create-apply",
+                "mode": "create_note",
+                "answer_markdown": "Durable generated knowledge.",
+                "sources": [
+                    {
+                        "file_id": "file-live",
+                        "path": "Notes/Live.md",
+                        "title": "Live",
+                    }
+                ],
+                "target": {
+                    "type": "new_note",
+                    "target_path": "AI Notes/Generated.md",
+                    "title": "Generated",
+                },
+            }
+            preview = service.preview_ai_writeback(request, now_ms=1770000040000)
+
+            result = service.apply_ai_writeback(
+                {**request, "confirmation_token": preview.confirmation_token},
+                now_ms=1770000040001,
+            )
+
+            written_path = root / "AI Notes" / "Generated.md"
+            written_text = written_path.read_text(encoding="utf-8")
+            self.assertEqual(result.status, "applied")
+            self.assertEqual(result.path, "AI Notes/Generated.md")
+            self.assertTrue(result.wrote_file)
+            self.assertFalse(result.wrote_draft)
+            self.assertTrue(result.search_index_refreshed)
+            self.assertFalse(result.requires_user_save)
+            self.assertEqual(result.content_hash, preview.after_hash)
+            self.assertIn("user_edited: false", written_text)
+            self.assertIn("locked: false", written_text)
+            self.assertIn("Durable generated knowledge.", written_text)
+            record = next(
+                item
+                for item in load_filemap(service.workspace.paths.filemap_path).files
+                if item.path == "AI Notes/Generated.md"
+            )
+            self.assertEqual(record.file_id, result.file_id)
+            self.assertEqual(record.type, "note")
+            search = service.search_workspace("Durable", limit=5)
+            self.assertEqual(search.results[0].path, "AI Notes/Generated.md")
+
+            retry = service.apply_ai_writeback(
+                {**request, "confirmation_token": preview.confirmation_token},
+                now_ms=1770000040002,
+            )
+
+            self.assertEqual(retry.status, "already_applied")
+            self.assertFalse(retry.wrote_file)
+
+    def test_ai_writeback_create_note_uses_suffix_instead_of_overwriting_existing_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            existing_path = root / "AI Notes" / "Generated.md"
+            existing_path.parent.mkdir(parents=True, exist_ok=True)
+            existing_path.write_text(
+                "---\ntype: ai_generated_note\nuser_edited: true\nlocked: false\n---\n# Existing\n",
+                encoding="utf-8",
+            )
+            request = {
+                "schema_version": "v1",
+                "idempotency_key": "writeback-create-suffix",
+                "mode": "create_note",
+                "answer_markdown": "Replacement should not overwrite.",
+                "sources": [
+                    {
+                        "file_id": "file-live",
+                        "path": "Notes/Live.md",
+                    }
+                ],
+                "target": {
+                    "type": "new_note",
+                    "target_path": "AI Notes/Generated.md",
+                },
+            }
+
+            preview = service.preview_ai_writeback(request, now_ms=1770000040000)
+            result = service.apply_ai_writeback(
+                {**request, "confirmation_token": preview.confirmation_token},
+                now_ms=1770000040001,
+            )
+
+            self.assertEqual(preview.target_path, "AI Notes/Generated-2.md")
+            self.assertEqual(result.path, "AI Notes/Generated-2.md")
+            self.assertTrue((root / "AI Notes" / "Generated-2.md").exists())
+            self.assertIn("user_edited: true", existing_path.read_text(encoding="utf-8"))
+
+    def test_ai_writeback_create_note_rejects_reserved_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+            request = {
+                "schema_version": "v1",
+                "idempotency_key": "writeback-create-reserved",
+                "mode": "create_note",
+                "answer_markdown": "AI answer.",
+                "sources": [],
+                "target": {
+                    "type": "new_note",
+                    "target_path": ".ai/wiki/Generated.md",
+                },
+            }
+
+            with self.assertRaisesRegex(ValueError, "ai_writeback_invalid_request"):
+                service.preview_ai_writeback(request, now_ms=1770000040000)
+
     def test_write_workspace_file_content_clears_existing_draft(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
