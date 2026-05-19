@@ -56,6 +56,7 @@ let workspaceRegistry = initialWorkspaceState.registry;
 let activeWorkspaceId = initialWorkspaceState.activeWorkspaceId;
 let selectedVaultRoot = initialWorkspaceState.selectedVaultRoot;
 const maxRequestBodyBytes = 5_000_000;
+let cachedSyncSession = null;
 
 const args = new Set(process.argv.slice(2));
 
@@ -624,7 +625,7 @@ function deleteAiChatSession(sessionId) {
 
 function bridgeEnv(extraEnv = {}) {
   const derivedEnv = deriveBridgeRuntimeEnv();
-  return {
+  const env = {
     ...process.env,
     ...derivedEnv,
     NOTEAPP_VAULT_ROOT: selectedVaultRoot,
@@ -632,6 +633,7 @@ function bridgeEnv(extraEnv = {}) {
     PYTHONUTF8: '1',
     ...extraEnv,
   };
+  return env;
 }
 
 function runScript(scriptName, extraEnv = {}) {
@@ -668,6 +670,15 @@ function runDesktopCli(commandArgs) {
     throw new Error('workspace root is not configured');
   }
   const python = process.env.PYTHON || 'python';
+  const env = bridgeEnv({
+    PYTHONPATH: buildPythonPath(),
+  });
+  if (!env.NOTEAPP_BEARER_TOKEN && shouldAutoAttachBearer(commandArgs)) {
+    const bearerToken = resolveBridgeBearerToken(env);
+    if (bearerToken) {
+      env.NOTEAPP_BEARER_TOKEN = bearerToken;
+    }
+  }
   const result = spawnSync(
     python,
     [
@@ -676,19 +687,17 @@ function runDesktopCli(commandArgs) {
       '--vault-root',
       selectedVaultRoot,
       '--base-url',
-      requireBridgeEnv('NOTEAPP_SYNC_BASE_URL'),
+      requireEnvValue(env, 'NOTEAPP_SYNC_BASE_URL'),
       '--vault-id',
-      requireBridgeEnv('NOTEAPP_VAULT_ID'),
+      requireEnvValue(env, 'NOTEAPP_VAULT_ID'),
       '--device-id',
-      requireBridgeEnv('NOTEAPP_DEVICE_ID'),
-      ...(process.env.NOTEAPP_BEARER_TOKEN ? [`--bearer-token=${process.env.NOTEAPP_BEARER_TOKEN}`] : []),
+      requireEnvValue(env, 'NOTEAPP_DEVICE_ID'),
+      ...(env.NOTEAPP_BEARER_TOKEN ? [`--bearer-token=${env.NOTEAPP_BEARER_TOKEN}`] : []),
       ...commandArgs,
     ],
     {
       cwd: repoRoot,
-      env: bridgeEnv({
-        PYTHONPATH: buildPythonPath(),
-      }),
+      env,
       encoding: 'utf8',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -711,6 +720,20 @@ function runDesktopCli(commandArgs) {
     );
   }
   return result.stdout;
+}
+
+function shouldAutoAttachBearer(commandArgs) {
+  const command = commandArgs[0];
+  return [
+    'file-versions',
+    'file-version-content',
+    'diff-file-version',
+    'restore-file-version',
+    'update-file-version',
+    'vault-devices',
+    'heartbeat-vault-device',
+    'revoke-device',
+  ].includes(command);
 }
 
 function readCryptoStatus() {
@@ -791,13 +814,137 @@ function importCryptoRecoveryPackage(payload) {
   }
 }
 
-function requireBridgeEnv(name) {
-  const derivedEnv = deriveBridgeRuntimeEnv();
-  const value = derivedEnv[name] || process.env[name];
+function requireEnvValue(env, name) {
+  const value = env[name];
   if (!value || !value.trim()) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value;
+}
+
+function resolveBridgeBearerToken(env) {
+  if (env.NOTEAPP_BEARER_TOKEN && env.NOTEAPP_BEARER_TOKEN.trim()) {
+    return env.NOTEAPP_BEARER_TOKEN.trim();
+  }
+  if (env.NOTEAPP_SYNC_BRIDGE_AUTO_REGISTER === 'false') {
+    return '';
+  }
+  const baseUrl = env.NOTEAPP_SYNC_BASE_URL || '';
+  if (!isLoopbackSyncBaseUrl(baseUrl)) {
+    return '';
+  }
+  const now = Date.now();
+  if (
+    cachedSyncSession
+    && cachedSyncSession.baseUrl === baseUrl
+    && cachedSyncSession.accessToken
+    && cachedSyncSession.accessExpiresAtMs > now + 60_000
+  ) {
+    return cachedSyncSession.accessToken;
+  }
+  const session = registerLocalSyncSession(env);
+  cachedSyncSession = session;
+  return session.accessToken;
+}
+
+function isLoopbackSyncBaseUrl(baseUrl) {
+  try {
+    const url = new URL(baseUrl);
+    return url.protocol === 'http:' && isLoopbackHost(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function registerLocalSyncSession(env) {
+  const authSession = readAuthSession();
+  const userInfo = authSession.user_info && typeof authSession.user_info === 'object'
+    ? authSession.user_info
+    : {};
+  const accountKey = typeof userInfo.userId === 'string' && userInfo.userId.trim()
+    ? `app-user:${userInfo.userId.trim()}`
+    : `local-bridge:${env.NOTEAPP_VAULT_ID || 'default'}`;
+  const displayName = typeof userInfo.userName === 'string' && userInfo.userName.trim()
+    ? userInfo.userName.trim()
+    : 'NoteApp Local Bridge';
+  const payload = {
+    device_name: `NoteApp Bridge (${env.NOTEAPP_DEVICE_ID || 'desktop-local'})`,
+    platform: 'desktop',
+    protocol_version: 'v1',
+    account_key: accountKey,
+    display_name: displayName,
+    access_token_ttl_ms: 30 * 24 * 60 * 60 * 1000,
+    refresh_token_ttl_ms: 90 * 24 * 60 * 60 * 1000,
+  };
+  const response = postSyncBackendJson(env.NOTEAPP_SYNC_BASE_URL, '/devices/register', payload);
+  if (!response || typeof response.access_token !== 'string' || !response.access_token.trim()) {
+    throw new Error('sync backend auto-registration did not return an access token');
+  }
+  return {
+    baseUrl: env.NOTEAPP_SYNC_BASE_URL,
+    accessToken: response.access_token.trim(),
+    accessExpiresAtMs: Number.isFinite(Number(response.access_token_expires_at_ms))
+      ? Number(response.access_token_expires_at_ms)
+      : Date.now() + 30 * 24 * 60 * 60 * 1000,
+  };
+}
+
+function postSyncBackendJson(baseUrl, path, payload) {
+  const script = `
+const [baseUrl, path, payloadJson] = process.argv.slice(1);
+const controller = new AbortController();
+const timer = setTimeout(() => controller.abort(), 10000);
+(async () => {
+  try {
+    const response = await fetch(new URL(path, baseUrl), {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'content-type': 'application/json',
+      },
+      body: payloadJson,
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      console.error(text || response.statusText);
+      process.exit(20);
+      return;
+    }
+    process.stdout.write(text);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  } finally {
+    clearTimeout(timer);
+  }
+})();
+`;
+  const result = spawnSync(
+    process.execPath,
+    ['-e', script, baseUrl, path, JSON.stringify(payload)],
+    {
+      encoding: 'utf8',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      windowsHide: true,
+    },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      [
+        `sync backend auto-registration failed with exit code ${result.status}`,
+        result.stdout.trim(),
+        result.stderr.trim(),
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+  }
+  return JSON.parse(result.stdout);
 }
 
 function readWorkspaceSettingsFile() {
