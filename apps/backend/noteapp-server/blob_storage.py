@@ -90,6 +90,10 @@ class S3CompatibleBlobStore:
         region: str,
         access_key_id: str,
         secret_access_key: str,
+        credential_rotation_days: Optional[int] = None,
+        lifecycle_retention_days: Optional[int] = None,
+        alert_destination: Optional[str] = None,
+        least_privilege_policy: Optional[str] = None,
     ) -> None:
         if not endpoint or not bucket or not region or not access_key_id or not secret_access_key:
             raise ValueError("S3-compatible object storage requires endpoint, bucket, region, access key, and secret key.")
@@ -99,6 +103,12 @@ class S3CompatibleBlobStore:
         self.access_key_id = access_key_id
         self.secret_access_key = secret_access_key
         self.backend_name = "s3"
+        self.operations_policy = {
+            "credential_rotation_days": credential_rotation_days,
+            "lifecycle_retention_days": lifecycle_retention_days,
+            "alert_destination": alert_destination,
+            "least_privilege_policy": least_privilege_policy,
+        }
 
     def diagnostics(self) -> dict[str, object]:
         return {
@@ -110,6 +120,9 @@ class S3CompatibleBlobStore:
             "region": self.region,
             "checked": False,
             "status": "configured_not_probed",
+            "operations_policy": {
+                key: value for key, value in self.operations_policy.items() if value is not None
+            },
         }
 
     def put_object(self, object_key: str, payload: bytes) -> None:

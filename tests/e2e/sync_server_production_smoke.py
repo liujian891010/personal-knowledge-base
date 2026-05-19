@@ -317,7 +317,13 @@ def run_object_storage_failure_suite(base_url: str) -> dict[str, Any]:
     error_payload = json.loads(body.decode("utf-8"))
     assert status == 503, error_payload
     assert error_payload["code"] == "object_storage_unavailable"
-    return {"object_storage_error_code": error_payload["code"]}
+    status, metrics = request_json(base_url, "GET", "/metrics")
+    assert status == 200, metrics
+    assert metrics["object_storage_failures_total"] >= 1
+    return {
+        "object_storage_error_code": error_payload["code"],
+        "object_storage_failures_total": metrics["object_storage_failures_total"],
+    }
 
 
 def main() -> int:

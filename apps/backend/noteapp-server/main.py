@@ -57,6 +57,8 @@ class RuntimeMetrics:
                 self._counters["capability_expired_total"] += 1
             if error_code == "capability_not_found" and route_path.startswith("/_capabilities/"):
                 self._counters["capability_missing_or_revoked_total"] += 1
+            if error_code in {"object_storage_error", "object_storage_unavailable"}:
+                self._counters["object_storage_failures_total"] += 1
 
     def record_capability_revocation_event(self) -> None:
         with self._lock:
@@ -93,6 +95,7 @@ class RuntimeMetrics:
             "capability_expired_total": counters["capability_expired_total"],
             "capability_missing_or_revoked_total": counters["capability_missing_or_revoked_total"],
             "capability_revocation_events_total": counters["capability_revocation_events_total"],
+            "object_storage_failures_total": counters["object_storage_failures_total"],
             "tombstone_gc_deleted_total": counters["tombstone_gc_deleted_total"],
         }
 
@@ -175,18 +178,66 @@ def _required_env(name: str) -> str:
     return value
 
 
+def _positive_int_env(name: str, *, required: bool = False) -> Optional[int]:
+    raw_value = os.environ.get(name)
+    if raw_value is None or raw_value == "":
+        if required:
+            raise RuntimeError(f"{name} is required")
+        return None
+    try:
+        value = int(raw_value)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be a positive integer") from error
+    if value <= 0:
+        raise RuntimeError(f"{name} must be a positive integer")
+    return value
+
+
+def _validate_object_storage_profile(backend: str, endpoint: Optional[str]) -> dict[str, object]:
+    if backend not in {"s3", "oss"}:
+        return {}
+    required_policy = _is_production_environment()
+    if required_policy and endpoint is not None and not endpoint.lower().startswith("https://"):
+        raise RuntimeError("Production S3/OSS object storage endpoint must use HTTPS")
+    credential_rotation_days = _positive_int_env(
+        "NOTEAPP_SERVER_OBJECT_CREDENTIAL_ROTATION_DAYS",
+        required=required_policy,
+    )
+    lifecycle_retention_days = _positive_int_env(
+        "NOTEAPP_SERVER_OBJECT_LIFECYCLE_RETENTION_DAYS",
+        required=required_policy,
+    )
+    alert_destination = os.environ.get("NOTEAPP_SERVER_OBJECT_ALERT_DESTINATION")
+    least_privilege_policy = os.environ.get("NOTEAPP_SERVER_OBJECT_LEAST_PRIVILEGE_POLICY")
+    if required_policy and not alert_destination:
+        raise RuntimeError("NOTEAPP_SERVER_OBJECT_ALERT_DESTINATION is required")
+    if required_policy and least_privilege_policy != "single-bucket-read-write":
+        raise RuntimeError(
+            "NOTEAPP_SERVER_OBJECT_LEAST_PRIVILEGE_POLICY must be single-bucket-read-write in production"
+        )
+    return {
+        "credential_rotation_days": credential_rotation_days,
+        "lifecycle_retention_days": lifecycle_retention_days,
+        "alert_destination": alert_destination,
+        "least_privilege_policy": least_privilege_policy,
+    }
+
+
 def create_blob_store_from_env(data_dir: Path) -> object:
     backend = os.environ.get("NOTEAPP_SERVER_BLOB_STORAGE", "local").lower()
     if backend in {"local", "filesystem"}:
         root = Path(os.environ.get("NOTEAPP_SERVER_OBJECT_STORAGE_DIR", data_dir / "blobs"))
         return FileSystemBlobStore(root, backend_name=backend)
     if backend in {"s3", "oss"}:
+        endpoint = _required_env("NOTEAPP_SERVER_OBJECT_ENDPOINT")
+        operations_policy = _validate_object_storage_profile(backend, endpoint)
         return S3CompatibleBlobStore(
-            endpoint=_required_env("NOTEAPP_SERVER_OBJECT_ENDPOINT"),
+            endpoint=endpoint,
             bucket=_required_env("NOTEAPP_SERVER_OBJECT_BUCKET"),
             region=_required_env("NOTEAPP_SERVER_OBJECT_REGION"),
             access_key_id=_required_env("NOTEAPP_SERVER_OBJECT_ACCESS_KEY_ID"),
             secret_access_key=_required_env("NOTEAPP_SERVER_OBJECT_SECRET_ACCESS_KEY"),
+            **operations_policy,
         )
     raise RuntimeError("NOTEAPP_SERVER_BLOB_STORAGE must be local, filesystem, s3, or oss")
 

@@ -74,7 +74,17 @@ $env:NOTEAPP_SERVER_OBJECT_BUCKET='noteapp-vault-blobs'
 $env:NOTEAPP_SERVER_OBJECT_REGION='us-east-1'
 $env:NOTEAPP_SERVER_OBJECT_ACCESS_KEY_ID='...'
 $env:NOTEAPP_SERVER_OBJECT_SECRET_ACCESS_KEY='...'
+$env:NOTEAPP_SERVER_OBJECT_CREDENTIAL_ROTATION_DAYS='90'
+$env:NOTEAPP_SERVER_OBJECT_LIFECYCLE_RETENTION_DAYS='365'
+$env:NOTEAPP_SERVER_OBJECT_ALERT_DESTINATION='ops-object-storage'
+$env:NOTEAPP_SERVER_OBJECT_LEAST_PRIVILEGE_POLICY='single-bucket-read-write'
 ```
+
+When `NOTEAPP_SERVER_ENV=production` and S3/OSS storage is enabled, the server
+requires HTTPS endpoints plus the object-storage operations policy variables
+above. Health diagnostics expose the non-secret policy values so deployment
+checks can confirm credential rotation, lifecycle retention, alerting, and
+least-privilege posture without printing credentials.
 
 ## Run Locally
 
@@ -118,7 +128,7 @@ Set `NOTEAPP_SERVER_LOG_LEVEL=INFO` to emit one structured JSON request log per 
 
 `GET /health` stays intentionally small for load balancers. `GET /health/dependencies` checks process state, repository health, object storage health, and SQLite migration versions. Filesystem blob storage performs a short read/write/delete probe; S3/OSS-compatible storage reports configuration without a destructive bucket probe.
 
-`GET /metrics` returns JSON counters for requests, error rate, commit conflicts, blob upload failures, capability expiry/revocation events, and tombstone GC deletion count.
+`GET /metrics` returns JSON counters for requests, error rate, commit conflicts, blob upload failures, object-storage failures, capability expiry/revocation events, and tombstone GC deletion count.
 
 Create a consistent SQLite backup with:
 
@@ -195,7 +205,7 @@ This MVP is intentionally not production-ready:
 
 1. External IdP, built-in MFA, and self-service account recovery remain policy-defined/deferred; password auth and session rotation are implemented
 2. Hosted backup scheduling and managed database provider selection remain deployment operations, but production mode now enforces explicit SQLite database paths and keeps JSON/default `.data` state out of production
-3. S3/OSS mode uses a server streaming proxy; production credential rotation and bucket lifecycle automation are still pending
+3. S3/OSS mode uses a server streaming proxy; provider-side credential rotation and bucket lifecycle jobs must be scheduled by deployment operations and are surfaced through required production policy configuration
 4. Tombstone GC has no background worker or production retention controls
 5. CAS locking is implemented for the SQLite repository profile; distributed multi-node locking and operational alerts are still pending
 

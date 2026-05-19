@@ -109,6 +109,73 @@ class NoteappServerMainTests(unittest.TestCase):
             self.assertTrue(db_path.exists())
             self.assertEqual(created.diagnostics()["repository"]["type"], "sqlite")
 
+    def test_production_s3_requires_operations_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env = {
+                "NOTEAPP_SERVER_ENV": "production",
+                "NOTEAPP_SERVER_DATA_DIR": str(Path(temp_dir) / "data"),
+                "NOTEAPP_SERVER_STORAGE": "sqlite",
+                "NOTEAPP_SERVER_SQLITE_PATH": str(Path(temp_dir) / "managed" / "noteapp-server.sqlite3"),
+                "NOTEAPP_SERVER_BLOB_STORAGE": "s3",
+                "NOTEAPP_SERVER_OBJECT_ENDPOINT": "https://s3.example.com",
+                "NOTEAPP_SERVER_OBJECT_BUCKET": "noteapp-vault-blobs",
+                "NOTEAPP_SERVER_OBJECT_REGION": "us-east-1",
+                "NOTEAPP_SERVER_OBJECT_ACCESS_KEY_ID": "access-key",
+                "NOTEAPP_SERVER_OBJECT_SECRET_ACCESS_KEY": "secret-key",
+            }
+            with patch.dict(server_main.os.environ, env, clear=True):
+                with self.assertRaisesRegex(RuntimeError, "CREDENTIAL_ROTATION_DAYS"):
+                    server_main.create_store_from_env()
+
+    def test_production_s3_requires_https_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env = {
+                "NOTEAPP_SERVER_ENV": "production",
+                "NOTEAPP_SERVER_DATA_DIR": str(Path(temp_dir) / "data"),
+                "NOTEAPP_SERVER_STORAGE": "sqlite",
+                "NOTEAPP_SERVER_SQLITE_PATH": str(Path(temp_dir) / "managed" / "noteapp-server.sqlite3"),
+                "NOTEAPP_SERVER_BLOB_STORAGE": "s3",
+                "NOTEAPP_SERVER_OBJECT_ENDPOINT": "http://s3.example.com",
+                "NOTEAPP_SERVER_OBJECT_BUCKET": "noteapp-vault-blobs",
+                "NOTEAPP_SERVER_OBJECT_REGION": "us-east-1",
+                "NOTEAPP_SERVER_OBJECT_ACCESS_KEY_ID": "access-key",
+                "NOTEAPP_SERVER_OBJECT_SECRET_ACCESS_KEY": "secret-key",
+                "NOTEAPP_SERVER_OBJECT_CREDENTIAL_ROTATION_DAYS": "90",
+                "NOTEAPP_SERVER_OBJECT_LIFECYCLE_RETENTION_DAYS": "365",
+                "NOTEAPP_SERVER_OBJECT_ALERT_DESTINATION": "ops-object-storage",
+                "NOTEAPP_SERVER_OBJECT_LEAST_PRIVILEGE_POLICY": "single-bucket-read-write",
+            }
+            with patch.dict(server_main.os.environ, env, clear=True):
+                with self.assertRaisesRegex(RuntimeError, "must use HTTPS"):
+                    server_main.create_store_from_env()
+
+    def test_production_s3_diagnostics_include_operations_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env = {
+                "NOTEAPP_SERVER_ENV": "production",
+                "NOTEAPP_SERVER_DATA_DIR": str(Path(temp_dir) / "data"),
+                "NOTEAPP_SERVER_STORAGE": "sqlite",
+                "NOTEAPP_SERVER_SQLITE_PATH": str(Path(temp_dir) / "managed" / "noteapp-server.sqlite3"),
+                "NOTEAPP_SERVER_BLOB_STORAGE": "s3",
+                "NOTEAPP_SERVER_OBJECT_ENDPOINT": "https://s3.example.com",
+                "NOTEAPP_SERVER_OBJECT_BUCKET": "noteapp-vault-blobs",
+                "NOTEAPP_SERVER_OBJECT_REGION": "us-east-1",
+                "NOTEAPP_SERVER_OBJECT_ACCESS_KEY_ID": "access-key",
+                "NOTEAPP_SERVER_OBJECT_SECRET_ACCESS_KEY": "secret-key",
+                "NOTEAPP_SERVER_OBJECT_CREDENTIAL_ROTATION_DAYS": "90",
+                "NOTEAPP_SERVER_OBJECT_LIFECYCLE_RETENTION_DAYS": "365",
+                "NOTEAPP_SERVER_OBJECT_ALERT_DESTINATION": "ops-object-storage",
+                "NOTEAPP_SERVER_OBJECT_LEAST_PRIVILEGE_POLICY": "single-bucket-read-write",
+            }
+            with patch.dict(server_main.os.environ, env, clear=True):
+                created = server_main.create_store_from_env()
+
+            object_policy = created.diagnostics()["blob_store"]["operations_policy"]
+            self.assertEqual(object_policy["credential_rotation_days"], 90)
+            self.assertEqual(object_policy["lifecycle_retention_days"], 365)
+            self.assertEqual(object_policy["alert_destination"], "ops-object-storage")
+            self.assertEqual(object_policy["least_privilege_policy"], "single-bucket-read-write")
+
     def test_health_dependencies_reports_runtime_components(self) -> None:
         health = self.client.get("/health", headers={"x-request-id": "req-health"})
         self.assertEqual(health.status_code, 200)
