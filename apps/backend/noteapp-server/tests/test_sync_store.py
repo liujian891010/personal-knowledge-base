@@ -132,6 +132,91 @@ class SyncStoreTests(unittest.TestCase):
         self.assertEqual(state["devices"][response["device_id"]]["user_id"], response["user_id"])
         self.assertEqual(len(state["users"]), 1)
 
+    def test_password_account_requires_password_login_and_hashes_secret(self) -> None:
+        registered = self.store.register_password_account(
+            {
+                "account_key": "secure@example.test",
+                "password": "correct horse battery staple",
+                "display_name": "Secure User",
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+            },
+            now_ms=1_000,
+        )
+
+        state = self.store._load()
+        user = state["users"][registered["user_id"]]
+        self.assertEqual(user["auth_methods"], ["password"])
+        self.assertIn("password_auth", user)
+        self.assertNotIn("password", user)
+        self.assertNotEqual(user["password_auth"]["hash"], "correct horse battery staple")
+
+        with self.assertRaises(SyncStoreError) as password_required:
+            self.store.register_device(
+                {
+                    "account_key": "secure@example.test",
+                    "device_name": "Phone",
+                    "platform": "mobile",
+                }
+            )
+        self.assertEqual(password_required.exception.code, "password_required")
+
+        with self.assertRaises(SyncStoreError) as invalid:
+            self.store.login_password_account(
+                {
+                    "account_key": "secure@example.test",
+                    "password": "wrong horse battery",
+                    "device_name": "Desktop",
+                    "platform": "desktop",
+                }
+            )
+        self.assertEqual(invalid.exception.code, "invalid_credentials")
+
+        logged_in = self.store.login_password_account(
+            {
+                "account_key": "secure@example.test",
+                "password": "correct horse battery staple",
+                "device_name": "Laptop",
+                "platform": "desktop",
+            },
+            now_ms=2_000,
+        )
+        self.assertEqual(logged_in["user_id"], registered["user_id"])
+        self.assertNotEqual(logged_in["device_id"], registered["device_id"])
+        self.assertEqual(self.store.device_id_for_token(logged_in["access_token"], now_ms=2_100), logged_in["device_id"])
+
+    def test_password_account_rejects_duplicate_and_short_password(self) -> None:
+        with self.assertRaises(SyncStoreError) as short_password:
+            self.store.register_password_account(
+                {
+                    "account_key": "short@example.test",
+                    "password": "too-short",
+                    "device_name": "Desktop",
+                    "platform": "desktop",
+                }
+            )
+        self.assertEqual(short_password.exception.code, "password_too_short")
+
+        self.store.register_password_account(
+            {
+                "account_key": "secure@example.test",
+                "password": "correct horse battery staple",
+                "device_name": "Desktop",
+                "platform": "desktop",
+            }
+        )
+        with self.assertRaises(SyncStoreError) as duplicate:
+            self.store.register_password_account(
+                {
+                    "account_key": "secure@example.test",
+                    "password": "another correct battery staple",
+                    "device_name": "Desktop",
+                    "platform": "desktop",
+                }
+            )
+        self.assertEqual(duplicate.exception.code, "account_exists")
+
     def test_diagnostics_reports_repository_blob_store_and_state_counts(self) -> None:
         self.store.register_device(
             {

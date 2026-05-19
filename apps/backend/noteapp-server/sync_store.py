@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import json
 import secrets
 import threading
@@ -50,6 +52,10 @@ DEFAULT_ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000
 DEFAULT_REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000
 DEFAULT_DEVICE_INACTIVE_AFTER_MS = 7 * 24 * 60 * 60 * 1000
 DEFAULT_TOMBSTONE_GC_MIN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+PASSWORD_HASH_SCHEME = "pbkdf2-sha256"
+PASSWORD_HASH_ITERATIONS = 210_000
+PASSWORD_SALT_BYTES = 16
+MIN_PASSWORD_LENGTH = 12
 MAX_TOMBSTONE_GC_LOGS = 100
 T = TypeVar("T")
 
@@ -81,6 +87,63 @@ def _require_string(payload: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value:
         raise SyncStoreError("invalid_request", f"{key} must be a non-empty string")
     return value
+
+
+def _optional_account_key(payload: dict[str, Any], default: str = "local-dev") -> str:
+    value = payload.get("account_key", payload.get("login_key", default))
+    if not isinstance(value, str) or not value.strip():
+        raise SyncStoreError("invalid_request", "account_key must be a non-empty string when provided")
+    return value.strip()
+
+
+def _require_password(payload: dict[str, Any], *, enforce_min_length: bool = True) -> str:
+    password = payload.get("password")
+    if not isinstance(password, str):
+        raise SyncStoreError("invalid_request", "password must be a string")
+    if enforce_min_length and len(password) < MIN_PASSWORD_LENGTH:
+        raise SyncStoreError("password_too_short", f"password must be at least {MIN_PASSWORD_LENGTH} characters")
+    return password
+
+
+def _b64url_encode(payload: bytes) -> str:
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(payload: str) -> bytes:
+    padding = "=" * (-len(payload) % 4)
+    return base64.urlsafe_b64decode((payload + padding).encode("ascii"))
+
+
+def _password_hash_record(password: str, *, now_ms: int) -> dict[str, Any]:
+    salt = secrets.token_bytes(PASSWORD_SALT_BYTES)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PASSWORD_HASH_ITERATIONS)
+    return {
+        "scheme": PASSWORD_HASH_SCHEME,
+        "iterations": PASSWORD_HASH_ITERATIONS,
+        "salt": _b64url_encode(salt),
+        "hash": _b64url_encode(digest),
+        "updated_at_ms": now_ms,
+    }
+
+
+def _verify_password(password: str, record: Any) -> bool:
+    if not isinstance(record, dict):
+        return False
+    if record.get("scheme") != PASSWORD_HASH_SCHEME:
+        return False
+    iterations = record.get("iterations")
+    salt = record.get("salt")
+    expected = record.get("hash")
+    if not isinstance(iterations, int) or iterations <= 0:
+        return False
+    if not isinstance(salt, str) or not isinstance(expected, str):
+        return False
+    try:
+        computed = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), _b64url_decode(salt), iterations)
+        expected_bytes = _b64url_decode(expected)
+    except Exception:
+        return False
+    return hmac.compare_digest(computed, expected_bytes)
 
 
 def _require_non_negative_int(payload: dict[str, Any], key: str) -> int:
@@ -390,6 +453,21 @@ class SyncStore:
             active_device_ids.append(device_id)
         return active_device_ids
 
+    def _create_user_locked(self, state: dict[str, Any], *, account_key: str, display_name: str, now_ms: int) -> dict[str, Any]:
+        user_id = f"user_{uuid.uuid4().hex}"
+        user = {
+            "user_id": user_id,
+            "account_key": account_key,
+            "display_name": display_name or account_key,
+            "status": "active",
+            "auth_methods": [],
+            "created_at_ms": now_ms,
+            "updated_at_ms": now_ms,
+        }
+        state["users"][user_id] = user
+        state["user_logins"][account_key] = user_id
+        return user
+
     def _ensure_user(self, state: dict[str, Any], *, account_key: str, display_name: str, now_ms: int) -> dict[str, Any]:
         user_id = state["user_logins"].get(account_key)
         if isinstance(user_id, str):
@@ -399,18 +477,7 @@ class SyncStore:
                 user["updated_at_ms"] = now_ms
                 return user
 
-        user_id = f"user_{uuid.uuid4().hex}"
-        user = {
-            "user_id": user_id,
-            "account_key": account_key,
-            "display_name": display_name or account_key,
-            "status": "active",
-            "created_at_ms": now_ms,
-            "updated_at_ms": now_ms,
-        }
-        state["users"][user_id] = user
-        state["user_logins"][account_key] = user_id
-        return user
+        return self._create_user_locked(state, account_key=account_key, display_name=display_name, now_ms=now_ms)
 
     def _session_token_response(
         self,
@@ -439,6 +506,67 @@ class SyncStore:
             refresh_token = session.get("refresh_token")
             if isinstance(refresh_token, str):
                 state["refresh_tokens"].pop(refresh_token, None)
+
+    def _create_device_session_locked(
+        self,
+        state: dict[str, Any],
+        *,
+        user_id: str,
+        payload: dict[str, Any],
+        now_ms: int,
+    ) -> dict[str, Any]:
+        device_name = _require_string(payload, "device_name")
+        platform = _require_string(payload, "platform")
+        if platform not in {"desktop", "mobile", "web"}:
+            raise SyncStoreError("invalid_platform", "platform must be desktop, mobile, or web")
+        access_token_ttl_ms = _optional_positive_int(payload, "access_token_ttl_ms", DEFAULT_ACCESS_TOKEN_TTL_MS)
+        refresh_token_ttl_ms = _optional_positive_int(payload, "refresh_token_ttl_ms", DEFAULT_REFRESH_TOKEN_TTL_MS)
+
+        device_id = f"dev_{uuid.uuid4().hex}"
+        session_id = f"sess_{uuid.uuid4().hex}"
+        access_token = secrets.token_urlsafe(32)
+        refresh_token = secrets.token_urlsafe(32)
+        access_expires_at_ms = now_ms + access_token_ttl_ms
+        refresh_expires_at_ms = now_ms + refresh_token_ttl_ms
+
+        state["devices"][device_id] = {
+            "device_id": device_id,
+            "user_id": user_id,
+            "device_name": device_name,
+            "platform": platform,
+            "app_version": payload.get("app_version"),
+            "protocol_version": payload.get("protocol_version", "v1"),
+            "session_id": session_id,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "access_token_expires_at_ms": access_expires_at_ms,
+            "refresh_token_expires_at_ms": refresh_expires_at_ms,
+            "revoked": False,
+            "registered_at_ms": now_ms,
+            "last_seen_at_ms": now_ms,
+        }
+        state["sessions"][session_id] = {
+            "session_id": session_id,
+            "user_id": user_id,
+            "device_id": device_id,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "access_expires_at_ms": access_expires_at_ms,
+            "refresh_expires_at_ms": refresh_expires_at_ms,
+            "created_at_ms": now_ms,
+            "updated_at_ms": now_ms,
+            "revoked_at_ms": None,
+        }
+        state["tokens"][access_token] = session_id
+        state["refresh_tokens"][refresh_token] = session_id
+        return self._session_token_response(
+            user_id=user_id,
+            device_id=device_id,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            access_expires_at_ms=access_expires_at_ms,
+            refresh_expires_at_ms=refresh_expires_at_ms,
+        )
 
     def authorize_access_token(self, token: str, *, now_ms: Optional[int] = None) -> dict[str, str]:
         resolved_now_ms = _now_ms() if now_ms is None else now_ms
@@ -496,28 +624,14 @@ class SyncStore:
             self._save(state)
 
     def register_device(self, payload: dict[str, Any], *, now_ms: Optional[int] = None) -> dict[str, Any]:
-        device_name = _require_string(payload, "device_name")
-        platform = _require_string(payload, "platform")
-        if platform not in {"desktop", "mobile", "web"}:
-            raise SyncStoreError("invalid_platform", "platform must be desktop, mobile, or web")
-        account_key = payload.get("account_key", payload.get("login_key", "local-dev"))
-        if not isinstance(account_key, str) or not account_key:
-            raise SyncStoreError("invalid_request", "account_key must be a non-empty string when provided")
+        account_key = _optional_account_key(payload)
         display_name = payload.get("display_name")
         if display_name is None:
             display_name = account_key
         if not isinstance(display_name, str) or not display_name:
             raise SyncStoreError("invalid_request", "display_name must be a non-empty string when provided")
-        access_token_ttl_ms = _optional_positive_int(payload, "access_token_ttl_ms", DEFAULT_ACCESS_TOKEN_TTL_MS)
-        refresh_token_ttl_ms = _optional_positive_int(payload, "refresh_token_ttl_ms", DEFAULT_REFRESH_TOKEN_TTL_MS)
 
-        device_id = f"dev_{uuid.uuid4().hex}"
-        session_id = f"sess_{uuid.uuid4().hex}"
-        access_token = secrets.token_urlsafe(32)
-        refresh_token = secrets.token_urlsafe(32)
         resolved_now_ms = _now_ms() if now_ms is None else now_ms
-        access_expires_at_ms = resolved_now_ms + access_token_ttl_ms
-        refresh_expires_at_ms = resolved_now_ms + refresh_token_ttl_ms
         with self._lock:
             state = self._load()
             user = self._ensure_user(
@@ -527,45 +641,70 @@ class SyncStore:
                 now_ms=resolved_now_ms,
             )
             user_id = user["user_id"]
-            state["devices"][device_id] = {
-                "device_id": device_id,
-                "user_id": user_id,
-                "device_name": device_name,
-                "platform": platform,
-                "app_version": payload.get("app_version"),
-                "protocol_version": payload.get("protocol_version", "v1"),
-                "session_id": session_id,
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "access_token_expires_at_ms": access_expires_at_ms,
-                "refresh_token_expires_at_ms": refresh_expires_at_ms,
-                "revoked": False,
-                "registered_at_ms": resolved_now_ms,
-                "last_seen_at_ms": resolved_now_ms,
-            }
-            state["sessions"][session_id] = {
-                "session_id": session_id,
-                "user_id": user_id,
-                "device_id": device_id,
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "access_expires_at_ms": access_expires_at_ms,
-                "refresh_expires_at_ms": refresh_expires_at_ms,
-                "created_at_ms": resolved_now_ms,
-                "updated_at_ms": resolved_now_ms,
-                "revoked_at_ms": None,
-            }
-            state["tokens"][access_token] = session_id
-            state["refresh_tokens"][refresh_token] = session_id
+            if isinstance(user.get("password_auth"), dict):
+                raise SyncStoreError("password_required", "Password authentication is required for this account")
+            response = self._create_device_session_locked(
+                state,
+                user_id=user_id,
+                payload=payload,
+                now_ms=resolved_now_ms,
+            )
             self._save(state)
-        return self._session_token_response(
-            user_id=user_id,
-            device_id=device_id,
-            access_token=access_token,
-            refresh_token=refresh_token,
-            access_expires_at_ms=access_expires_at_ms,
-            refresh_expires_at_ms=refresh_expires_at_ms,
-        )
+        return response
+
+    def register_password_account(self, payload: dict[str, Any], *, now_ms: Optional[int] = None) -> dict[str, Any]:
+        account_key = _optional_account_key(payload)
+        password = _require_password(payload)
+        display_name = payload.get("display_name")
+        if display_name is None:
+            display_name = account_key
+        if not isinstance(display_name, str) or not display_name:
+            raise SyncStoreError("invalid_request", "display_name must be a non-empty string when provided")
+        resolved_now_ms = _now_ms() if now_ms is None else now_ms
+        with self._lock:
+            state = self._load()
+            if account_key in state["user_logins"]:
+                raise SyncStoreError("account_exists", "Account already exists")
+            user = self._create_user_locked(
+                state,
+                account_key=account_key,
+                display_name=display_name,
+                now_ms=resolved_now_ms,
+            )
+            user["auth_methods"] = ["password"]
+            user["password_auth"] = _password_hash_record(password, now_ms=resolved_now_ms)
+            response = self._create_device_session_locked(
+                state,
+                user_id=user["user_id"],
+                payload=payload,
+                now_ms=resolved_now_ms,
+            )
+            self._save(state)
+        return response
+
+    def login_password_account(self, payload: dict[str, Any], *, now_ms: Optional[int] = None) -> dict[str, Any]:
+        account_key = _optional_account_key(payload, default="")
+        password = _require_password(payload, enforce_min_length=False)
+        resolved_now_ms = _now_ms() if now_ms is None else now_ms
+        with self._lock:
+            state = self._load()
+            user_id = state["user_logins"].get(account_key)
+            user = state["users"].get(user_id) if isinstance(user_id, str) else None
+            if not isinstance(user, dict):
+                raise SyncStoreError("invalid_credentials", "Account key or password is invalid")
+            if user.get("status", "active") != "active":
+                raise SyncStoreError("account_disabled", "Account is disabled")
+            if not _verify_password(password, user.get("password_auth")):
+                raise SyncStoreError("invalid_credentials", "Account key or password is invalid")
+            user["updated_at_ms"] = resolved_now_ms
+            response = self._create_device_session_locked(
+                state,
+                user_id=user["user_id"],
+                payload=payload,
+                now_ms=resolved_now_ms,
+            )
+            self._save(state)
+        return response
 
     def refresh_session(self, payload: dict[str, Any], *, now_ms: Optional[int] = None) -> dict[str, Any]:
         refresh_token = _require_string(payload, "refresh_token")

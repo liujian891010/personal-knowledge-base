@@ -131,6 +131,83 @@ class NoteappServerMainTests(unittest.TestCase):
         )
         self.assertEqual(head.status_code, 200)
 
+    def test_password_register_and_login_flow(self) -> None:
+        registered = self.client.post(
+            "/auth/register",
+            json={
+                "account_key": "secure@example.test",
+                "password": "correct horse battery staple",
+                "display_name": "Secure User",
+                "device_name": "Desktop",
+                "platform": "desktop",
+                "protocol_version": "v1",
+            },
+        )
+        self.assertEqual(registered.status_code, 200)
+        payload = registered.json()
+        self.assertTrue(payload["access_token"])
+        state = server_main.store._load()
+        user = state["users"][payload["user_id"]]
+        self.assertIn("password_auth", user)
+        self.assertNotIn("password", user)
+
+        passwordless = self.client.post(
+            "/devices/register",
+            json={
+                "account_key": "secure@example.test",
+                "device_name": "Phone",
+                "platform": "mobile",
+            },
+        )
+        self.assertEqual(passwordless.status_code, 401)
+        self.assertEqual(passwordless.json()["code"], "password_required")
+
+        wrong_password = self.client.post(
+            "/auth/login",
+            json={
+                "account_key": "secure@example.test",
+                "password": "wrong horse battery",
+                "device_name": "Desktop",
+                "platform": "desktop",
+            },
+        )
+        self.assertEqual(wrong_password.status_code, 401)
+        self.assertEqual(wrong_password.json()["code"], "invalid_credentials")
+
+        logged_in = self.client.post(
+            "/auth/login",
+            json={
+                "account_key": "secure@example.test",
+                "password": "correct horse battery staple",
+                "device_name": "Laptop",
+                "platform": "desktop",
+            },
+        )
+        self.assertEqual(logged_in.status_code, 200)
+        login_payload = logged_in.json()
+        self.assertEqual(login_payload["user_id"], payload["user_id"])
+        self.assertNotEqual(login_payload["device_id"], payload["device_id"])
+
+        head = self.client.get(
+            "/vaults/vault-1/head",
+            headers={"Authorization": f"Bearer {login_payload['access_token']}"},
+        )
+        self.assertEqual(head.status_code, 200)
+
+    def test_password_register_rejects_duplicate_account(self) -> None:
+        body = {
+            "account_key": "secure@example.test",
+            "password": "correct horse battery staple",
+            "device_name": "Desktop",
+            "platform": "desktop",
+        }
+        self.assertEqual(self.client.post("/auth/register", json=body).status_code, 200)
+
+        duplicate = self.client.post("/auth/register", json=body)
+
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(duplicate.json()["code"], "account_exists")
+
     def test_vault_endpoints_reject_missing_authorization(self) -> None:
         blocked_requests = [
             ("GET", "/vaults/vault-1/head", None),

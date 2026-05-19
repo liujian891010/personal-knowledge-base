@@ -226,10 +226,14 @@ def _status_code_for_store_error(error: SyncStoreError) -> int:
         "device_revoked": 403,
         "file_version_not_found": 404,
         "invalid_access_token": 401,
+        "invalid_credentials": 401,
         "invalid_refresh_token": 401,
         "object_not_found": 404,
         "object_storage_error": 502,
         "object_storage_unavailable": 503,
+        "account_disabled": 403,
+        "account_exists": 409,
+        "password_required": 401,
         "refresh_token_expired": 401,
         "resumable_upload_session_not_found": 404,
         "state_write_conflict": 409,
@@ -379,15 +383,26 @@ def register_device(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         return store.register_device(_body_mapping(payload))
     except SyncStoreError as error:
-        raise _error(400, error.code, str(error)) from error
+        return _store_error_response(error)
+
+
+@app.post("/auth/register")
+def register_account(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return store.register_password_account(_body_mapping(payload))
+    except SyncStoreError as error:
+        return _store_error_response(error)
 
 
 @app.post("/auth/login")
 def login(payload: dict[str, Any]) -> dict[str, Any]:
     try:
-        return store.register_device(_body_mapping(payload))
+        body = _body_mapping(payload)
+        if "password" in body:
+            return store.login_password_account(body)
+        return store.register_device(body)
     except SyncStoreError as error:
-        raise _error(400, error.code, str(error)) from error
+        return _store_error_response(error)
 
 
 @app.post("/auth/refresh")

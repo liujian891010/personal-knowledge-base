@@ -130,9 +130,25 @@ Use `--force` only during a planned recovery drill, because it replaces the dest
 
 ## Auth Boundary
 
-`POST /devices/register` and `POST /auth/login` create a local account session and return an access token, refresh token, and expiry timestamps. Vault-level APIs require `Authorization: Bearer <access_token>`; missing, invalid, expired, or revoked tokens are rejected before vault operations run.
+`POST /auth/register` creates a password-backed account, stores only a salted
+PBKDF2-SHA256 password hash, creates the first device session, and returns an
+access token, refresh token, and expiry timestamps.
+
+`POST /auth/login` verifies the password for password-backed accounts and creates
+a new device session. For development/bootstrap compatibility, login without a
+password still follows the legacy local device registration path.
+
+`POST /devices/register` remains the local development and bootstrap device path.
+It refuses password-backed accounts with `password_required`, so a password
+account cannot be extended by silently registering another device.
+
+Vault-level APIs require `Authorization: Bearer <access_token>`; missing,
+invalid, expired, or revoked tokens are rejected before vault operations run.
 
 `POST /auth/refresh` rotates both the access token and refresh token. `POST /auth/logout` revokes the current session. `DELETE /devices/{deviceId}` is limited to the current account and revokes the device session, refresh token, and outstanding blob capabilities for that device.
+
+The production account policy and deferred external IdP/MFA/recovery decisions
+are tracked in `docs/develop/v1.0.43-production-auth-boundary.md`.
 
 ## Blob Boundary
 
@@ -164,7 +180,7 @@ The client requests each authorized range with `X-Noteapp-Range-Offset` and `X-N
 
 This MVP is intentionally not production-ready:
 
-1. Account/session state has no password flow, external IdP, MFA, or account recovery
+1. External IdP, built-in MFA, and self-service account recovery remain policy-defined/deferred; password auth and session rotation are implemented
 2. SQLite is a local-file repository profile; managed DB migration rollout and hosted backup scheduling are still pending
 3. S3/OSS mode uses a server streaming proxy; production credential rotation and bucket lifecycle automation are still pending
 4. Tombstone GC has no background worker or production retention controls
