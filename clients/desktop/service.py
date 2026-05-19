@@ -93,7 +93,12 @@ from .change_detection import (
     build_tracked_change_commit_plan,
     detect_local_workspace_changes,
 )
-from .crypto import DesktopBlobCryptoProvider, build_placeholder_blob_crypto_provider
+from .crypto import (
+    DesktopBlobCryptoProvider,
+    build_e2ee_blob_crypto_provider,
+    build_missing_vault_key_blob_crypto_provider,
+    build_placeholder_blob_crypto_provider,
+)
 from .crypto_store import (
     DesktopCryptoStatus,
     load_desktop_crypto_status,
@@ -361,6 +366,7 @@ _LOCAL_SETTINGS_DEFAULT_AI_MODEL_ENV = "NOTEAPP_LOCAL_SETTINGS_DEFAULT_AI_MODEL"
 _LOCAL_SETTINGS_FALLBACK_AI_PROVIDER_API = _AI_PROVIDER_DEFAULT_API
 _LOCAL_SETTINGS_FALLBACK_AI_BASE_URL = _AI_PROVIDER_DEFAULT_BASE_URL
 _LOCAL_SETTINGS_FALLBACK_AI_MODEL_ID = "gpt-4o-mini"
+_PLACEHOLDER_CRYPTO_COMPAT_ENV = "NOTEAPP_ALLOW_PLACEHOLDER_CRYPTO"
 _WORKSPACE_FILE_CONTENT_MAX_BYTES = 1_000_000
 _WORKSPACE_FILE_BLOB_MAX_BYTES = 10_000_000
 _AI_CONTEXT_DEFAULT_MAX_FILES = 20
@@ -395,6 +401,32 @@ def _local_settings_default_ai_model_id(environ: Optional[Mapping[str, str]] = N
     env = os.environ if environ is None else environ
     model_id = env.get(_LOCAL_SETTINGS_DEFAULT_AI_MODEL_ENV, "").strip()
     return model_id or _LOCAL_SETTINGS_FALLBACK_AI_MODEL_ID
+
+
+def _placeholder_crypto_compat_enabled(environ: Optional[Mapping[str, str]] = None) -> bool:
+    env = os.environ if environ is None else environ
+    return env.get(_PLACEHOLDER_CRYPTO_COMPAT_ENV) == "true"
+
+
+def _missing_vault_key_message(vault_id: str) -> str:
+    return (
+        f"e2ee-v1 vault key is required for vault {vault_id}; "
+        "unlock the vault, provide NOTEAPP_VAULT_KEY_BASE64/NOTEAPP_VAULT_KEY_HEX, "
+        "or explicitly choose placeholder-v1 compatibility mode for tests/migration only"
+    )
+
+
+def _build_default_blob_crypto_provider(
+    config: DesktopSyncHttpConfig,
+    *,
+    allow_placeholder_crypto: bool,
+) -> DesktopBlobCryptoProvider:
+    vault_key = load_desktop_vault_key(config.vault_id)
+    if vault_key is not None:
+        return build_e2ee_blob_crypto_provider(vault_id=config.vault_id, vault_key=vault_key)
+    if allow_placeholder_crypto or _placeholder_crypto_compat_enabled():
+        return build_placeholder_blob_crypto_provider()
+    return build_missing_vault_key_blob_crypto_provider(_missing_vault_key_message(config.vault_id))
 
 
 def _require_local_settings_object(payload: Mapping[str, Any], key: str) -> dict[str, Any]:
@@ -7035,8 +7067,18 @@ def build_desktop_sync_service(
     ai_opener: Optional[UrlopenLike] = None,
     blob_crypto_provider: Optional[DesktopBlobCryptoProvider] = None,
     file_id_builder: Optional[Callable[[str], str]] = None,
+    allow_placeholder_crypto: bool = False,
 ) -> DesktopSyncService:
     from .change_detection import build_generated_file_id
+
+    resolved_blob_crypto_provider = (
+        _build_default_blob_crypto_provider(
+            config,
+            allow_placeholder_crypto=allow_placeholder_crypto,
+        )
+        if blob_crypto_provider is None
+        else blob_crypto_provider
+    )
 
     return DesktopSyncService(
         workspace=build_desktop_vault_workspace(
@@ -7046,11 +7088,7 @@ def build_desktop_sync_service(
             api_opener=api_opener,
             blob_opener=blob_opener,
         ),
-        blob_crypto_provider=(
-            build_placeholder_blob_crypto_provider()
-            if blob_crypto_provider is None
-            else blob_crypto_provider
-        ),
+        blob_crypto_provider=resolved_blob_crypto_provider,
         file_id_builder=build_generated_file_id if file_id_builder is None else file_id_builder,
         ai_opener=ai_opener,
     )

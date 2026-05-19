@@ -53,6 +53,29 @@ class PlaceholderDesktopBlobCryptoProvider:
         return build_placeholder_encrypted_blob_map(content_by_file_id)
 
 
+@dataclass(frozen=True)
+class MissingVaultKeyDesktopBlobCryptoProvider:
+    message: str
+
+    def _raise(self) -> None:
+        raise RuntimeError(self.message)
+
+    def build_blob_id(self, content_hash: str) -> str:
+        self._raise()
+
+    def encrypt_payload(self, payload: bytes) -> bytes:
+        self._raise()
+
+    def decrypt_payload(self, encrypted_payload: bytes, *, content_hash: str) -> bytes:
+        self._raise()
+
+    def build_encrypted_blob_map(
+        self,
+        content_by_file_id: Mapping[str, bytes],
+    ) -> dict[str, bytes]:
+        self._raise()
+
+
 def build_placeholder_blob_id(content_hash: str) -> str:
     digest = hashlib.sha256(
         b"pkb-placeholder-blob-id-v1\x00" + content_hash.encode("utf-8")
@@ -98,6 +121,10 @@ def build_placeholder_encrypted_blob_map(
 
 def build_placeholder_blob_crypto_provider() -> DesktopBlobCryptoProvider:
     return PlaceholderDesktopBlobCryptoProvider()
+
+
+def build_missing_vault_key_blob_crypto_provider(message: str) -> DesktopBlobCryptoProvider:
+    return MissingVaultKeyDesktopBlobCryptoProvider(message=message)
 
 
 def _hkdf_sha256(

@@ -13,6 +13,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from clients.desktop import (
     E2EEDesktopBlobCryptoProvider,
+    MissingVaultKeyDesktopBlobCryptoProvider,
     PlaceholderDesktopBlobCryptoProvider,
     DesktopPullRequiredBlobFile,
     DesktopPullRequiredBlobPlan,
@@ -743,7 +744,7 @@ class FakeService:
             },
             "crypto": {
                 "schema_version": "crypto-v1",
-                "crypto_scheme": "placeholder-v1",
+                "crypto_scheme": "e2ee-v1",
                 "key_epoch": 1,
                 "unlocked": False,
                 "key_available": False,
@@ -779,7 +780,7 @@ class FakeService:
             },
             "crypto": {
                 "schema_version": "crypto-v1",
-                "crypto_scheme": "placeholder-v1",
+                "crypto_scheme": "e2ee-v1",
                 "key_epoch": 1,
                 "unlocked": False,
                 "key_available": False,
@@ -1570,6 +1571,8 @@ class DesktopCliTests(unittest.TestCase):
             "vault-001",
             "--device-id",
             "desktop-shanghai",
+            "--crypto-scheme",
+            "placeholder-v1",
             "--bearer-token",
             "token-1",
             "init",
@@ -1587,6 +1590,41 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(vault_root, Path("C:/vault"))
         self.assertIsInstance(blob_crypto_provider, PlaceholderDesktopBlobCryptoProvider)
         self.assertEqual(self.service.calls, [("init", 1770000040000)])
+
+    def test_init_command_uses_missing_key_provider_without_explicit_compat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "NOTEAPP_ALLOW_INSECURE_CRYPTO_STORE": "true",
+                    "NOTEAPP_CRYPTO_STORE_DIR": tmpdir,
+                    "NOTEAPP_ALLOW_PLACEHOLDER_CRYPTO": "false",
+                    "NOTEAPP_CRYPTO_SCHEME": "",
+                    "NOTEAPP_VAULT_KEY_BASE64": "",
+                    "NOTEAPP_VAULT_KEY_HEX": "",
+                },
+                clear=False,
+            ):
+                exit_code, payload = self._run(
+                    "--vault-root",
+                    "C:/vault",
+                    "--base-url",
+                    "https://sync.example.com",
+                    "--vault-id",
+                    "vault-001",
+                    "--device-id",
+                    "desktop-shanghai",
+                    "init",
+                    "--now-ms",
+                    "1770000040000",
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload, {"kind": "init", "value": 1770000040000})
+        provider = self.created[0][2]
+        self.assertIsInstance(provider, MissingVaultKeyDesktopBlobCryptoProvider)
+        with self.assertRaisesRegex(RuntimeError, "e2ee-v1 vault key is required"):
+            provider.encrypt_payload(b"payload")
 
     def test_init_command_can_build_e2ee_provider_from_base64_key(self) -> None:
         vault_key = b"\x07" * 32
@@ -1656,7 +1694,7 @@ class DesktopCliTests(unittest.TestCase):
                 )
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(payload["crypto_scheme"], "placeholder-v1")
+        self.assertEqual(payload["crypto_scheme"], "e2ee-v1")
         self.assertFalse(payload["unlocked"])
         self.assertEqual(payload["storage_provider"], "insecure-file")
 
@@ -1713,7 +1751,7 @@ class DesktopCliTests(unittest.TestCase):
         self.assertEqual(unlocked["crypto_scheme"], "e2ee-v1")
         self.assertTrue(unlocked["unlocked"])
         self.assertTrue(status["key_available"])
-        self.assertEqual(locked["crypto_scheme"], "placeholder-v1")
+        self.assertEqual(locked["crypto_scheme"], "e2ee-v1")
         self.assertFalse(locked["unlocked"])
 
     def test_crypto_recovery_export_writes_package_json(self) -> None:

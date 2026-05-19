@@ -31,6 +31,7 @@ from clients.desktop.crypto import (
     POLY1305_TAG_BYTES,
     is_e2ee_crypto_available,
     build_placeholder_blob_id,
+    build_placeholder_blob_crypto_provider,
     build_placeholder_encrypted_blob_payload,
     decrypt_placeholder_encrypted_blob_payload,
 )
@@ -452,6 +453,11 @@ class DesktopSyncServiceTests(unittest.TestCase):
         blob_opener = RecordingBlobOpener(
             downloaded_blobs=resolved_downloaded_blobs,
         )
+        resolved_blob_crypto_provider = (
+            build_placeholder_blob_crypto_provider()
+            if blob_crypto_provider is None
+            else blob_crypto_provider
+        )
         service = build_desktop_sync_service(
             DesktopSyncHttpConfig(
                 base_url="https://sync.example.com",
@@ -461,7 +467,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             root,
             api_opener=api_opener,
             blob_opener=blob_opener,
-            blob_crypto_provider=blob_crypto_provider,
+            blob_crypto_provider=resolved_blob_crypto_provider,
             file_id_builder=file_id_builder,
         )
         service.ensure_initialized(now_ms=1770000030000)
@@ -515,6 +521,33 @@ class DesktopSyncServiceTests(unittest.TestCase):
             )
 
         return service, api_opener, blob_opener, payload, encrypted_payload
+
+    def test_default_blob_crypto_provider_rejects_missing_vault_key_use(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            crypto_store_root = root / "keys"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "NOTEAPP_ALLOW_INSECURE_CRYPTO_STORE": "true",
+                    "NOTEAPP_CRYPTO_STORE_DIR": str(crypto_store_root),
+                    "NOTEAPP_ALLOW_PLACEHOLDER_CRYPTO": "false",
+                    "NOTEAPP_VAULT_KEY_BASE64": "",
+                    "NOTEAPP_VAULT_KEY_HEX": "",
+                },
+                clear=False,
+            ):
+                service = build_desktop_sync_service(
+                    DesktopSyncHttpConfig(
+                        base_url="https://sync.example.com",
+                        vault_id="vault-001",
+                        device_id="desktop-shanghai",
+                    ),
+                    root,
+                )
+
+            with self.assertRaisesRegex(RuntimeError, "e2ee-v1 vault key is required"):
+                service.blob_crypto_provider.encrypt_payload(b"payload")
 
     def test_device_management_calls_remote_device_endpoints(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -591,6 +624,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 ),
                 root,
                 file_id_builder=lambda path: "file-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+                allow_placeholder_crypto=True,
             )
             service.ensure_initialized(now_ms=1770000030000)
             nested_path = root / "二级目录" / "中文路径.md"
@@ -619,6 +653,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 ),
                 root,
                 file_id_builder=lambda path: "file-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+                allow_placeholder_crypto=True,
             )
             service.ensure_initialized(now_ms=1770000030000)
             image_path = root / "Assets" / "photo.png"
@@ -734,6 +769,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 ),
                 root,
                 file_id_builder=lambda path: "file-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+                allow_placeholder_crypto=True,
             )
             service.ensure_initialized(now_ms=1770000030000)
             nested_path = root / "二级目录" / "中文路径.md"
@@ -2029,6 +2065,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                     device_id="desktop-shanghai",
                 ),
                 target_root,
+                allow_placeholder_crypto=True,
             )
 
             result = target_service.import_vault_package(package_path)
@@ -2539,7 +2576,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertFalse(snapshot.ai.api_key_configured)
             self.assertIsNone(snapshot.ai.api_key)
             self.assertEqual(snapshot.crypto.schema_version, "crypto-v1")
-            self.assertEqual(snapshot.crypto.crypto_scheme, "placeholder-v1")
+            self.assertEqual(snapshot.crypto.crypto_scheme, "e2ee-v1")
             self.assertFalse(snapshot.crypto.unlocked)
             self.assertFalse(snapshot.crypto.key_available)
 

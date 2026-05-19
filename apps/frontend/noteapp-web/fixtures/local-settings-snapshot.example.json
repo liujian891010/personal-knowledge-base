@@ -11,12 +11,12 @@
     "theme": "dark"
   },
   "crypto": {
-    "crypto_scheme": "placeholder-v1",
+    "crypto_scheme": "e2ee-v1",
     "error": null,
     "key_available": false,
     "key_epoch": 1,
     "key_ref": "",
-    "message": "no local e2ee-v1 vault key is available; placeholder compatibility mode will be used",
+    "message": "no local e2ee-v1 vault key is available; encrypted operations require unlock or explicit placeholder-v1 compatibility mode",
     "schema_version": "crypto-v1",
     "storage_provider": "windows-dpapi",
     "unlocked": false

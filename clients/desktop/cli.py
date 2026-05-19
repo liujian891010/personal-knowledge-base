@@ -24,6 +24,7 @@ from .crypto import (
     E2EE_VAULT_KEY_BYTES,
     PLACEHOLDER_CRYPTO_SCHEME,
     build_e2ee_blob_crypto_provider,
+    build_missing_vault_key_blob_crypto_provider,
     build_placeholder_blob_crypto_provider,
 )
 from .crypto_store import (
@@ -49,6 +50,7 @@ ServiceBuilder = Callable[
     DesktopSyncService,
 ]
 NowMsProvider = Callable[[], int]
+_PLACEHOLDER_CRYPTO_COMPAT_ENV = "NOTEAPP_ALLOW_PLACEHOLDER_CRYPTO"
 
 
 def _resolve_blob_output_path(output_dir: Path, blob_id: str) -> Path:
@@ -159,6 +161,18 @@ def _resolve_cli_vault_key(
     return vault_key
 
 
+def _placeholder_crypto_compat_enabled() -> bool:
+    return os.environ.get(_PLACEHOLDER_CRYPTO_COMPAT_ENV) == "true"
+
+
+def _missing_vault_key_message(vault_id: str) -> str:
+    return (
+        f"e2ee-v1 vault key is required for vault {vault_id}; "
+        "unlock the vault, provide NOTEAPP_VAULT_KEY_BASE64/NOTEAPP_VAULT_KEY_HEX, "
+        "or pass --crypto-scheme placeholder-v1 for explicit compatibility mode"
+    )
+
+
 def build_cli_blob_crypto_provider(
     *,
     vault_id: str,
@@ -196,7 +210,9 @@ def build_auto_cli_blob_crypto_provider(
     vault_key = load_desktop_vault_key(vault_id)
     if vault_key is not None:
         return build_e2ee_blob_crypto_provider(vault_id=vault_id, vault_key=vault_key)
-    return build_placeholder_blob_crypto_provider()
+    if _placeholder_crypto_compat_enabled():
+        return build_placeholder_blob_crypto_provider()
+    return build_missing_vault_key_blob_crypto_provider(_missing_vault_key_message(vault_id))
 
 
 def build_cli_service(

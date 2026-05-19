@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .crypto import E2EE_CRYPTO_SCHEME, E2EE_VAULT_KEY_BYTES, PLACEHOLDER_CRYPTO_SCHEME
+from .crypto import E2EE_CRYPTO_SCHEME, E2EE_VAULT_KEY_BYTES
 
 
 CRYPTO_STATUS_SCHEMA_VERSION = "crypto-v1"
@@ -469,10 +469,13 @@ def load_desktop_crypto_status(*, vault_id: str, vault_root: Optional[Path] = No
         )
     return _status(
         vault_id=vault_id,
-        crypto_scheme=PLACEHOLDER_CRYPTO_SCHEME,
+        crypto_scheme=E2EE_CRYPTO_SCHEME,
         unlocked=False,
         key_available=False,
         storage_provider=provider,
         key_ref=_key_ref(vault_id, provider),
-        message="no local e2ee-v1 vault key is available; placeholder compatibility mode will be used",
+        message=(
+            "no local e2ee-v1 vault key is available; encrypted operations require unlock "
+            "or explicit placeholder-v1 compatibility mode"
+        ),
     )
