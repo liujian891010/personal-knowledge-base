@@ -58,6 +58,7 @@ class NoteappServerMainTests(unittest.TestCase):
             self.assertTrue(diagnostics["ok"])
             self.assertEqual(diagnostics["repository"]["type"], "sqlite")
             self.assertEqual(diagnostics["repository"]["applied_schema_version"], 2)
+            self.assertGreaterEqual(server_main.metrics.snapshot()["cas_lock_wait_events_total"], 1)
 
     def test_production_env_requires_sqlite_storage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -101,6 +102,7 @@ class NoteappServerMainTests(unittest.TestCase):
                     "NOTEAPP_SERVER_STORAGE": "sqlite",
                     "NOTEAPP_SERVER_SQLITE_PATH": str(db_path),
                     "NOTEAPP_SERVER_BLOB_STORAGE": "local",
+                    "NOTEAPP_SERVER_CAS_LOCK_STRATEGY": "sqlite-immediate",
                 },
                 clear=True,
             ):
@@ -108,6 +110,22 @@ class NoteappServerMainTests(unittest.TestCase):
 
             self.assertTrue(db_path.exists())
             self.assertEqual(created.diagnostics()["repository"]["type"], "sqlite")
+
+    def test_production_env_requires_cas_lock_strategy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(
+                server_main.os.environ,
+                {
+                    "NOTEAPP_SERVER_ENV": "production",
+                    "NOTEAPP_SERVER_DATA_DIR": str(Path(temp_dir) / "data"),
+                    "NOTEAPP_SERVER_STORAGE": "sqlite",
+                    "NOTEAPP_SERVER_SQLITE_PATH": str(Path(temp_dir) / "managed" / "noteapp-server.sqlite3"),
+                    "NOTEAPP_SERVER_BLOB_STORAGE": "local",
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "CAS_LOCK_STRATEGY=sqlite-immediate"):
+                    server_main.create_store_from_env()
 
     def test_production_s3_requires_operations_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -166,6 +184,7 @@ class NoteappServerMainTests(unittest.TestCase):
                 "NOTEAPP_SERVER_OBJECT_LIFECYCLE_RETENTION_DAYS": "365",
                 "NOTEAPP_SERVER_OBJECT_ALERT_DESTINATION": "ops-object-storage",
                 "NOTEAPP_SERVER_OBJECT_LEAST_PRIVILEGE_POLICY": "single-bucket-read-write",
+                "NOTEAPP_SERVER_CAS_LOCK_STRATEGY": "sqlite-immediate",
             }
             with patch.dict(server_main.os.environ, env, clear=True):
                 created = server_main.create_store_from_env()
@@ -221,6 +240,8 @@ class NoteappServerMainTests(unittest.TestCase):
         self.assertEqual(payload["repository"]["type"], "json")
         self.assertTrue(payload["blob_store"]["ok"])
         self.assertTrue(payload["state"]["ok"])
+        self.assertEqual(payload["cas_lock"]["strategy"], "sqlite-immediate")
+        self.assertEqual(payload["cas_lock"]["lock_wait_ms_alert_threshold"], 250.0)
 
     def test_request_metrics_include_errors_and_request_id(self) -> None:
         before = server_main.metrics.snapshot()["requests_total"]
@@ -234,6 +255,34 @@ class NoteappServerMainTests(unittest.TestCase):
         self.assertGreaterEqual(metrics["requests_total"], before + 1)
         self.assertGreaterEqual(metrics["errors_total"], 1)
         self.assertGreater(metrics["error_rate"], 0)
+
+    def test_metrics_track_cas_rejections_and_state_write_conflicts(self) -> None:
+        server_main.metrics.reset()
+
+        server_main.metrics.record_request(
+            method="POST",
+            route_path="/vaults/{vault_id}/commits",
+            status_code=409,
+            error_code="base_revision_conflict",
+        )
+        server_main.metrics.record_request(
+            method="POST",
+            route_path="/vaults/{vault_id}/commits",
+            status_code=409,
+            error_code="state_write_conflict",
+        )
+        server_main.metrics.record_cas_lock_wait(12.5)
+        metrics = server_main.metrics.snapshot()
+
+        self.assertEqual(metrics["commit_attempts_total"], 2)
+        self.assertEqual(metrics["commit_conflicts_total"], 1)
+        self.assertEqual(metrics["commit_cas_rejections_total"], 2)
+        self.assertEqual(metrics["state_write_conflicts_total"], 1)
+        self.assertEqual(metrics["commit_conflict_rate"], 0.5)
+        self.assertEqual(metrics["cas_lock_wait_events_total"], 1)
+        self.assertEqual(metrics["cas_lock_wait_total_ms"], 12.5)
+        self.assertEqual(metrics["cas_lock_wait_max_ms"], 12.5)
+        self.assertEqual(metrics["cas_lock_wait_average_ms"], 12.5)
 
     def _register_device(self, **overrides: object) -> dict[str, str]:
         payload = {

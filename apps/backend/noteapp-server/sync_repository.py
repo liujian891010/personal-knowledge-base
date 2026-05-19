@@ -71,8 +71,9 @@ class JsonStateRepository:
 
 
 class SQLiteStateRepository:
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, *, lock_wait_observer: Optional[Callable[[float], None]] = None) -> None:
         self.db_path = db_path
+        self.lock_wait_observer = lock_wait_observer
         if str(db_path) == ":memory:":
             raise ValueError("The SQLite repository profile requires a file-backed database path.")
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,7 +132,7 @@ class SQLiteStateRepository:
 
     def update(self, default_state: dict[str, Any], mutator: Callable[[dict[str, Any]], T]) -> T:
         with self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            self._begin_immediate(connection)
             try:
                 row = connection.execute(
                     "SELECT version, payload_json FROM sync_state WHERE id = ?",
@@ -155,7 +156,7 @@ class SQLiteStateRepository:
 
     def import_state(self, state: dict[str, Any], *, force: bool = False) -> None:
         with self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            self._begin_immediate(connection)
             row = connection.execute("SELECT version FROM sync_state WHERE id = ?", ("current",)).fetchone()
             if row is not None and not force:
                 connection.rollback()
@@ -207,7 +208,7 @@ class SQLiteStateRepository:
 
     def _save_state(self, state: dict[str, Any], *, expected_version: Optional[int]) -> None:
         with self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            self._begin_immediate(connection)
             row = connection.execute("SELECT version FROM sync_state WHERE id = ?", ("current",)).fetchone()
             current_version = None if row is None else int(row["version"])
             if current_version is None:
@@ -223,6 +224,15 @@ class SQLiteStateRepository:
             self._write_state_locked(connection, state, version=next_version)
             state[REPOSITORY_VERSION_KEY] = next_version
             connection.commit()
+
+    def _begin_immediate(self, connection: sqlite3.Connection) -> None:
+        started_at = time.perf_counter()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+        finally:
+            elapsed_ms = max(0.0, (time.perf_counter() - started_at) * 1000)
+            if self.lock_wait_observer is not None:
+                self.lock_wait_observer(elapsed_ms)
 
     def _write_state_locked(self, connection: sqlite3.Connection, state: dict[str, Any], *, version: int) -> None:
         persisted_state = _strip_repository_metadata(state)

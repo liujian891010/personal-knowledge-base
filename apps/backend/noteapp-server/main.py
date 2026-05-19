@@ -53,6 +53,8 @@ class RuntimeMetrics:
                 self._counters["commit_attempts_total"] += 1
                 if error_code in {"base_revision_conflict", "manifest_conflict"}:
                     self._counters["commit_conflicts_total"] += 1
+                if error_code in {"base_revision_conflict", "manifest_conflict", "state_write_conflict"}:
+                    self._counters["commit_cas_rejections_total"] += 1
             if route_path in {
                 "/_capabilities/blobs/{capability_token}",
                 "/_capabilities/blobs/resumable-upload/{session_id}",
@@ -66,6 +68,8 @@ class RuntimeMetrics:
                 self._counters["capability_missing_or_revoked_total"] += 1
             if error_code in {"object_storage_error", "object_storage_unavailable"}:
                 self._counters["object_storage_failures_total"] += 1
+            if error_code == "state_write_conflict":
+                self._counters["state_write_conflicts_total"] += 1
 
     def record_capability_revocation_event(self) -> None:
         with self._lock:
@@ -74,6 +78,16 @@ class RuntimeMetrics:
     def record_tombstone_gc(self, reclaimed_count: int) -> None:
         with self._lock:
             self._counters["tombstone_gc_deleted_total"] += max(0, reclaimed_count)
+
+    def record_cas_lock_wait(self, wait_ms: float) -> None:
+        normalized_wait_ms = max(0.0, wait_ms)
+        with self._lock:
+            self._counters["cas_lock_wait_events_total"] += 1
+            self._counters["cas_lock_wait_total_ms"] += normalized_wait_ms
+            self._counters["cas_lock_wait_max_ms"] = max(
+                self._counters["cas_lock_wait_max_ms"],
+                normalized_wait_ms,
+            )
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -84,6 +98,8 @@ class RuntimeMetrics:
         requests_total = counters["requests_total"]
         commit_attempts_total = counters["commit_attempts_total"]
         blob_upload_attempts_total = counters["blob_upload_attempts_total"]
+        cas_lock_wait_events_total = counters["cas_lock_wait_events_total"]
+        cas_lock_wait_total_ms = counters["cas_lock_wait_total_ms"]
         return {
             "ok": True,
             "started_at_ms": started_at_ms,
@@ -96,6 +112,7 @@ class RuntimeMetrics:
             "commit_attempts_total": commit_attempts_total,
             "commit_conflicts_total": counters["commit_conflicts_total"],
             "commit_conflict_rate": _rate(counters["commit_conflicts_total"], commit_attempts_total),
+            "commit_cas_rejections_total": counters["commit_cas_rejections_total"],
             "blob_upload_attempts_total": blob_upload_attempts_total,
             "blob_upload_failures_total": counters["blob_upload_failures_total"],
             "blob_upload_failure_rate": _rate(counters["blob_upload_failures_total"], blob_upload_attempts_total),
@@ -103,6 +120,11 @@ class RuntimeMetrics:
             "capability_missing_or_revoked_total": counters["capability_missing_or_revoked_total"],
             "capability_revocation_events_total": counters["capability_revocation_events_total"],
             "object_storage_failures_total": counters["object_storage_failures_total"],
+            "state_write_conflicts_total": counters["state_write_conflicts_total"],
+            "cas_lock_wait_events_total": cas_lock_wait_events_total,
+            "cas_lock_wait_total_ms": round(cas_lock_wait_total_ms, 3),
+            "cas_lock_wait_max_ms": round(counters["cas_lock_wait_max_ms"], 3),
+            "cas_lock_wait_average_ms": round(_rate(cas_lock_wait_total_ms, cas_lock_wait_events_total), 3),
             "tombstone_gc_deleted_total": counters["tombstone_gc_deleted_total"],
         }
 
@@ -264,6 +286,8 @@ def _validate_database_profile(*, storage: str, data_dir: Path, sqlite_path: Opt
         raise RuntimeError("Production SQLite database path must not use the repository-local .data directory")
     if data_dir.resolve() == default_data_dir:
         raise RuntimeError("NOTEAPP_SERVER_ENV=production requires an explicit NOTEAPP_SERVER_DATA_DIR")
+    if os.environ.get("NOTEAPP_SERVER_CAS_LOCK_STRATEGY") != "sqlite-immediate":
+        raise RuntimeError("NOTEAPP_SERVER_ENV=production requires NOTEAPP_SERVER_CAS_LOCK_STRATEGY=sqlite-immediate")
 
 
 def _required_env(name: str) -> str:
@@ -285,6 +309,19 @@ def _positive_int_env(name: str, *, required: bool = False) -> Optional[int]:
         raise RuntimeError(f"{name} must be a positive integer") from error
     if value <= 0:
         raise RuntimeError(f"{name} must be a positive integer")
+    return value
+
+
+def _float_env(name: str, *, default: float) -> float:
+    raw_value = os.environ.get(name)
+    if raw_value is None or raw_value == "":
+        return default
+    try:
+        value = float(raw_value)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be a number") from error
+    if value < 0:
+        raise RuntimeError(f"{name} must be non-negative")
     return value
 
 
@@ -351,7 +388,11 @@ def create_store_from_env() -> SyncStore:
     sqlite_path = _sqlite_db_path(data_dir) if storage in {"sqlite", "db"} else None
     _validate_database_profile(storage=storage, data_dir=data_dir, sqlite_path=sqlite_path)
     if storage in {"sqlite", "db"}:
-        return SyncStore(data_dir, repository=SQLiteStateRepository(sqlite_path), blob_store=blob_store)
+        return SyncStore(
+            data_dir,
+            repository=SQLiteStateRepository(sqlite_path, lock_wait_observer=metrics.record_cas_lock_wait),
+            blob_store=blob_store,
+        )
     if storage != "json":
         raise RuntimeError("NOTEAPP_SERVER_STORAGE must be json or sqlite")
     return SyncStore(data_dir, blob_store=blob_store)
@@ -381,6 +422,28 @@ def create_tombstone_gc_worker_from_env(store_provider: Any) -> TombstoneGcWorke
     )
 
 
+def create_cas_lock_policy_from_env() -> dict[str, Any]:
+    return {
+        "strategy": os.environ.get("NOTEAPP_SERVER_CAS_LOCK_STRATEGY", "sqlite-immediate"),
+        "commit_conflict_rate_alert_threshold": _float_env(
+            "NOTEAPP_SERVER_CAS_CONFLICT_RATE_ALERT_THRESHOLD",
+            default=0.2,
+        ),
+        "state_write_conflict_alert_threshold": _positive_int_env(
+            "NOTEAPP_SERVER_CAS_STATE_WRITE_CONFLICT_ALERT_THRESHOLD",
+        )
+        or 1,
+        "lock_wait_ms_alert_threshold": _float_env(
+            "NOTEAPP_SERVER_CAS_LOCK_WAIT_MS_ALERT_THRESHOLD",
+            default=250.0,
+        ),
+        "error_rate_alert_threshold": _float_env(
+            "NOTEAPP_SERVER_CAS_ERROR_RATE_ALERT_THRESHOLD",
+            default=0.05,
+        ),
+    }
+
+
 def _cors_origins_from_env() -> list[str]:
     raw_value = os.environ.get("NOTEAPP_SERVER_CORS_ORIGINS", "").strip()
     if not raw_value:
@@ -392,6 +455,7 @@ def _cors_origins_from_env() -> list[str]:
 
 store = create_store_from_env()
 tombstone_gc_worker = create_tombstone_gc_worker_from_env(lambda: store)
+cas_lock_policy = create_cas_lock_policy_from_env()
 app = FastAPI(title="noteapp-server")
 cors_origins = _cors_origins_from_env()
 if cors_origins:
@@ -589,6 +653,7 @@ def health_dependencies(response: Response) -> dict[str, Any]:
             "log_level": os.environ.get("NOTEAPP_SERVER_LOG_LEVEL", "WARNING").upper(),
         },
         "tombstone_gc_worker": tombstone_gc_worker.diagnostics(),
+        "cas_lock": cas_lock_policy,
         **store_diagnostics,
     }
     if not payload["ok"]:

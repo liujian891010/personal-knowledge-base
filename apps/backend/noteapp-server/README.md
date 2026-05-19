@@ -21,7 +21,7 @@ This is a local-development AG04 MVP. It implements the frozen sync API shape ne
 13. Repository-backed account sessions with access/refresh token rotation
 14. SQLite repository profile with schema migration and JSON-state import
 15. Object-storage-backed encrypted blob persistence with local filesystem and S3/OSS-compatible profiles
-16. Operational readiness endpoints, structured request logs, runtime metrics, and SQLite backup/restore scripts
+16. Operational readiness endpoints, structured request logs, runtime metrics, SQLite backup/restore scripts, and CAS lock operations diagnostics
 
 State is stored locally as JSON under `.data/` by default:
 
@@ -86,6 +86,21 @@ above. Health diagnostics expose the non-secret policy values so deployment
 checks can confirm credential rotation, lifecycle retention, alerting, and
 least-privilege posture without printing credentials.
 
+Production CAS writes use the SQLite repository transaction lock strategy:
+
+```powershell
+$env:NOTEAPP_SERVER_CAS_LOCK_STRATEGY='sqlite-immediate'
+$env:NOTEAPP_SERVER_CAS_CONFLICT_RATE_ALERT_THRESHOLD='0.2'
+$env:NOTEAPP_SERVER_CAS_STATE_WRITE_CONFLICT_ALERT_THRESHOLD='1'
+$env:NOTEAPP_SERVER_CAS_LOCK_WAIT_MS_ALERT_THRESHOLD='250'
+$env:NOTEAPP_SERVER_CAS_ERROR_RATE_ALERT_THRESHOLD='0.05'
+```
+
+Production mode requires `NOTEAPP_SERVER_CAS_LOCK_STRATEGY=sqlite-immediate`.
+The SQLite repository opens file-backed WAL connections and wraps state writes
+in `BEGIN IMMEDIATE`, so concurrent commit attempts serialize through the
+database write lock and stale commit bases return CAS `409` responses.
+
 ## Run Locally
 
 ```powershell
@@ -128,7 +143,10 @@ Set `NOTEAPP_SERVER_LOG_LEVEL=INFO` to emit one structured JSON request log per 
 
 `GET /health` stays intentionally small for load balancers. `GET /health/dependencies` checks process state, repository health, object storage health, and SQLite migration versions. Filesystem blob storage performs a short read/write/delete probe; S3/OSS-compatible storage reports configuration without a destructive bucket probe.
 
-`GET /metrics` returns JSON counters for requests, error rate, commit conflicts, blob upload failures, object-storage failures, capability expiry/revocation events, and tombstone GC deletion count.
+`GET /metrics` returns JSON counters for requests, error rate, commit
+conflicts, commit CAS rejections, SQLite CAS lock wait, state-write conflicts,
+blob upload failures, object-storage failures, capability expiry/revocation
+events, and tombstone GC deletion count.
 
 Enable the background tombstone GC worker in production with explicit retention
 settings:
@@ -148,6 +166,9 @@ records remain available for recovery policy.
 
 The tombstone GC operating plan is tracked in
 `docs/develop/v1.0.43-tombstone-gc-worker-plan.md`.
+
+The CAS lock operating plan is tracked in
+`docs/develop/v1.0.43-cas-lock-ops-plan.md`.
 
 Create a consistent SQLite backup with:
 
@@ -226,7 +247,7 @@ This MVP is intentionally not production-ready:
 2. Hosted backup scheduling and managed database provider selection remain deployment operations, but production mode now enforces explicit SQLite database paths and keeps JSON/default `.data` state out of production
 3. S3/OSS mode uses a server streaming proxy; provider-side credential rotation and bucket lifecycle jobs must be scheduled by deployment operations and are surfaced through required production policy configuration
 4. Tombstone GC has a configurable background worker, but production operations still need alert routing around delayed or failed GC runs
-5. CAS locking is implemented for the SQLite repository profile; distributed multi-node locking and operational alerts are still pending
+5. CAS locking is enforced for the SQLite repository profile and exposes conflict, lock-wait, state-write conflict, and error-rate signals; active-active multi-host operation should move to PostgreSQL row/advisory locks or an equivalent provider transaction lock
 
 The `V1043-M3-01` production backend architecture is frozen in:
 
@@ -234,4 +255,6 @@ The `V1043-M3-01` production backend architecture is frozen in:
 docs/develop/v1.0.43-production-backend-architecture.md
 ```
 
-Future production work should keep JSON/local filesystem as dev/test profiles and harden the SQLite/S3-compatible repository path with operational migrations, monitoring, backup, distributed locking strategy, and recovery.
+Future production work should keep JSON/local filesystem as dev/test profiles
+and harden the SQLite/S3-compatible repository path with managed operations,
+monitoring, backup, PostgreSQL-grade multi-host locking, and recovery.

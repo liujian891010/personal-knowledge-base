@@ -86,6 +86,11 @@ class RunningServer:
         env["NOTEAPP_SERVER_STORAGE"] = "sqlite"
         env["NOTEAPP_SERVER_SQLITE_PATH"] = str(data_dir / "noteapp-server.sqlite3")
         env["NOTEAPP_SERVER_BLOB_STORAGE"] = self.blob_storage
+        env["NOTEAPP_SERVER_CAS_LOCK_STRATEGY"] = "sqlite-immediate"
+        env["NOTEAPP_SERVER_CAS_CONFLICT_RATE_ALERT_THRESHOLD"] = "0.2"
+        env["NOTEAPP_SERVER_CAS_STATE_WRITE_CONFLICT_ALERT_THRESHOLD"] = "1"
+        env["NOTEAPP_SERVER_CAS_LOCK_WAIT_MS_ALERT_THRESHOLD"] = "250"
+        env["NOTEAPP_SERVER_CAS_ERROR_RATE_ALERT_THRESHOLD"] = "0.05"
         env["NOTEAPP_SERVER_LOG_LEVEL"] = "WARNING"
         if self.blob_storage == "s3":
             env["NOTEAPP_SERVER_OBJECT_ENDPOINT"] = "http://127.0.0.1:1"
@@ -214,6 +219,8 @@ def run_authorized_sqlite_suite(base_url: str) -> dict[str, Any]:
     assert status == 200, health
     assert health["repository"]["type"] == "sqlite"
     assert health["repository"]["applied_schema_version"] == 2
+    assert health["cas_lock"]["strategy"] == "sqlite-immediate"
+    assert health["cas_lock"]["lock_wait_ms_alert_threshold"] == 250.0
 
     invalid_manifest = manifest(vault_id, base_revision=0, blob_id="missing", file_id="file-invalid", path="Notes/invalid.md")
     invalid_manifest["vault_id"] = "wrong-vault"
@@ -286,10 +293,15 @@ def run_authorized_sqlite_suite(base_url: str) -> dict[str, Any]:
     status, metrics = request_json(base_url, "GET", "/metrics")
     assert status == 200, metrics
     assert metrics["commit_conflicts_total"] >= 1
+    assert metrics["commit_cas_rejections_total"] >= 1
+    assert metrics["cas_lock_wait_events_total"] >= 1
+    assert metrics["cas_lock_wait_max_ms"] >= 0
     assert metrics["errors_total"] >= 3
     return {
         "head_revision": 1,
         "commit_conflicts_total": metrics["commit_conflicts_total"],
+        "commit_cas_rejections_total": metrics["commit_cas_rejections_total"],
+        "cas_lock_wait_events_total": metrics["cas_lock_wait_events_total"],
         "errors_total": metrics["errors_total"],
     }
 

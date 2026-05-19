@@ -49,5 +49,5 @@ desktop packaging, a browser-based UI, and AI-assisted knowledge workflows.
 
 The backend README records the remaining production gaps: external IdP/MFA
 hardening, managed database provider operations, object storage operations,
-tombstone GC background workers, and distributed CAS locking/alerts. Those items
-remain tracked in `docs/develop/v1.0.43-follow-up-todo.md`.
+tombstone GC alert routing, and future PostgreSQL-grade multi-host CAS locking.
+Those items remain tracked in `docs/develop/v1.0.43-follow-up-todo.md`.
