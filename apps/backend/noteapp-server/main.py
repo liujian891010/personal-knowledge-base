@@ -16,7 +16,14 @@ from fastapi.responses import JSONResponse
 
 from blob_storage import FileSystemBlobStore, S3CompatibleBlobStore
 from sync_repository import SQLiteStateRepository, sqlite_path_from_database_url
-from sync_store import BlobCapabilityError, CommitConflict, SyncStore, SyncStoreError
+from sync_store import (
+    DEFAULT_DEVICE_INACTIVE_AFTER_MS,
+    DEFAULT_TOMBSTONE_GC_MIN_RETENTION_MS,
+    BlobCapabilityError,
+    CommitConflict,
+    SyncStore,
+    SyncStoreError,
+)
 
 
 class RuntimeMetrics:
@@ -114,6 +121,94 @@ logger = logging.getLogger("noteapp.server")
 metrics = RuntimeMetrics()
 
 
+class TombstoneGcWorker:
+    def __init__(
+        self,
+        store_provider: Any,
+        *,
+        enabled: bool,
+        interval_ms: int,
+        min_retention_ms: int,
+        inactive_after_ms: int,
+    ) -> None:
+        self.store_provider = store_provider
+        self.enabled = enabled
+        self.interval_ms = interval_ms
+        self.min_retention_ms = min_retention_ms
+        self.inactive_after_ms = inactive_after_ms
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+        self.last_result: Optional[dict[str, Any]] = None
+        self.last_error: Optional[str] = None
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._run_loop, name="noteapp-tombstone-gc", daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        with self._lock:
+            thread = self._thread
+            self._stop_event.set()
+        if thread is not None:
+            thread.join(timeout=5)
+
+    def run_once(self) -> dict[str, Any]:
+        current_store = self.store_provider()
+        vault_ids = current_store.list_vault_ids()
+        results: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        reclaimed_total = 0
+        for vault_id in vault_ids:
+            try:
+                result = current_store.run_tombstone_gc(
+                    vault_id,
+                    min_retention_ms=self.min_retention_ms,
+                    inactive_after_ms=self.inactive_after_ms,
+                    actor_device_id="server:tombstone-gc-worker",
+                )
+                reclaimed = result.get("reclaimed_count", 0)
+                if isinstance(reclaimed, int):
+                    reclaimed_total += reclaimed
+                results.append(result)
+            except Exception as error:
+                errors.append({"vault_id": vault_id, "error": str(error)})
+        metrics.record_tombstone_gc(reclaimed_total)
+        summary = {
+            "enabled": self.enabled,
+            "vault_count": len(vault_ids),
+            "reclaimed_count": reclaimed_total,
+            "results": results,
+            "errors": errors,
+        }
+        with self._lock:
+            self.last_result = summary
+            self.last_error = errors[0]["error"] if errors else None
+        return summary
+
+    def diagnostics(self) -> dict[str, Any]:
+        thread = self._thread
+        return {
+            "enabled": self.enabled,
+            "running": bool(thread and thread.is_alive()),
+            "interval_ms": self.interval_ms,
+            "min_retention_ms": self.min_retention_ms,
+            "inactive_after_ms": self.inactive_after_ms,
+            "last_error": self.last_error,
+            "last_result": self.last_result,
+        }
+
+    def _run_loop(self) -> None:
+        while not self._stop_event.wait(self.interval_ms / 1000):
+            self.run_once()
+
+
 def _configure_logging() -> None:
     level_name = os.environ.get("NOTEAPP_SERVER_LOG_LEVEL", "WARNING").upper()
     level = getattr(logging, level_name, logging.INFO)
@@ -193,6 +288,13 @@ def _positive_int_env(name: str, *, required: bool = False) -> Optional[int]:
     return value
 
 
+def _bool_env(name: str, *, default: bool = False) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None or raw_value == "":
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _validate_object_storage_profile(backend: str, endpoint: Optional[str]) -> dict[str, object]:
     if backend not in {"s3", "oss"}:
         return {}
@@ -255,6 +357,30 @@ def create_store_from_env() -> SyncStore:
     return SyncStore(data_dir, blob_store=blob_store)
 
 
+def create_tombstone_gc_worker_from_env(store_provider: Any) -> TombstoneGcWorker:
+    enabled = _bool_env("NOTEAPP_SERVER_TOMBSTONE_GC_WORKER_ENABLED", default=False)
+    required = _is_production_environment() and enabled
+    interval_ms = _positive_int_env(
+        "NOTEAPP_SERVER_TOMBSTONE_GC_INTERVAL_MS",
+        required=required,
+    ) or 60 * 60 * 1000
+    min_retention_ms = _positive_int_env(
+        "NOTEAPP_SERVER_TOMBSTONE_GC_MIN_RETENTION_MS",
+        required=required,
+    ) or DEFAULT_TOMBSTONE_GC_MIN_RETENTION_MS
+    inactive_after_ms = _positive_int_env(
+        "NOTEAPP_SERVER_TOMBSTONE_GC_INACTIVE_AFTER_MS",
+        required=required,
+    ) or DEFAULT_DEVICE_INACTIVE_AFTER_MS
+    return TombstoneGcWorker(
+        store_provider,
+        enabled=enabled,
+        interval_ms=interval_ms,
+        min_retention_ms=min_retention_ms,
+        inactive_after_ms=inactive_after_ms,
+    )
+
+
 def _cors_origins_from_env() -> list[str]:
     raw_value = os.environ.get("NOTEAPP_SERVER_CORS_ORIGINS", "").strip()
     if not raw_value:
@@ -265,6 +391,7 @@ def _cors_origins_from_env() -> list[str]:
 
 
 store = create_store_from_env()
+tombstone_gc_worker = create_tombstone_gc_worker_from_env(lambda: store)
 app = FastAPI(title="noteapp-server")
 cors_origins = _cors_origins_from_env()
 if cors_origins:
@@ -275,6 +402,16 @@ if cors_origins:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+
+@app.on_event("startup")
+def start_background_workers() -> None:
+    tombstone_gc_worker.start()
+
+
+@app.on_event("shutdown")
+def stop_background_workers() -> None:
+    tombstone_gc_worker.stop()
 
 
 @app.exception_handler(HTTPException)
@@ -451,6 +588,7 @@ def health_dependencies(response: Response) -> dict[str, Any]:
             "uptime_ms": metrics.snapshot()["uptime_ms"],
             "log_level": os.environ.get("NOTEAPP_SERVER_LOG_LEVEL", "WARNING").upper(),
         },
+        "tombstone_gc_worker": tombstone_gc_worker.diagnostics(),
         **store_diagnostics,
     }
     if not payload["ok"]:
@@ -541,7 +679,11 @@ def heartbeat_device(vault_id: str, request: Request) -> dict[str, Any]:
 def run_tombstone_gc(vault_id: str, request: Request, payload: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     device_id = _required_authorized_device_id(request)
     body = _body_mapping(payload or {})
-    options: dict[str, Any] = {"actor_device_id": device_id}
+    options: dict[str, Any] = {
+        "actor_device_id": device_id,
+        "min_retention_ms": tombstone_gc_worker.min_retention_ms,
+        "inactive_after_ms": tombstone_gc_worker.inactive_after_ms,
+    }
     for key in ("now_ms", "min_retention_ms", "inactive_after_ms"):
         if key not in body:
             continue

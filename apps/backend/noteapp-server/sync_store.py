@@ -925,6 +925,11 @@ class SyncStore:
                 "head_revision": vault["head_revision"],
             }
 
+    def list_vault_ids(self) -> list[str]:
+        with self._lock:
+            state = self._load()
+            return sorted(vault_id for vault_id in state["vaults"] if isinstance(vault_id, str) and vault_id)
+
     def run_tombstone_gc(
         self,
         vault_id: str,
@@ -1006,6 +1011,7 @@ class SyncStore:
                 "blocked_tombstones": [],
                 "reclaimed_count": 0,
                 "reason": "no_head_manifest",
+                "recovery_boundary": "tombstone GC removes delete markers only after retention and device ack checks; blob bytes and file-version records are not deleted by this GC",
             }
             if record_noop:
                 self._append_tombstone_gc_log(vault, result)
@@ -1121,6 +1127,7 @@ class SyncStore:
             "blocked_tombstones": blocked_tombstones,
             "reclaimed_count": len(reclaimed_tombstones),
             "reason": "reclaimed" if reclaimed_tombstones else "no_reclaimable_tombstones",
+            "recovery_boundary": "tombstone GC removes delete markers only after retention and device ack checks; blob bytes and file-version records are not deleted by this GC",
         }
         if record_noop or reclaimed_tombstones:
             self._append_tombstone_gc_log(vault, result)

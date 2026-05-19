@@ -130,6 +130,25 @@ Set `NOTEAPP_SERVER_LOG_LEVEL=INFO` to emit one structured JSON request log per 
 
 `GET /metrics` returns JSON counters for requests, error rate, commit conflicts, blob upload failures, object-storage failures, capability expiry/revocation events, and tombstone GC deletion count.
 
+Enable the background tombstone GC worker in production with explicit retention
+settings:
+
+```powershell
+$env:NOTEAPP_SERVER_TOMBSTONE_GC_WORKER_ENABLED='true'
+$env:NOTEAPP_SERVER_TOMBSTONE_GC_INTERVAL_MS='3600000'
+$env:NOTEAPP_SERVER_TOMBSTONE_GC_MIN_RETENTION_MS='604800000'
+$env:NOTEAPP_SERVER_TOMBSTONE_GC_INACTIVE_AFTER_MS='604800000'
+```
+
+`GET /health/dependencies` includes worker diagnostics. The worker uses the same
+GC safety boundary as the manual endpoint: a tombstone is reclaimed only after
+the retention window has passed and all active joined devices have acknowledged
+the delete revision. GC removes delete markers only; blob bytes and file-version
+records remain available for recovery policy.
+
+The tombstone GC operating plan is tracked in
+`docs/develop/v1.0.43-tombstone-gc-worker-plan.md`.
+
 Create a consistent SQLite backup with:
 
 ```powershell
@@ -206,7 +225,7 @@ This MVP is intentionally not production-ready:
 1. External IdP, built-in MFA, and self-service account recovery remain policy-defined/deferred; password auth and session rotation are implemented
 2. Hosted backup scheduling and managed database provider selection remain deployment operations, but production mode now enforces explicit SQLite database paths and keeps JSON/default `.data` state out of production
 3. S3/OSS mode uses a server streaming proxy; provider-side credential rotation and bucket lifecycle jobs must be scheduled by deployment operations and are surfaced through required production policy configuration
-4. Tombstone GC has no background worker or production retention controls
+4. Tombstone GC has a configurable background worker, but production operations still need alert routing around delayed or failed GC runs
 5. CAS locking is implemented for the SQLite repository profile; distributed multi-node locking and operational alerts are still pending
 
 The `V1043-M3-01` production backend architecture is frozen in:

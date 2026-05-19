@@ -176,6 +176,37 @@ class NoteappServerMainTests(unittest.TestCase):
             self.assertEqual(object_policy["alert_destination"], "ops-object-storage")
             self.assertEqual(object_policy["least_privilege_policy"], "single-bucket-read-write")
 
+    def test_production_gc_worker_requires_explicit_retention_config(self) -> None:
+        with patch.dict(
+            server_main.os.environ,
+            {
+                "NOTEAPP_SERVER_ENV": "production",
+                "NOTEAPP_SERVER_TOMBSTONE_GC_WORKER_ENABLED": "true",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "TOMBSTONE_GC_INTERVAL_MS"):
+                server_main.create_tombstone_gc_worker_from_env(lambda: server_main.store)
+
+    def test_tombstone_gc_worker_run_once_records_vault_results(self) -> None:
+        server_main.store.get_vault_head("vault-worker")
+        worker = server_main.TombstoneGcWorker(
+            lambda: server_main.store,
+            enabled=True,
+            interval_ms=1_000,
+            min_retention_ms=1,
+            inactive_after_ms=1,
+        )
+
+        result = worker.run_once()
+
+        self.assertEqual(result["vault_count"], 1)
+        self.assertEqual(result["reclaimed_count"], 0)
+        self.assertEqual(result["results"][0]["vault_id"], "vault-worker")
+        self.assertEqual(result["results"][0]["reason"], "no_head_manifest")
+        self.assertIn("recovery_boundary", result["results"][0])
+        self.assertEqual(worker.diagnostics()["last_result"]["vault_count"], 1)
+
     def test_health_dependencies_reports_runtime_components(self) -> None:
         health = self.client.get("/health", headers={"x-request-id": "req-health"})
         self.assertEqual(health.status_code, 200)
