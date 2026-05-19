@@ -123,6 +123,10 @@ assert(
   'Explorer does not expose a DOCX preview path for attachments',
 );
 assert(
+  explorerSource.includes("attachmentPreviewKindValue === 'markdown'") && explorerSource.includes('<MarkdownPreview'),
+  'Explorer does not render Markdown attachments with the Markdown preview UI',
+);
+assert(
   explorerSource.includes("['note', 'attachment'].includes(selectedFile.type)"),
   'Explorer delete action is not enabled for attachment trash flow',
 );

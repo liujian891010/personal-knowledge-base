@@ -242,7 +242,7 @@ type FileVisualKind =
   | 'video'
   | 'unknown';
 
-type AttachmentPreviewKind = 'image' | 'pdf' | 'docx' | 'text' | 'audio' | 'video' | 'other';
+type AttachmentPreviewKind = 'image' | 'pdf' | 'docx' | 'markdown' | 'text' | 'audio' | 'video' | 'other';
 
 const codePreviewExtensions = new Set([
   '.bat',
@@ -478,9 +478,13 @@ function isTextPreviewMimeType(mimeType: string): boolean {
 
 function attachmentPreviewKind(mimeType: string | null | undefined, path = ''): AttachmentPreviewKind {
   const normalizedMimeType = (mimeType ?? '').toLowerCase();
+  const extension = fileExtension(path);
+  if (normalizedMimeType === 'text/markdown' || extension === '.md' || extension === '.markdown') {
+    return 'markdown';
+  }
   if (
     normalizedMimeType.includes('wordprocessingml.document')
-    || fileExtension(path) === '.docx'
+    || extension === '.docx'
   ) {
     return 'docx';
   }
@@ -1621,7 +1625,7 @@ export default function ExplorerView({
     return attachmentPreviewKind(attachmentPreview.mime_type, attachmentPreview.path);
   }, [attachmentPreview]);
   const attachmentPreviewText = useMemo(() => {
-    if (!attachmentPreview || attachmentPreviewKindValue !== 'text') {
+    if (!attachmentPreview || !['markdown', 'text'].includes(attachmentPreviewKindValue ?? '')) {
       return null;
     }
     return decodeAttachmentPreviewText(attachmentPreview);
@@ -2994,6 +2998,15 @@ export default function ExplorerView({
                                   controls
                                   src={attachmentPreviewDataUrl}
                                   className="max-h-full max-w-full rounded-lg border border-[#0f3460] bg-black"
+                                />
+                              </div>
+                            )}
+                            {attachmentPreviewKindValue === 'markdown' && (
+                              <div className="min-h-full overflow-auto rounded-lg border border-[#0f3460] bg-[#101827]">
+                                <MarkdownPreview
+                                  markdown={attachmentPreviewText ?? ''}
+                                  wikiLinkByText={wikiLinkByText}
+                                  onOpenWikiLink={openWorkspaceFile}
                                 />
                               </div>
                             )}
