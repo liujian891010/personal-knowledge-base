@@ -136,6 +136,38 @@ def _sqlite_db_path(data_dir: Path) -> Path:
     return Path(os.environ.get("NOTEAPP_SERVER_SQLITE_PATH", data_dir / "noteapp-server.sqlite3"))
 
 
+def _server_environment() -> str:
+    return os.environ.get("NOTEAPP_SERVER_ENV", "development").strip().lower()
+
+
+def _is_production_environment() -> bool:
+    return _server_environment() in {"prod", "production"}
+
+
+def _validate_database_profile(*, storage: str, data_dir: Path, sqlite_path: Optional[Path]) -> None:
+    if not _is_production_environment():
+        return
+    if storage not in {"sqlite", "db"}:
+        raise RuntimeError("NOTEAPP_SERVER_ENV=production requires NOTEAPP_SERVER_STORAGE=sqlite")
+    if not os.environ.get("NOTEAPP_SERVER_DATABASE_URL") and not os.environ.get("NOTEAPP_SERVER_SQLITE_PATH"):
+        raise RuntimeError(
+            "NOTEAPP_SERVER_ENV=production requires NOTEAPP_SERVER_DATABASE_URL or NOTEAPP_SERVER_SQLITE_PATH"
+        )
+    if sqlite_path is None:
+        raise RuntimeError("NOTEAPP_SERVER_ENV=production requires a SQLite database path")
+    if not sqlite_path.is_absolute():
+        raise RuntimeError("Production SQLite database path must be absolute")
+    default_data_dir = _default_data_dir().resolve()
+    try:
+        sqlite_path.resolve().relative_to(default_data_dir)
+    except ValueError:
+        pass
+    else:
+        raise RuntimeError("Production SQLite database path must not use the repository-local .data directory")
+    if data_dir.resolve() == default_data_dir:
+        raise RuntimeError("NOTEAPP_SERVER_ENV=production requires an explicit NOTEAPP_SERVER_DATA_DIR")
+
+
 def _required_env(name: str) -> str:
     value = os.environ.get(name)
     if not value:
@@ -163,8 +195,10 @@ def create_store_from_env() -> SyncStore:
     data_dir = Path(os.environ.get("NOTEAPP_SERVER_DATA_DIR", _default_data_dir()))
     blob_store = create_blob_store_from_env(data_dir)
     storage = os.environ.get("NOTEAPP_SERVER_STORAGE", "json").lower()
+    sqlite_path = _sqlite_db_path(data_dir) if storage in {"sqlite", "db"} else None
+    _validate_database_profile(storage=storage, data_dir=data_dir, sqlite_path=sqlite_path)
     if storage in {"sqlite", "db"}:
-        return SyncStore(data_dir, repository=SQLiteStateRepository(_sqlite_db_path(data_dir)), blob_store=blob_store)
+        return SyncStore(data_dir, repository=SQLiteStateRepository(sqlite_path), blob_store=blob_store)
     if storage != "json":
         raise RuntimeError("NOTEAPP_SERVER_STORAGE must be json or sqlite")
     return SyncStore(data_dir, blob_store=blob_store)

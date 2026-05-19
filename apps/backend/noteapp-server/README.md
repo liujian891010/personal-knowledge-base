@@ -46,6 +46,12 @@ $env:NOTEAPP_SERVER_SQLITE_PATH='C:\tmp\noteapp-server-data\noteapp-server.sqlit
 
 `NOTEAPP_SERVER_DATABASE_URL=sqlite:///C:/tmp/noteapp-server-data/noteapp-server.sqlite3` is also accepted. The SQLite profile stores the canonical sync state plus projected metadata tables for users, devices, sessions, vaults, manifests, commits, blobs, capabilities, tombstone GC runs, and file versions.
 
+Set `NOTEAPP_SERVER_ENV=production` in deployed environments. Production mode
+rejects the JSON repository profile, requires an explicit absolute SQLite
+database path through `NOTEAPP_SERVER_DATABASE_URL` or
+`NOTEAPP_SERVER_SQLITE_PATH`, and refuses the repository-local `.data` directory.
+This keeps dev/test state separate from the production database.
+
 Import an existing JSON state file into SQLite with:
 
 ```powershell
@@ -120,6 +126,10 @@ Create a consistent SQLite backup with:
 python apps\backend\noteapp-server\scripts\backup_sqlite.py --sqlite-db apps\backend\noteapp-server\.data\noteapp-server.sqlite3 --backup-dir backups\noteapp-server
 ```
 
+For production, point `--sqlite-db` at the explicit production database path and
+write backups to `NOTEAPP_SERVER_SQLITE_BACKUP_DIR` or an equivalent managed
+backup volume outside the application data directory.
+
 Restore into a fresh destination with:
 
 ```powershell
@@ -127,6 +137,9 @@ python apps\backend\noteapp-server\scripts\restore_sqlite.py --backup-path backu
 ```
 
 Use `--force` only during a planned recovery drill, because it replaces the destination database. Object storage backups should use bucket versioning plus lifecycle retention; destructive schema rollbacks are not supported, so migrations must remain forward compatible.
+
+The database migration and backup operating plan is tracked in
+`docs/develop/v1.0.43-managed-db-backup-plan.md`.
 
 ## Auth Boundary
 
@@ -181,7 +194,7 @@ The client requests each authorized range with `X-Noteapp-Range-Offset` and `X-N
 This MVP is intentionally not production-ready:
 
 1. External IdP, built-in MFA, and self-service account recovery remain policy-defined/deferred; password auth and session rotation are implemented
-2. SQLite is a local-file repository profile; managed DB migration rollout and hosted backup scheduling are still pending
+2. Hosted backup scheduling and managed database provider selection remain deployment operations, but production mode now enforces explicit SQLite database paths and keeps JSON/default `.data` state out of production
 3. S3/OSS mode uses a server streaming proxy; production credential rotation and bucket lifecycle automation are still pending
 4. Tombstone GC has no background worker or production retention controls
 5. CAS locking is implemented for the SQLite repository profile; distributed multi-node locking and operational alerts are still pending

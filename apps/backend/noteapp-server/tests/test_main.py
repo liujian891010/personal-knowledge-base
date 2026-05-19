@@ -59,6 +59,56 @@ class NoteappServerMainTests(unittest.TestCase):
             self.assertEqual(diagnostics["repository"]["type"], "sqlite")
             self.assertEqual(diagnostics["repository"]["applied_schema_version"], 2)
 
+    def test_production_env_requires_sqlite_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(
+                server_main.os.environ,
+                {
+                    "NOTEAPP_SERVER_ENV": "production",
+                    "NOTEAPP_SERVER_DATA_DIR": str(Path(temp_dir) / "data"),
+                    "NOTEAPP_SERVER_STORAGE": "json",
+                    "NOTEAPP_SERVER_BLOB_STORAGE": "local",
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "requires NOTEAPP_SERVER_STORAGE=sqlite"):
+                    server_main.create_store_from_env()
+
+    def test_production_env_requires_explicit_database_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(
+                server_main.os.environ,
+                {
+                    "NOTEAPP_SERVER_ENV": "production",
+                    "NOTEAPP_SERVER_DATA_DIR": str(Path(temp_dir) / "data"),
+                    "NOTEAPP_SERVER_STORAGE": "sqlite",
+                    "NOTEAPP_SERVER_BLOB_STORAGE": "local",
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "requires NOTEAPP_SERVER_DATABASE_URL"):
+                    server_main.create_store_from_env()
+
+    def test_production_env_accepts_explicit_sqlite_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            db_path = Path(temp_dir) / "managed" / "noteapp-server.sqlite3"
+            with patch.dict(
+                server_main.os.environ,
+                {
+                    "NOTEAPP_SERVER_ENV": "production",
+                    "NOTEAPP_SERVER_DATA_DIR": str(data_dir),
+                    "NOTEAPP_SERVER_STORAGE": "sqlite",
+                    "NOTEAPP_SERVER_SQLITE_PATH": str(db_path),
+                    "NOTEAPP_SERVER_BLOB_STORAGE": "local",
+                },
+                clear=True,
+            ):
+                created = server_main.create_store_from_env()
+
+            self.assertTrue(db_path.exists())
+            self.assertEqual(created.diagnostics()["repository"]["type"], "sqlite")
+
     def test_health_dependencies_reports_runtime_components(self) -> None:
         health = self.client.get("/health", headers={"x-request-id": "req-health"})
         self.assertEqual(health.status_code, 200)
