@@ -1377,6 +1377,10 @@ function errorPayload(error) {
       },
     };
   }
+  const backendHttpError = syncBackendHttpErrorPayload(message);
+  if (backendHttpError) {
+    return backendHttpError;
+  }
   if (error && typeof error === 'object' && Number.isFinite(Number(error.statusCode))) {
     return {
       statusCode: Number(error.statusCode),
@@ -1437,6 +1441,40 @@ function isSyncBackendUnavailableMessage(message) {
     'Failed to establish a new connection',
     'urlopen error',
   ].some((marker) => message.includes(marker));
+}
+
+function syncBackendHttpErrorPayload(message) {
+  const match = /HTTP Error (\d{3}): ([^\r\n]+)/.exec(message);
+  if (!match) {
+    return null;
+  }
+  const statusCode = Number(match[1]);
+  const reason = match[2].trim();
+  if (statusCode === 401) {
+    return {
+      statusCode,
+      payload: {
+        code: 'sync_backend_unauthorized',
+        message: 'Sync backend rejected the request. Configure NOTEAPP_BEARER_TOKEN or refresh sync credentials.',
+      },
+    };
+  }
+  if (statusCode === 403) {
+    return {
+      statusCode,
+      payload: {
+        code: 'sync_backend_forbidden',
+        message: 'Sync backend denied access for the current credentials.',
+      },
+    };
+  }
+  return {
+    statusCode,
+    payload: {
+      code: 'sync_backend_http_error',
+      message: `Sync backend returned ${statusCode}${reason ? ` ${reason}` : ''}.`,
+    },
+  };
 }
 
 if (args.has('--help') || args.has('-h')) {
