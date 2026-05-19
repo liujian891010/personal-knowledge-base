@@ -1426,7 +1426,7 @@ export default function SettingsView({
                     >
                       {effectiveAiModelOptions.map((option) => (
                         <option key={aiModelOptionKey(option)} value={aiModelOptionKey(option)}>
-                          {option.label} / {option.environment}
+                          {option.label}
                         </option>
                       ))}
                     </select>

@@ -151,6 +151,8 @@ assert(
 assert(
   settingsSource.includes('/api/settings/ai-model-options')
     && settingsSource.includes('effectiveAiModelOptions')
+    && settingsSource.includes('{option.label}')
+    && !settingsSource.includes('{option.label} / {option.environment}')
     && syncShellBridgeSource.includes('/api/settings/ai-model-options')
     && syncShellBridgeSource.includes('NOTEAPP_AI_MODEL_OPTIONS_JSON'),
   'Settings AI model dropdown is not wired to runtime model presets',
