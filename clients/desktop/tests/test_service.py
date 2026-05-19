@@ -2626,6 +2626,25 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(snapshot.ai.provider_api, "openai-completions")
             self.assertEqual(snapshot.ai.model_id, "gpt-4o-mini")
 
+    def test_load_local_settings_snapshot_defaults_removed_system_theme(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            settings_path = root / ".noteapp" / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "appearance": {"theme": "system"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            snapshot = service.load_local_settings_snapshot()
+
+            self.assertEqual(snapshot.source, "file")
+            self.assertEqual(snapshot.appearance.theme, "dark")
+
     def test_write_local_settings_normalizes_and_returns_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -2633,7 +2652,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
 
             snapshot = service.write_local_settings(
                 {
-                    "appearance": {"theme": "system"},
+                    "appearance": {"theme": "light"},
                     "ai": {
                         "local_model_status": "disabled",
                         "embedding_status": "ready",
@@ -2646,7 +2665,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(snapshot.source, "file")
-            self.assertEqual(snapshot.appearance.theme, "system")
+            self.assertEqual(snapshot.appearance.theme, "light")
             self.assertEqual(snapshot.ai.local_model_status, "disabled")
             self.assertEqual(snapshot.ai.embedding_status, "ready")
             self.assertEqual(snapshot.ai.provider_api, "openai-completions")
@@ -2657,7 +2676,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 json.loads((root / ".noteapp" / "settings.json").read_text(encoding="utf-8")),
                 {
                     "schema_version": "v1",
-                    "appearance": {"theme": "system"},
+                    "appearance": {"theme": "light"},
                     "ai": {
                         "local_model_status": "disabled",
                         "embedding_status": "ready",
@@ -2688,6 +2707,13 @@ class DesktopSyncServiceTests(unittest.TestCase):
                 service.write_local_settings(
                     {
                         "appearance": {"theme": "sepia"},
+                    }
+                )
+
+            with self.assertRaisesRegex(ValueError, "appearance.theme is not supported: system"):
+                service.write_local_settings(
+                    {
+                        "appearance": {"theme": "system"},
                     }
                 )
 

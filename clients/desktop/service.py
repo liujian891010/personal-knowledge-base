@@ -337,7 +337,7 @@ _LOCAL_SETTINGS_AI_KEYS = {
     "model_id",
     "api_key",
 }
-_LOCAL_SETTINGS_THEMES = {"dark", "light", "system"}
+_LOCAL_SETTINGS_THEMES = {"dark", "light"}
 _LOCAL_SETTINGS_MODEL_STATUSES = {
     "not_configured",
     "available",
@@ -4198,7 +4198,7 @@ class DesktopSyncService:
                 user_agent=self.config.user_agent,
             ),
             appearance=DesktopLocalAppearanceSettings(
-                theme=theme if isinstance(theme, str) and theme else "dark",
+                theme=theme if isinstance(theme, str) and theme in _LOCAL_SETTINGS_THEMES else "dark",
             ),
             ai=DesktopLocalAiSettings(
                 local_model_status=(

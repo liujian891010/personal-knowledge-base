@@ -80,7 +80,7 @@ const noticeClasses: Record<SyncShellLevel, string> = {
   danger: 'border-[#e94560]/30 bg-[#e94560]/10 text-[#ffb2b7]',
 };
 
-const themeOptions = ['dark', 'light', 'system'];
+const themeOptions = ['dark', 'light'];
 const localModelStatusOptions = ['not_configured', 'available', 'unavailable', 'disabled', 'error'];
 const embeddingStatusOptions = ['not_configured', 'ready', 'indexing', 'disabled', 'error'];
 const valueLabels: Record<string, string> = {
@@ -108,7 +108,6 @@ const valueLabels: Record<string, string> = {
   failed: '失败',
   dark: '深色',
   light: '浅色',
-  system: '跟随系统',
   not_configured: '未配置',
   available: '可用',
   unavailable: '不可用',
@@ -1120,7 +1119,7 @@ export default function SettingsView({
                 <div className="flex flex-col gap-5">
                   <div className="flex flex-col gap-2">
                     <span className="text-[11px] uppercase tracking-wider text-slate-500">主题</span>
-                    <div className="inline-grid grid-cols-3 rounded border border-[#0f3460] bg-[#121316] p-1 w-full max-w-md">
+                    <div className="inline-grid grid-cols-2 rounded border border-[#0f3460] bg-[#121316] p-1 w-full max-w-md">
                       {themeOptions.map((option) => (
                         <button
                           key={option}
