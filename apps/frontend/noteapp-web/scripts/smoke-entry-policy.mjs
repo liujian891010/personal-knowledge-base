@@ -23,6 +23,7 @@ function extractNavItemsBlock(appSource) {
 const appSource = readProjectFile('src/App.tsx');
 const desktopSource = readProjectFile('src/desktop.ts');
 const explorerSource = readProjectFile('src/views/ExplorerView.tsx');
+const aiChatSource = readProjectFile('src/views/AiChatView.tsx');
 const graphSource = readProjectFile('src/views/GraphView.tsx');
 const trashSource = readProjectFile('src/views/TrashView.tsx');
 const settingsSource = readProjectFile('src/views/SettingsView.tsx');
@@ -175,6 +176,17 @@ assert(
     && runtimeConfigSource.includes('MiniMax-M2.7-highspeed_codingplan')
     && runtimeConfigSource.includes('glm-5_codingplan'),
   'Bundled Settings AI model fallback does not include all company model presets',
+);
+assert(
+  aiChatSource.includes('mx-auto grid w-full max-w-7xl gap-5')
+    && aiChatSource.includes('mx-auto w-full max-w-7xl')
+    && !aiChatSource.includes('mx-auto grid max-w-4xl gap-5'),
+  'AI chat full-screen layout still constrains the conversation too narrowly',
+);
+assert(
+  syncShellBridgeSource.includes('x-noteapp-request-id')
+    && syncShellBridgeSource.includes("'access-control-allow-headers': corsAllowedHeaders"),
+  'Sync bridge CORS does not allow the AI request diagnostics header',
 );
 assert(
   indexCssSource.includes('[class~="text-emerald-200"]')

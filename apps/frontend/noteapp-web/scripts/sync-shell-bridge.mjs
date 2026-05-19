@@ -32,6 +32,7 @@ const host = process.env.NOTEAPP_SYNC_BRIDGE_HOST || '127.0.0.1';
 const port = Number(process.env.NOTEAPP_SYNC_BRIDGE_PORT || 3187);
 const allowRemoteHost = process.env.NOTEAPP_SYNC_BRIDGE_ALLOW_REMOTE === 'true';
 const allowedOrigin = process.env.NOTEAPP_SYNC_BRIDGE_ORIGIN || 'http://127.0.0.1:3000';
+const corsAllowedHeaders = 'content-type,x-noteapp-request-id';
 const snapshotPath = process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT
   ? resolve(process.env.NOTEAPP_SYNC_SNAPSHOT_OUTPUT)
   : defaultSnapshotPath;
@@ -301,7 +302,7 @@ function jsonResponse(request, response, statusCode, payload) {
   response.writeHead(statusCode, {
     'access-control-allow-origin': corsOrigin(request.headers.origin),
     'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-    'access-control-allow-headers': 'content-type',
+    'access-control-allow-headers': corsAllowedHeaders,
     'cache-control': 'no-store',
     'content-type': 'application/json; charset=utf-8',
   });
@@ -1742,6 +1743,8 @@ function errorPayload(error) {
   if (
     message.includes('request body is too large')
     || message.includes('Unexpected end of JSON input')
+    || message.includes('Expected property name')
+    || message.includes('Unexpected token')
     || message.includes('workspace root')
     || message.includes('workspace folder selection was cancelled')
   ) {

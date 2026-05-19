@@ -879,7 +879,7 @@ export default function AiChatView({
               </h1>
             </div>
           ) : (
-            <div className="mx-auto grid max-w-4xl gap-5">
+            <div className="mx-auto grid w-full max-w-7xl gap-5">
               {messages.map((message) => (
                 <div
                   key={message.id}
@@ -978,12 +978,13 @@ export default function AiChatView({
           )}
         </div>
         <div className="border-t border-[#0f3460] bg-[#16213e] p-4">
-          {error && (
-            <div className="mb-3 w-full rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782]">
+          <div className="mx-auto w-full max-w-7xl">
+            {error && (
+              <div className="mb-3 w-full rounded-lg border border-[#ffb782]/30 bg-[#ffb782]/10 p-3 text-[12px] text-[#ffb782]">
               {error}
             </div>
-          )}
-          <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row">
+            )}
+            <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row">
             <textarea
               value={input}
               disabled={isSessionLoading}
@@ -1007,6 +1008,7 @@ export default function AiChatView({
               <Send size={15} />
               {isRunning ? '生成中' : '发送'}
             </button>
+            </div>
           </div>
         </div>
       </main>
