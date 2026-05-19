@@ -114,6 +114,21 @@ body {
   color: #a14800 !important;
 }
 
+:root[data-noteapp-theme='light'] [class~="text-emerald-200"],
+:root[data-noteapp-theme='light'] [class~="text-emerald-300"],
+:root[data-noteapp-theme='light'] [class~="text-emerald-400"] {
+  color: #047857 !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="border-emerald-400/30"],
+:root[data-noteapp-theme='light'] [class~="border-emerald-400/40"] {
+  border-color: rgba(4, 120, 87, 0.35) !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="bg-emerald-400/10"] {
+  background-color: rgba(4, 120, 87, 0.1) !important;
+}
+
 :root[data-noteapp-theme='light'] [class~="text-slate-200"],
 :root[data-noteapp-theme='light'] [class~="text-slate-300"] {
   color: #334155 !important;

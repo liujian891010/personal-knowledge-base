@@ -26,6 +26,7 @@ const explorerSource = readProjectFile('src/views/ExplorerView.tsx');
 const graphSource = readProjectFile('src/views/GraphView.tsx');
 const trashSource = readProjectFile('src/views/TrashView.tsx');
 const settingsSource = readProjectFile('src/views/SettingsView.tsx');
+const indexCssSource = readProjectFile('src/index.css');
 const localSettingsSource = readProjectFile('src/useLocalSettingsSnapshot.ts');
 const syncShellBridgeSource = readProjectFile('scripts/sync-shell-bridge.mjs');
 const runtimeConfigSource = readProjectFile('src/runtimeConfig.ts');
@@ -174,6 +175,13 @@ assert(
     && runtimeConfigSource.includes('MiniMax-M2.7-highspeed_codingplan')
     && runtimeConfigSource.includes('glm-5_codingplan'),
   'Bundled Settings AI model fallback does not include all company model presets',
+);
+assert(
+  indexCssSource.includes('[class~="text-emerald-200"]')
+    && indexCssSource.includes('[class~="text-emerald-300"]')
+    && indexCssSource.includes('[class~="bg-emerald-400/10"]')
+    && indexCssSource.includes('[class~="border-emerald-400/30"]'),
+  'Light theme does not remap emerald success colors for readable contrast',
 );
 assert(
   graphSource.includes('links?.outgoing') && graphSource.includes('links?.backlinks'),
