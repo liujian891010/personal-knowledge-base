@@ -9,11 +9,139 @@
 body {
   background-color: #1a1a2e;
   color: #e3e2e6;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+:root[data-noteapp-theme='light'] body {
+  background-color: #f4f7fb;
+  color: #172033;
+}
+
+:root[data-noteapp-theme='light'] [class~="bg-[#080a12]"],
+:root[data-noteapp-theme='light'] [class~="bg-[#080a12]/96"],
+:root[data-noteapp-theme='light'] [class~="bg-[#0b1020]"],
+:root[data-noteapp-theme='light'] [class~="bg-[#0b1020]/78"],
+:root[data-noteapp-theme='light'] [class~="bg-[#0d0e11]"],
+:root[data-noteapp-theme='light'] [class~="bg-[#101827]"],
+:root[data-noteapp-theme='light'] [class~="bg-[#111827]"],
+:root[data-noteapp-theme='light'] [class~="bg-[#111827]/90"],
+:root[data-noteapp-theme='light'] [class~="bg-[#111827]/95"] {
+  background-color: #f4f7fb !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="bg-[#121316]"],
+:root[data-noteapp-theme='light'] [class~="bg-[#121316]/40"],
+:root[data-noteapp-theme='light'] [class~="bg-[#121316]/50"],
+:root[data-noteapp-theme='light'] [class~="bg-[#121316]/95"],
+:root[data-noteapp-theme='light'] [class~="bg-[#121722]"],
+:root[data-noteapp-theme='light'] [class~="bg-[#151b26]"],
+:root[data-noteapp-theme='light'] [class~="bg-[#1a1c1f]"],
+:root[data-noteapp-theme='light'] [class~="bg-[#1e2023]"] {
+  background-color: #ffffff !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="bg-[#16213e]"],
+:root[data-noteapp-theme='light'] [class~="bg-[#16213e]/80"],
+:root[data-noteapp-theme='light'] [class~="bg-[#1a1a2e]"],
+:root[data-noteapp-theme='light'] [class~="bg-[#1f2b4a]"],
+:root[data-noteapp-theme='light'] [class~="bg-[#1f2b4a]/50"] {
+  background-color: #eaf1fb !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="bg-[#0f3460]"],
+:root[data-noteapp-theme='light'] [class~="hover:bg-[#0f3460]"]:hover,
+:root[data-noteapp-theme='light'] [class~="hover:bg-[#15508f]"]:hover {
+  background-color: #2f6fb2 !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="bg-[#0f3460]/20"],
+:root[data-noteapp-theme='light'] [class~="bg-[#0f3460]/30"],
+:root[data-noteapp-theme='light'] [class~="bg-[#0f3460]/35"],
+:root[data-noteapp-theme='light'] [class~="bg-[#0f3460]/40"],
+:root[data-noteapp-theme='light'] [class~="bg-[#0f3460]/50"],
+:root[data-noteapp-theme='light'] [class~="bg-[#0f3460]/60"],
+:root[data-noteapp-theme='light'] [class~="hover:bg-[#1f2b4a]"]:hover {
+  background-color: rgba(47, 111, 178, 0.14) !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="border-[#0f3460]"],
+:root[data-noteapp-theme='light'] [class~="border-[#0f3460]/60"],
+:root[data-noteapp-theme='light'] [class~="border-[#0f3460]/70"],
+:root[data-noteapp-theme='light'] [class~="border-[#263247]"],
+:root[data-noteapp-theme='light'] [class~="border-[#355173]"],
+:root[data-noteapp-theme='light'] [class~="border-[#43474f]"],
+:root[data-noteapp-theme='light'] [class~="border-[#43474f]/30"],
+:root[data-noteapp-theme='light'] [class~="border-[#43474f]/60"] {
+  border-color: #c7d3e4 !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="border-[#2a5ea3]"],
+:root[data-noteapp-theme='light'] [class~="border-[#2a5ea3]/40"],
+:root[data-noteapp-theme='light'] [class~="border-[#2a5ea3]/60"],
+:root[data-noteapp-theme='light'] [class~="border-[#a9c8fc]"],
+:root[data-noteapp-theme='light'] [class~="border-[#a9c8fc]/50"],
+:root[data-noteapp-theme='light'] [class~="border-[#a9c8fc]/60"],
+:root[data-noteapp-theme='light'] [class~="focus:border-[#a9c8fc]"]:focus,
+:root[data-noteapp-theme='light'] [class~="focus:border-[#a9c8fc]/50"]:focus,
+:root[data-noteapp-theme='light'] [class~="focus:border-[#a9c8fc]/60"]:focus,
+:root[data-noteapp-theme='light'] [class~="focus:border-[#a9c8fc]/70"]:focus {
+  border-color: #2f6fb2 !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="text-[#e3e2e6]"],
+:root[data-noteapp-theme='light'] [class~="text-[#f3f4f6]"],
+:root[data-noteapp-theme='light'] [class~="text-[#fff3df]"] {
+  color: #172033 !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="text-[#a9c8fc]"],
+:root[data-noteapp-theme='light'] [class~="text-[#8bc8ff]"],
+:root[data-noteapp-theme='light'] [class~="text-[#c4b5fd]"] {
+  color: #245f9f !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="text-[#e94560]"],
+:root[data-noteapp-theme='light'] [class~="text-[#ffb2b7]"],
+:root[data-noteapp-theme='light'] [class~="text-[#ffb3c0]"],
+:root[data-noteapp-theme='light'] [class~="text-[#ffd1d8]"] {
+  color: #b42343 !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="text-[#ffb782]"],
+:root[data-noteapp-theme='light'] [class~="text-[#ffca9f]"],
+:root[data-noteapp-theme='light'] [class~="text-[#ffd8a8]"],
+:root[data-noteapp-theme='light'] [class~="hover:text-[#ffb782]"]:hover {
+  color: #a14800 !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="text-slate-200"],
+:root[data-noteapp-theme='light'] [class~="text-slate-300"] {
+  color: #334155 !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="text-slate-400"],
+:root[data-noteapp-theme='light'] [class~="text-slate-500"] {
+  color: #64748b !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="placeholder:text-slate-600"]::placeholder {
+  color: #94a3b8 !important;
+}
+
+:root[data-noteapp-theme='light'] [class~="shadow-black/20"],
+:root[data-noteapp-theme='light'] [class~="shadow-black/30"],
+:root[data-noteapp-theme='light'] [class~="shadow-black/40"],
+:root[data-noteapp-theme='light'] [class~="shadow-black/50"] {
+  --tw-shadow-color: rgba(15, 23, 42, 0.12) !important;
 }
 
 .ai-border {
   border-left: 2px solid #e94560;
   background: linear-gradient(90deg, #16213e 0%, rgba(22, 33, 62, 0.5) 100%);
+}
+
+:root[data-noteapp-theme='light'] .ai-border {
+  background: linear-gradient(90deg, #eaf1fb 0%, rgba(234, 241, 251, 0.45) 100%);
 }
 
 /* Custom scrollbar */

@@ -25,11 +25,12 @@ import type { AiContextDraft } from './aiContext';
 import { loginCheckUrl } from './runtimeConfig';
 import { syncBridgeUrl } from './syncBridgeConfig';
 import { exportDesktopDiagnostics, getDesktopApi } from './desktop';
-import { invalidateLocalSettingsCache } from './useLocalSettingsSnapshot';
+import { invalidateLocalSettingsCache, useLocalSettingsController } from './useLocalSettingsSnapshot';
 import { invalidateWorkspaceFilesCache } from './useWorkspaceFiles';
 import { useWorkspaceRegistryController, type RegisteredWorkspace } from './useWorkspaceRegistry';
 
 type AppView = 'explorer' | 'conflicts' | 'trash' | 'ai-chat' | 'ai-wiki' | 'graph' | 'settings' | 'sync';
+type AppTheme = 'dark' | 'light';
 
 const loginSessionStorageKey = 'userInfo';
 
@@ -46,6 +47,10 @@ const navItems: NavItem[] = [
   { id: 'trash', icon: Trash2, label: '回收站' },
   { id: 'settings', icon: Settings, label: '设置' },
 ];
+
+function normalizeAppTheme(theme: string): AppTheme {
+  return theme === 'light' ? 'light' : 'dark';
+}
 
 function readLoginSession(): unknown | null {
   return null;
@@ -550,6 +555,8 @@ export default function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [workspaceReloadVersion, setWorkspaceReloadVersion] = useState(0);
   const [isWorkspaceSwitching, setIsWorkspaceSwitching] = useState(false);
+  const localSettingsController = useLocalSettingsController();
+  const appTheme = normalizeAppTheme(localSettingsController.summary.theme);
   const {
     workspaces,
     activeWorkspace,
@@ -561,6 +568,12 @@ export default function App() {
     selectWorkspaceFolder,
     removeWorkspace,
   } = useWorkspaceRegistryController(Boolean(userInfo) && !isAuthLoading);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.noteappTheme = appTheme;
+    root.style.colorScheme = appTheme;
+  }, [appTheme]);
 
   useEffect(() => {
     let cancelled = false;
@@ -741,6 +754,7 @@ export default function App() {
               {currentView === 'settings' && (
                 <SettingsView
                   initialTab="general"
+                  localSettingsController={localSettingsController}
                   workspaces={workspaces}
                   activeWorkspace={activeWorkspace}
                   isWorkspaceLoading={isWorkspaceLoading}
@@ -755,6 +769,7 @@ export default function App() {
               {currentView === 'sync' && (
                 <SettingsView
                   initialTab="sync"
+                  localSettingsController={localSettingsController}
                   workspaces={workspaces}
                   activeWorkspace={activeWorkspace}
                   isWorkspaceLoading={isWorkspaceLoading}

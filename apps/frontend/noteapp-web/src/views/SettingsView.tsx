@@ -23,7 +23,7 @@ import {
 import { aiModelOptions, type AiModelOption } from '../runtimeConfig';
 import { syncBridgeUrl } from '../syncBridgeConfig';
 import type { SyncShellAction, SyncShellActionEmphasis, SyncShellLevel } from '../syncShell';
-import { useLocalSettingsController } from '../useLocalSettingsSnapshot';
+import type { LocalSettingsController } from '../useLocalSettingsSnapshot';
 import { useSyncShellController } from '../useSyncShellSnapshot';
 import { useWorkspaceDevicesController } from '../useWorkspaceDevices';
 import type { RegisteredWorkspace } from '../useWorkspaceRegistry';
@@ -33,6 +33,7 @@ type SettingsTab = 'general' | 'sync' | 'appearance' | 'ai';
 
 type SettingsViewProps = {
   initialTab?: SettingsTab;
+  localSettingsController: LocalSettingsController;
   workspaces?: RegisteredWorkspace[];
   activeWorkspace?: RegisteredWorkspace | null;
   isWorkspaceLoading?: boolean;
@@ -321,6 +322,7 @@ function deviceLifecycleInfo(device: WorkspaceVaultDeviceRecord): {
 
 export default function SettingsView({
   initialTab = 'sync',
+  localSettingsController,
   workspaces = [],
   activeWorkspace = null,
   isWorkspaceLoading = false,
@@ -363,7 +365,7 @@ export default function SettingsView({
     lockCrypto,
     exportCryptoRecoveryPackage,
     importCryptoRecoveryPackage,
-  } = useLocalSettingsController();
+  } = localSettingsController;
   const {
     deviceList,
     devices: workspaceDevices,
@@ -435,11 +437,11 @@ export default function SettingsView({
     void loadDevices().catch(() => undefined);
   }, [activeTab, activeWorkspaceId, clearDevices, loadDevices]);
 
-  const saveLocalSettings = async () => {
+  const saveLocalSettings = async (nextTheme = themeDraft) => {
     await saveSettings({
       schema_version: 'v1',
       appearance: {
-        theme: themeDraft,
+        theme: nextTheme,
       },
       ai: {
         local_model_status: localModelStatusDraft,
@@ -450,6 +452,12 @@ export default function SettingsView({
         ...(confirmedAiKeyDraft ? { api_key: confirmedAiKeyDraft } : {}),
       },
     });
+  };
+  const selectTheme = (option: string) => {
+    setThemeDraft(option);
+    if (option !== settingsSummary.theme && !isSettingsSaving && !isSettingsRefreshing) {
+      void saveLocalSettings(option);
+    }
   };
   const hasSettingsDraftChanges = (
     themeDraft !== settingsSummary.theme
@@ -1108,7 +1116,7 @@ export default function SettingsView({
                     </button>
                     <button
                       disabled={isSettingsSaving || isSettingsRefreshing || !hasSettingsDraftChanges}
-                      onClick={saveLocalSettings}
+                      onClick={() => void saveLocalSettings()}
                       title="保存设置"
                       className="w-8 h-8 inline-flex items-center justify-center rounded bg-[#0f3460]/30 border border-[#0f3460] text-[#a9c8fc] hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
@@ -1124,7 +1132,7 @@ export default function SettingsView({
                         <button
                           key={option}
                           disabled={isSettingsSaving || isSettingsRefreshing}
-                          onClick={() => setThemeDraft(option)}
+                          onClick={() => selectTheme(option)}
                           className={`px-3 py-2 rounded text-[13px] font-medium transition-colors disabled:opacity-50 ${
                             themeDraft === option
                               ? 'bg-[#0f3460]/50 text-white'
