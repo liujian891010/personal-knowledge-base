@@ -1368,6 +1368,15 @@ function workspaceMoveFileIdFromPath(pathname) {
 
 function errorPayload(error) {
   const message = error instanceof Error ? error.message : String(error);
+  if (isSyncBackendUnavailableMessage(message)) {
+    return {
+      statusCode: 503,
+      payload: {
+        code: 'sync_backend_unavailable',
+        message: 'Sync backend is unavailable. Start the sync server or update NOTEAPP_SYNC_BASE_URL.',
+      },
+    };
+  }
   if (error && typeof error === 'object' && Number.isFinite(Number(error.statusCode))) {
     return {
       statusCode: Number(error.statusCode),
@@ -1416,6 +1425,18 @@ function errorPayload(error) {
       message,
     },
   };
+}
+
+function isSyncBackendUnavailableMessage(message) {
+  return [
+    'ConnectionRefusedError',
+    'ECONNREFUSED',
+    'WinError 10061',
+    'actively refused',
+    'No connection could be made',
+    'Failed to establish a new connection',
+    'urlopen error',
+  ].some((marker) => message.includes(marker));
 }
 
 if (args.has('--help') || args.has('-h')) {
