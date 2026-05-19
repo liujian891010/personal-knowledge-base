@@ -406,6 +406,9 @@ function fileVisualKind(path: string, mimeType?: string | null, fileType?: strin
   }
   const normalizedMimeType = (mimeType ?? inferMimeTypeFromPath(path) ?? '').toLowerCase();
   const extension = fileExtension(path);
+  if (normalizedMimeType === 'text/markdown' || extension === '.md' || extension === '.markdown') {
+    return 'markdown';
+  }
   if (normalizedMimeType.startsWith('image/')) {
     return 'image';
   }

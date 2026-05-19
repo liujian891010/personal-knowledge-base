@@ -107,6 +107,10 @@ assert(
   'Explorer file tree does not render attachment entries',
 );
 assert(
+  explorerSource.includes("normalizedMimeType === 'text/markdown' || extension === '.md' || extension === '.markdown'"),
+  'Explorer does not render Markdown icons for .md attachments',
+);
+assert(
   explorerSource.includes('/api/workspace/files/${encodeURIComponent(fileId)}/blob'),
   'Explorer does not load attachment blob previews from the bridge',
 );
