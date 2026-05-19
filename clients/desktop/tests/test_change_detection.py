@@ -100,6 +100,20 @@ class DesktopChangeDetectionTests(unittest.TestCase):
             self.assertEqual(result.modified_file_ids, [])
             self.assertEqual(result.missing_file_ids, [])
 
+    def test_detect_local_workspace_changes_ignores_office_lock_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Attachments").mkdir(parents=True, exist_ok=True)
+            (root / "Attachments" / "~$report.docx").write_bytes(b"lock")
+            (root / "Attachments" / ".~lock.report.docx#").write_bytes(b"lock")
+
+            result = detect_local_workspace_changes(
+                root,
+                FileMapDocument(vault_id="vault-001", updated_at=1770000050125),
+            )
+
+            self.assertEqual(result.change_count, 0)
+
     def test_detect_local_workspace_changes_respects_ai_sync_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

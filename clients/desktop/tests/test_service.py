@@ -662,6 +662,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             pdf_path = root / "Docs" / "manual.pdf"
             pdf_path.parent.mkdir(parents=True)
             pdf_path.write_bytes(b"%PDF-1.7\n")
+            (root / "Docs" / "~$manual.docx").write_bytes(b"office lock")
             (root / ".noteapp" / "ignored.pdf").write_bytes(b"ignored")
             (root / ".ai" / "raw").mkdir(parents=True, exist_ok=True)
             (root / ".ai" / "raw" / "capture.txt").write_text("raw", encoding="utf-8")
@@ -678,6 +679,40 @@ class DesktopSyncServiceTests(unittest.TestCase):
             meta_by_path = {record.path: record.meta for record in document.files}
             self.assertEqual(meta_by_path["Assets/photo.png"]["mime_type"], "image/png")
             self.assertEqual(meta_by_path["Docs/manual.pdf"]["mime_type"], "application/pdf")
+
+    def test_import_existing_workspace_files_prunes_local_office_lock_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(root)
+            lock_path = root / "Attachments" / "~$report.docx"
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path.write_bytes(b"office lock")
+            document = load_filemap(service.workspace.paths.filemap_path)
+            records = list(document.files)
+            records.append(
+                FileRecord(
+                    file_id="file-lock",
+                    path="Attachments/~$report.docx",
+                    type="attachment",
+                    status="active",
+                    updated_at=1770000030200,
+                    meta={
+                        "size": len(b"office lock"),
+                        "mtime": 1770000030200,
+                        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    },
+                )
+            )
+            write_filemap_atomic(
+                service.workspace.paths.filemap_path,
+                document.replace_files(records, updated_at=1770000030200),
+            )
+
+            snapshot = service.import_existing_workspace_files_if_empty()
+
+            self.assertEqual([item.path for item in snapshot.files], ["Notes/Live.md"])
+            repaired = load_filemap(service.workspace.paths.filemap_path)
+            self.assertEqual([record.path for record in repaired.files], ["Notes/Live.md"])
 
     def test_import_existing_workspace_files_if_empty_appends_untracked_files_to_existing_filemap(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

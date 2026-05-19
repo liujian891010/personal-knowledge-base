@@ -118,6 +118,7 @@ from .workspace import (
     DesktopWorkspaceSnapshot,
     build_desktop_vault_workspace,
 )
+from .workspace_filters import is_volatile_workspace_file_path
 
 
 def _resolve_workspace_file_path(vault_root: Path, relative_path: str) -> Path:
@@ -558,6 +559,8 @@ def _is_existing_workspace_import_path(relative_path: str) -> bool:
     normalized = PurePosixPath(relative_path)
     if not normalized.parts:
         return False
+    if is_volatile_workspace_file_path(normalized.as_posix()):
+        return False
     if normalized.parts[:1] == (NOTEAPP_DIRNAME,):
         return False
     if normalized.parts == (VAULTINFO_FILENAME,):
@@ -987,6 +990,17 @@ def _is_local_import_record(record: FileRecord) -> bool:
         and record.last_known_revision is None
         and record.conflict_source_file_id is None
     )
+
+
+def _remove_volatile_local_import_records(document: FileMapDocument) -> tuple[FileMapDocument, bool]:
+    records = [
+        record
+        for record in document.files
+        if not (is_volatile_workspace_file_path(record.path) and _is_local_import_record(record))
+    ]
+    if len(records) == len(document.files):
+        return document, False
+    return document.replace_files(records, updated_at=document.updated_at), True
 
 
 def _should_replace_local_import_filemap(document: FileMapDocument, import_paths: list[str]) -> bool:
@@ -1974,6 +1988,10 @@ class DesktopSyncService:
 
     def import_existing_workspace_files_if_empty(self) -> DesktopWorkspaceFilesSnapshot:
         snapshot = self.load_snapshot()
+        sanitized_document, removed_volatile_records = _remove_volatile_local_import_records(snapshot.document)
+        if removed_volatile_records:
+            write_filemap_atomic(self.workspace.paths.filemap_path, sanitized_document)
+            snapshot = self.load_snapshot()
         importable_files = sorted(
             _iter_existing_workspace_import_files(self.workspace.vault_root),
             key=lambda item: item[0],
@@ -2059,6 +2077,8 @@ class DesktopSyncService:
         snapshot = self.load_snapshot()
         files: list[DesktopWorkspaceFileEntry] = []
         for record in snapshot.document.sorted_files():
+            if is_volatile_workspace_file_path(record.path) and _is_local_import_record(record):
+                continue
             disk_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
             exists_on_disk = disk_path.exists() and disk_path.is_file()
             size_bytes = disk_path.stat().st_size if exists_on_disk else None

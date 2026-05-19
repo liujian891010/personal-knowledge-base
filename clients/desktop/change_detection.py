@@ -12,6 +12,7 @@ from vault_core.constants import NOTEAPP_DIRNAME, VAULTINFO_FILENAME
 from vault_core.operations import add_file, mark_deleted, rename_file
 
 from .crypto import build_placeholder_blob_id
+from .workspace_filters import is_volatile_workspace_file_path
 
 
 def _normalize_relative_path(value: str) -> str:
@@ -54,6 +55,8 @@ def _infer_file_type(relative_path: str) -> str:
 
 def _is_sync_excluded_workspace_path(relative_path: str) -> bool:
     normalized = PurePosixPath(_normalize_relative_path(relative_path))
+    if is_volatile_workspace_file_path(normalized.as_posix()):
+        return True
     if normalized.parts[:2] == (".ai", "raw"):
         return True
     if len(normalized.parts) == 2 and normalized.parts[0] == ".ai" and normalized.parts[1].lower() == "log.md":
@@ -150,7 +153,11 @@ def detect_local_workspace_changes(
     vault_root: Path,
     document: FileMapDocument,
 ) -> DesktopWorkspaceChangeSet:
-    tracked_records = [record for record in document.files if record.status != "deleted"]
+    tracked_records = [
+        record
+        for record in document.files
+        if record.status != "deleted" and not is_volatile_workspace_file_path(record.path)
+    ]
     tracked_paths = {
         _normalize_relative_path(record.path): record
         for record in tracked_records
