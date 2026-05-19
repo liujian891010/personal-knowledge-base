@@ -1,11 +1,11 @@
 {
   "ai": {
     "api_key_configured": false,
-    "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_claude/",
+    "base_url": "https://api.openai.com/v1",
     "embedding_status": "not_configured",
     "local_model_status": "not_configured",
-    "model_id": "MiniMax-M2.7-highspeed_codingplan",
-    "provider_api": "anthropic-messages"
+    "model_id": "gpt-4o-mini",
+    "provider_api": "openai-completions"
   },
   "appearance": {
     "theme": "dark"

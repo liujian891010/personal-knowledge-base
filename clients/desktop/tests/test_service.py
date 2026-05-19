@@ -1677,7 +1677,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                         "local_model_status": "available",
                         "embedding_status": "not_configured",
                         "provider_api": "openai-completions",
-                        "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/",
+                        "base_url": "https://ai-settings.example.test/v1",
                         "model_id": "glm-5_codingplan",
                         "api_key": "settings-key",
                     },
@@ -1703,7 +1703,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(answer.model_status, "openai-completions:glm-5_codingplan")
             self.assertEqual(len(ai_opener.calls), 1)
             _, url, payload, _, authorization = ai_opener.calls[0]
-            self.assertEqual(url, "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/chat/completions")
+            self.assertEqual(url, "https://ai-settings.example.test/v1/chat/completions")
             self.assertEqual(authorization, "Bearer settings-key")
             self.assertEqual(payload["model"], "glm-5_codingplan")
 
@@ -1746,7 +1746,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                         "local_model_status": "available",
                         "embedding_status": "not_configured",
                         "provider_api": "openai-completions",
-                        "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/",
+                        "base_url": "https://ai-settings.example.test/v1",
                         "model_id": "glm-5_codingplan",
                         "api_key": "settings-key",
                     },
@@ -1781,7 +1781,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                         "local_model_status": "available",
                         "embedding_status": "not_configured",
                         "provider_api": "openai-completions",
-                        "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/",
+                        "base_url": "https://ai-settings.example.test/v1",
                         "model_id": "glm-5_codingplan",
                         "api_key": "settings-key",
                     },
@@ -1809,7 +1809,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                         "local_model_status": "available",
                         "embedding_status": "not_configured",
                         "provider_api": "openai-completions",
-                        "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/",
+                        "base_url": "https://ai-settings.example.test/v1",
                         "model_id": "glm-5_codingplan",
                         "api_key": "settings-key",
                     },
@@ -2534,14 +2534,33 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(snapshot.appearance.theme, "dark")
             self.assertEqual(snapshot.ai.local_model_status, "not_configured")
             self.assertEqual(snapshot.ai.embedding_status, "not_configured")
-            self.assertEqual(snapshot.ai.provider_api, "anthropic-messages")
-            self.assertEqual(snapshot.ai.model_id, "MiniMax-M2.7-highspeed_codingplan")
+            self.assertEqual(snapshot.ai.provider_api, "openai-completions")
+            self.assertEqual(snapshot.ai.model_id, "gpt-4o-mini")
             self.assertFalse(snapshot.ai.api_key_configured)
             self.assertIsNone(snapshot.ai.api_key)
             self.assertEqual(snapshot.crypto.schema_version, "crypto-v1")
             self.assertEqual(snapshot.crypto.crypto_scheme, "placeholder-v1")
             self.assertFalse(snapshot.crypto.unlocked)
             self.assertFalse(snapshot.crypto.key_available)
+
+    def test_load_local_settings_snapshot_uses_env_ai_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service, _, _, _, _ = self._seed_workspace(Path(tmpdir))
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "NOTEAPP_LOCAL_SETTINGS_DEFAULT_AI_PROVIDER_API": "google-generative-ai",
+                    "NOTEAPP_LOCAL_SETTINGS_DEFAULT_AI_BASE_URL": "https://ai-default.example.test",
+                    "NOTEAPP_LOCAL_SETTINGS_DEFAULT_AI_MODEL": "gemini-test",
+                },
+                clear=False,
+            ):
+                snapshot = service.load_local_settings_snapshot()
+
+            self.assertEqual(snapshot.ai.provider_api, "google-generative-ai")
+            self.assertEqual(snapshot.ai.base_url, "https://ai-default.example.test")
+            self.assertEqual(snapshot.ai.model_id, "gemini-test")
 
     def test_load_local_settings_snapshot_reads_local_settings_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2567,8 +2586,8 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(snapshot.appearance.theme, "light")
             self.assertEqual(snapshot.ai.local_model_status, "available")
             self.assertEqual(snapshot.ai.embedding_status, "indexing")
-            self.assertEqual(snapshot.ai.provider_api, "anthropic-messages")
-            self.assertEqual(snapshot.ai.model_id, "MiniMax-M2.7-highspeed_codingplan")
+            self.assertEqual(snapshot.ai.provider_api, "openai-completions")
+            self.assertEqual(snapshot.ai.model_id, "gpt-4o-mini")
 
     def test_write_local_settings_normalizes_and_returns_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2582,7 +2601,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                         "local_model_status": "disabled",
                         "embedding_status": "ready",
                         "provider_api": "openai-completions",
-                        "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/",
+                        "base_url": "https://ai-settings.example.test/v1",
                         "model_id": "glm-5_codingplan",
                         "api_key": "local-key",
                     },
@@ -2606,7 +2625,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
                         "local_model_status": "disabled",
                         "embedding_status": "ready",
                         "provider_api": "openai-completions",
-                        "base_url": "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/",
+                        "base_url": "https://ai-settings.example.test/v1",
                         "model_id": "glm-5_codingplan",
                         "api_key": "local-key",
                     },

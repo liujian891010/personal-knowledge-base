@@ -352,9 +352,15 @@ _LOCAL_SETTINGS_AI_PROVIDER_APIS = {
     "anthropic-messages",
     "google-generative-ai",
 }
-_LOCAL_SETTINGS_DEFAULT_AI_PROVIDER_API = "anthropic-messages"
-_LOCAL_SETTINGS_DEFAULT_AI_BASE_URL = "https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_claude/"
-_LOCAL_SETTINGS_DEFAULT_AI_MODEL_ID = "MiniMax-M2.7-highspeed_codingplan"
+_AI_PROVIDER_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+_AI_PROVIDER_DEFAULT_API = "openai-completions"
+_AI_PROVIDER_DEFAULT_TIMEOUT_SECONDS = 30.0
+_LOCAL_SETTINGS_DEFAULT_AI_PROVIDER_API_ENV = "NOTEAPP_LOCAL_SETTINGS_DEFAULT_AI_PROVIDER_API"
+_LOCAL_SETTINGS_DEFAULT_AI_BASE_URL_ENV = "NOTEAPP_LOCAL_SETTINGS_DEFAULT_AI_BASE_URL"
+_LOCAL_SETTINGS_DEFAULT_AI_MODEL_ENV = "NOTEAPP_LOCAL_SETTINGS_DEFAULT_AI_MODEL"
+_LOCAL_SETTINGS_FALLBACK_AI_PROVIDER_API = _AI_PROVIDER_DEFAULT_API
+_LOCAL_SETTINGS_FALLBACK_AI_BASE_URL = _AI_PROVIDER_DEFAULT_BASE_URL
+_LOCAL_SETTINGS_FALLBACK_AI_MODEL_ID = "gpt-4o-mini"
 _WORKSPACE_FILE_CONTENT_MAX_BYTES = 1_000_000
 _WORKSPACE_FILE_BLOB_MAX_BYTES = 10_000_000
 _AI_CONTEXT_DEFAULT_MAX_FILES = 20
@@ -369,9 +375,26 @@ _MARKDOWN_FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---", re.DOTALL)
 _AI_CONTEXT_HEADING_PATTERN = re.compile(r"^\s{0,3}#{1,6}\s+\S", re.MULTILINE)
 _AI_CONTEXT_ASCII_TERM_PATTERN = re.compile(r"[a-z0-9_]{2,}")
 _AI_CONTEXT_CJK_TERM_PATTERN = re.compile(r"[\u4e00-\u9fff]{2,}")
-_AI_PROVIDER_DEFAULT_BASE_URL = "https://api.openai.com/v1"
-_AI_PROVIDER_DEFAULT_API = "openai-completions"
-_AI_PROVIDER_DEFAULT_TIMEOUT_SECONDS = 30.0
+
+
+def _local_settings_default_ai_provider_api(environ: Optional[Mapping[str, str]] = None) -> str:
+    env = os.environ if environ is None else environ
+    provider_api = env.get(_LOCAL_SETTINGS_DEFAULT_AI_PROVIDER_API_ENV, "").strip()
+    if provider_api in _LOCAL_SETTINGS_AI_PROVIDER_APIS:
+        return provider_api
+    return _LOCAL_SETTINGS_FALLBACK_AI_PROVIDER_API
+
+
+def _local_settings_default_ai_base_url(environ: Optional[Mapping[str, str]] = None) -> str:
+    env = os.environ if environ is None else environ
+    base_url = env.get(_LOCAL_SETTINGS_DEFAULT_AI_BASE_URL_ENV, "").strip().rstrip("/")
+    return base_url or _LOCAL_SETTINGS_FALLBACK_AI_BASE_URL
+
+
+def _local_settings_default_ai_model_id(environ: Optional[Mapping[str, str]] = None) -> str:
+    env = os.environ if environ is None else environ
+    model_id = env.get(_LOCAL_SETTINGS_DEFAULT_AI_MODEL_ENV, "").strip()
+    return model_id or _LOCAL_SETTINGS_FALLBACK_AI_MODEL_ID
 
 
 def _require_local_settings_object(payload: Mapping[str, Any], key: str) -> dict[str, Any]:
@@ -438,6 +461,9 @@ def _normalize_local_settings_payload(payload: Mapping[str, Any]) -> dict[str, o
     ai_payload = _require_local_settings_object(payload, "ai")
     _require_allowed_keys(appearance_payload, _LOCAL_SETTINGS_APPEARANCE_KEYS, "local settings appearance")
     _require_allowed_keys(ai_payload, _LOCAL_SETTINGS_AI_KEYS, "local settings ai")
+    default_ai_provider_api = _local_settings_default_ai_provider_api()
+    default_ai_base_url = _local_settings_default_ai_base_url()
+    default_ai_model_id = _local_settings_default_ai_model_id()
 
     normalized = {
         "schema_version": _LOCAL_SETTINGS_SCHEMA_VERSION,
@@ -469,19 +495,19 @@ def _normalize_local_settings_payload(payload: Mapping[str, Any]) -> dict[str, o
                 ai_payload,
                 "provider_api",
                 _LOCAL_SETTINGS_AI_PROVIDER_APIS,
-                _LOCAL_SETTINGS_DEFAULT_AI_PROVIDER_API,
+                default_ai_provider_api,
                 "local settings ai.provider_api",
             ),
             "base_url": _normalize_local_settings_string(
                 ai_payload,
                 "base_url",
-                _LOCAL_SETTINGS_DEFAULT_AI_BASE_URL,
+                default_ai_base_url,
                 "local settings ai.base_url",
             ),
             "model_id": _normalize_local_settings_string(
                 ai_payload,
                 "model_id",
-                _LOCAL_SETTINGS_DEFAULT_AI_MODEL_ID,
+                default_ai_model_id,
                 "local settings ai.model_id",
             ),
         },
@@ -777,9 +803,9 @@ def _load_ai_provider_config_from_settings(settings_path: Path) -> Optional[Desk
     if not isinstance(ai_payload, dict):
         return None
     api_key = ai_payload.get("api_key")
-    provider_api = ai_payload.get("provider_api", _LOCAL_SETTINGS_DEFAULT_AI_PROVIDER_API)
-    base_url = ai_payload.get("base_url", _LOCAL_SETTINGS_DEFAULT_AI_BASE_URL)
-    model = ai_payload.get("model_id", _LOCAL_SETTINGS_DEFAULT_AI_MODEL_ID)
+    provider_api = ai_payload.get("provider_api", _local_settings_default_ai_provider_api())
+    base_url = ai_payload.get("base_url", _local_settings_default_ai_base_url())
+    model = ai_payload.get("model_id", _local_settings_default_ai_model_id())
     if not all(isinstance(value, str) and value.strip() for value in (api_key, provider_api, base_url, model)):
         return None
     if provider_api not in _LOCAL_SETTINGS_AI_PROVIDER_APIS:
@@ -4121,6 +4147,9 @@ class DesktopSyncService:
         model_id = ai_payload.get("model_id")
         api_key = ai_payload.get("api_key")
         normalized_api_key = api_key.strip() if isinstance(api_key, str) and api_key.strip() else None
+        default_ai_provider_api = _local_settings_default_ai_provider_api()
+        default_ai_base_url = _local_settings_default_ai_base_url()
+        default_ai_model_id = _local_settings_default_ai_model_id()
 
         return DesktopLocalSettingsSnapshot(
             schema_version="v1",
@@ -4153,10 +4182,10 @@ class DesktopSyncService:
                 provider_api=(
                     provider_api
                     if isinstance(provider_api, str) and provider_api in _LOCAL_SETTINGS_AI_PROVIDER_APIS
-                    else _LOCAL_SETTINGS_DEFAULT_AI_PROVIDER_API
+                    else default_ai_provider_api
                 ),
-                base_url=base_url if isinstance(base_url, str) and base_url else _LOCAL_SETTINGS_DEFAULT_AI_BASE_URL,
-                model_id=model_id if isinstance(model_id, str) and model_id else _LOCAL_SETTINGS_DEFAULT_AI_MODEL_ID,
+                base_url=base_url if isinstance(base_url, str) and base_url else default_ai_base_url,
+                model_id=model_id if isinstance(model_id, str) and model_id else default_ai_model_id,
                 api_key_configured=normalized_api_key is not None,
                 api_key=normalized_api_key,
             ),

@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 
+import { aiModelOptions, type AiModelOption } from '../runtimeConfig';
 import { syncBridgeUrl } from '../syncBridgeConfig';
 import type { SyncShellAction, SyncShellActionEmphasis, SyncShellLevel } from '../syncShell';
 import { useLocalSettingsController } from '../useLocalSettingsSnapshot';
@@ -82,44 +83,6 @@ const noticeClasses: Record<SyncShellLevel, string> = {
 const themeOptions = ['dark', 'light', 'system'];
 const localModelStatusOptions = ['not_configured', 'available', 'unavailable', 'disabled', 'error'];
 const embeddingStatusOptions = ['not_configured', 'ready', 'indexing', 'disabled', 'error'];
-const companyAiModelOptions = [
-  {
-    label: 'MiniMax M2.7 高速 CodingPlan',
-    providerApi: 'anthropic-messages',
-    baseUrl: 'https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_claude/',
-    modelId: 'MiniMax-M2.7-highspeed_codingplan',
-    environment: '生产',
-  },
-  {
-    label: 'GLM-5 CodingPlan',
-    providerApi: 'openai-completions',
-    baseUrl: 'https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/',
-    modelId: 'glm-5_codingplan',
-    environment: '生产',
-  },
-  {
-    label: 'Gemini 3 Flash Preview',
-    providerApi: 'google-generative-ai',
-    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_genai/',
-    modelId: 'gemini-3-flash-preview',
-    environment: '开发',
-  },
-  {
-    label: 'Kimi K2.5',
-    providerApi: 'openai-completions',
-    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_ai/',
-    modelId: 'kimi-k2.5',
-    environment: '开发',
-  },
-  {
-    label: 'Claude Sonnet 4.6',
-    providerApi: 'anthropic-messages',
-    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_claude/',
-    modelId: 'claude-sonnet-4-6',
-    environment: '开发',
-  },
-];
-
 const valueLabels: Record<string, string> = {
   bridge: '本机桥接',
   'live-fixture': '实时快照',
@@ -239,16 +202,16 @@ function localizeMessage(value: string): string {
     .replace(/Failed to fetch/g, '请求失败');
 }
 
-function aiModelOptionKey(option: (typeof companyAiModelOptions)[number]): string {
+function aiModelOptionKey(option: AiModelOption): string {
   return `${option.providerApi}|${option.baseUrl}|${option.modelId}`;
 }
 
 function findAiModelOption(providerApi: string, baseUrl: string, modelId: string) {
-  return companyAiModelOptions.find(
+  return aiModelOptions.find(
     (option) => option.providerApi === providerApi
       && option.baseUrl === baseUrl
       && option.modelId === modelId,
-  ) ?? companyAiModelOptions[0];
+  ) ?? aiModelOptions[0];
 }
 
 function SettingsSelect({
@@ -1371,8 +1334,8 @@ export default function SettingsView({
                       value={aiModelOptionKey(selectedAiModelOption)}
                       disabled={isSettingsSaving || isSettingsRefreshing}
                       onChange={(event) => {
-                        const option = companyAiModelOptions.find((item) => aiModelOptionKey(item) === event.target.value)
-                          ?? companyAiModelOptions[0];
+                        const option = aiModelOptions.find((item) => aiModelOptionKey(item) === event.target.value)
+                          ?? aiModelOptions[0];
                         setAiProviderApiDraft(option.providerApi);
                         setAiBaseUrlDraft(option.baseUrl);
                         setAiModelIdDraft(option.modelId);
@@ -1380,7 +1343,7 @@ export default function SettingsView({
                       }}
                       className="w-full rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[13px] text-[#e3e2e6] disabled:opacity-50 focus:outline-none focus:border-[#e94560]"
                     >
-                      {companyAiModelOptions.map((option) => (
+                      {aiModelOptions.map((option) => (
                         <option key={aiModelOptionKey(option)} value={aiModelOptionKey(option)}>
                           {option.label} / {option.environment}
                         </option>

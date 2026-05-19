@@ -22,6 +22,7 @@ import AiWikiView from './views/AiWikiView';
 import AiChatView from './views/AiChatView';
 import GraphView from './views/GraphView';
 import type { AiContextDraft } from './aiContext';
+import { loginCheckUrl } from './runtimeConfig';
 import { syncBridgeUrl } from './syncBridgeConfig';
 import { exportDesktopDiagnostics, getDesktopApi } from './desktop';
 import { invalidateLocalSettingsCache } from './useLocalSettingsSnapshot';
@@ -31,7 +32,6 @@ import { useWorkspaceRegistryController, type RegisteredWorkspace } from './useW
 type AppView = 'explorer' | 'conflicts' | 'trash' | 'ai-chat' | 'ai-wiki' | 'graph' | 'settings' | 'sync';
 
 const loginSessionStorageKey = 'userInfo';
-const loginCheckUrl = 'https://sg-al-cwork-web.mediportal.com.cn/user/login/appkey';
 
 interface NavItem {
   id: AppView;
@@ -114,12 +114,13 @@ function userNameFromUserInfo(userInfo: unknown): string {
 }
 
 async function verifyAppKey(appKey: string): Promise<unknown> {
-  const params = new URLSearchParams({
-    appKey,
-    appCode: 'noteApp',
-  });
-  const requestUrl = `${loginCheckUrl}?${params.toString()}`;
-  const response = await fetch(requestUrl, {
+  if (!loginCheckUrl) {
+    throw new Error('login check URL is not configured');
+  }
+  const requestUrl = new URL(loginCheckUrl, window.location.origin);
+  requestUrl.searchParams.set('appKey', appKey);
+  requestUrl.searchParams.set('appCode', 'noteApp');
+  const response = await fetch(requestUrl.toString(), {
     cache: 'no-store',
   });
   if (!response.ok) {

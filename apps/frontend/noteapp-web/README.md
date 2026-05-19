@@ -17,7 +17,11 @@ The dev server listens on:
 http://127.0.0.1:3000/
 ```
 
-Set `VITE_NOTEAPP_SYNC_BRIDGE_URL` when the browser should use a bridge address other than `http://127.0.0.1:3187`.
+Runtime configuration:
+
+- `VITE_NOTEAPP_SYNC_BRIDGE_URL`: bridge address when it differs from `http://127.0.0.1:3187`.
+- `VITE_NOTEAPP_LOGIN_CHECK_URL`: appKey verification endpoint. No production/internal login URL is bundled by default.
+- `VITE_NOTEAPP_AI_MODEL_OPTIONS_JSON`: optional JSON array of AI model presets with `label`, `providerApi`, `baseUrl`, `modelId`, and `environment`.
 
 ## Build
 

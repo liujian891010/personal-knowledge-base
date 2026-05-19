@@ -8,6 +8,14 @@ Python dependency for the production `e2ee-v1` crypto provider:
 python -m pip install -r clients\desktop\requirements.txt
 ```
 
+AI provider defaults are intentionally generic. Configure production-specific defaults through environment variables instead of editing source:
+
+```powershell
+$env:NOTEAPP_LOCAL_SETTINGS_DEFAULT_AI_PROVIDER_API='openai-completions'
+$env:NOTEAPP_LOCAL_SETTINGS_DEFAULT_AI_BASE_URL='https://api.openai.com/v1'
+$env:NOTEAPP_LOCAL_SETTINGS_DEFAULT_AI_MODEL='gpt-4o-mini'
+```
+
 Current CLI boundary:
 
 ```powershell
