@@ -231,6 +231,7 @@ def main() -> int:
             cli_env = {
                 **runtime_env,
                 "PYTHONPATH": pythonpath,
+                "NOTEAPP_ALLOW_PLACEHOLDER_CRYPTO": "true",
             }
 
             run_checked(
@@ -315,6 +316,7 @@ def main() -> int:
                 "NOTEAPP_WORKSPACE_ROOT_OUTPUT": str(workspace_root_output_path),
                 "NOTEAPP_WORKSPACE_REGISTRY_OUTPUT": str(workspace_registry_output_path),
                 "NOTEAPP_WORKSPACE_SELECT_ROOT": str(picked_vault_root),
+                "NOTEAPP_ALLOW_PLACEHOLDER_CRYPTO": "true",
             }
             run_checked(
                 ["node", "scripts/write-live-sync-shell.mjs"],

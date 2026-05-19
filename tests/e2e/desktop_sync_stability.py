@@ -133,6 +133,7 @@ def build_service(base_url: str, vault_id: str, vault_root: Path, device_id: str
         config,
         vault_root,
         file_id_builder=lambda path: "file-" + path.replace("/", "-").replace("\\", "-"),
+        allow_placeholder_crypto=True,
     )
 
 
