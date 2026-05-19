@@ -912,14 +912,6 @@ export default function AiChatView({
                             正在流式输出...
                           </div>
                         )}
-                        {message.diagnostic && (
-                          <div className="mt-3 flex flex-wrap gap-2 border-t border-[#0f3460] pt-3 font-mono text-[10px] text-slate-500">
-                            <span>request {message.diagnostic.requestId}</span>
-                            {typeof message.diagnostic.statusCode === 'number' && <span>HTTP {message.diagnostic.statusCode}</span>}
-                            {typeof message.diagnostic.firstTokenMs === 'number' && <span>first-token {message.diagnostic.firstTokenMs}ms</span>}
-                            <span>{message.diagnostic.summary}</span>
-                          </div>
-                        )}
                         {message.result && message.result.sources.length > 0 && (
                           <div className="mt-4 border-t border-[#0f3460] pt-3">
                             <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">

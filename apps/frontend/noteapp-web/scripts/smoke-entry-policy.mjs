@@ -184,6 +184,11 @@ assert(
   'AI chat full-screen layout still constrains the conversation too narrowly',
 );
 assert(
+  !aiChatSource.includes('request {message.diagnostic.requestId}')
+    && !aiChatSource.includes('first-token {message.diagnostic.firstTokenMs}ms'),
+  'AI chat still renders internal request diagnostics below assistant answers',
+);
+assert(
   syncShellBridgeSource.includes('x-noteapp-request-id')
     && syncShellBridgeSource.includes("'access-control-allow-headers': corsAllowedHeaders"),
   'Sync bridge CORS does not allow the AI request diagnostics header',
