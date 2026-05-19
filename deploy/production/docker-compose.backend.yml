@@ -1,0 +1,35 @@
+services:
+  noteapp-server:
+    build:
+      context: ../..
+      dockerfile: deploy/production/backend.Dockerfile
+    image: noteapp-server:${NOTEAPP_IMAGE_TAG:-v1.0.43}
+    env_file:
+      - ${NOTEAPP_BACKEND_ENV_FILE:-backend.env}
+    ports:
+      - "127.0.0.1:${NOTEAPP_SERVER_PORT:-8000}:8000"
+    volumes:
+      - noteapp-server-runtime:/var/lib/noteapp-server/runtime
+      - noteapp-server-db:/var/lib/noteapp-server/db
+      - noteapp-server-backups:/var/backups/noteapp-server
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json, urllib.request; payload=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)); raise SystemExit(0 if payload.get('ok') is True else 1)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  noteapp-server-runtime:
+  noteapp-server-db:
+  noteapp-server-backups:

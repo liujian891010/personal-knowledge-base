@@ -101,6 +101,9 @@ The SQLite repository opens file-backed WAL connections and wraps state writes
 in `BEGIN IMMEDIATE`, so concurrent commit attempts serialize through the
 database write lock and stale commit bases return CAS `409` responses.
 
+Docker Compose production deployment templates and the post-deploy checker are
+tracked in `deploy/production/README.md`.
+
 ## Run Locally
 
 ```powershell

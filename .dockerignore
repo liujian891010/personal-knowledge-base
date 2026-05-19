@@ -1,0 +1,16 @@
+.git/
+.tmp/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+**/.venv/
+**/venv/
+**/node_modules/
+**/dist/
+**/release/
+**/win-unpacked/
+**/.data/
+**/*.log
+**/*.exe
+deploy/production/backend.env

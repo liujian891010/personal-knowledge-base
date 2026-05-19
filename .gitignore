@@ -20,6 +20,7 @@ Thumbs.db
 # Runtime artifacts
 *.log
 .tmp/
+deploy/production/backend.env
 # 忽略 Electron 编译输出
 release/
 win-unpacked/
