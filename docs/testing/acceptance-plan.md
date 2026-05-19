@@ -1,35 +1,42 @@
-# acceptance-plan
+# Acceptance Plan
 
-当前发布验收基线为 v1.0.43。
+The v1.0.43 release gate is fixed by
+`docs/testing/v1.0.43-acceptance-matrix.md` and executed through
+`scripts\ci\v1043-acceptance.ps1`.
 
-## 固定命令
+## Gates
 
-仓库根目录执行：
+| Gate | Command | Required For |
+| --- | --- | --- |
+| Default acceptance | `powershell -ExecutionPolicy Bypass -File scripts\ci\v1043-acceptance.ps1` | Every RC candidate |
+| Signed artifact acceptance | `powershell -ExecutionPolicy Bypass -File scripts\ci\v1043-acceptance.ps1 -ReleaseArtifacts` | Public Windows distribution |
+| Stability acceptance | `powershell -ExecutionPolicy Bypass -File scripts\ci\v1043-acceptance.ps1 -Stability` | Long-running sync confidence |
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\ci\v1043-acceptance.ps1
-```
+## Default Acceptance Coverage
 
-发布签名安装包时追加签名产物 lane：
+The default gate covers diff hygiene, backend unit tests, JSON and SQLite sync
+smokes, production backend smoke, vault-core unit tests, desktop unit tests,
+desktop sync smoke, frontend lint/build, frontend entry policy, frontend
+dist/snapshot smokes, and desktop frontend bundle input.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\ci\v1043-acceptance.ps1 -ReleaseArtifacts
-```
+The signed artifact lane is separate because it requires Windows code signing
+credentials. A sandbox waiver is acceptable only for local validation; public
+distribution requires Authenticode verification to return `Valid`.
 
-运行 1000 次连续同步与长期离线回归：
+## Required Evidence Before Release
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\ci\v1043-acceptance.ps1 -Stability
-```
+1. Default acceptance output.
+2. Signed artifact output or an explicit signing-lane waiver for non-public RC
+   validation.
+3. Stability run output and the recorded stability report.
+4. RC notes for AI provider behavior, documentation review, performance notes,
+   and known waivers.
 
-## 验收矩阵
+## Failure Handling
 
-完整矩阵见 [`v1.0.43-acceptance-matrix.md`](v1.0.43-acceptance-matrix.md)。
-
-`V1043-M5-05` 冻结的规则：
-
-1. 每个 P0 任务至少要有单测或 smoke gate。
-2. 发布前命令必须通过 `scripts\ci\v1043-acceptance.ps1` 固化。
-3. 签名安装包验证走 `-ReleaseArtifacts`，无签名凭据时必须在 RC 报告里写明豁免原因。
-4. `V1043-M5-06` 负责补齐 1000 次连续同步和长期离线回归报告。
-5. `V1043-M5-07` 只消费已通过的矩阵、稳定性报告和签名产物结果，不再临时发明验收口径。
+1. Treat any non-zero command exit as a failed gate.
+2. Fix the failing lane before updating the RC report.
+3. If a lane is environment-dependent, document the exact missing dependency and
+   why the waiver does not apply to public release.
+4. Keep generated artifacts and local fixture output out of Git unless they are
+   intentionally checked-in protocol golden fixtures.
