@@ -640,9 +640,16 @@ function runScript(scriptName, extraEnv = {}) {
   if (!selectedVaultRoot || !selectedVaultRoot.trim()) {
     throw new Error('workspace root is not configured');
   }
+  const env = bridgeEnv(extraEnv);
+  if (!env.NOTEAPP_BEARER_TOKEN && shouldAutoAttachBearerForScript(scriptName)) {
+    const bearerToken = resolveBridgeBearerToken(env);
+    if (bearerToken) {
+      env.NOTEAPP_BEARER_TOKEN = bearerToken;
+    }
+  }
   const result = spawnSync(process.execPath, [`scripts/${scriptName}`], {
     cwd: appRoot,
-    env: bridgeEnv(extraEnv),
+    env,
     encoding: 'utf8',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -663,6 +670,13 @@ function runScript(scriptName, extraEnv = {}) {
         .join('\n'),
     );
   }
+}
+
+function shouldAutoAttachBearerForScript(scriptName) {
+  return [
+    'execute-sync-action.mjs',
+    'write-live-sync-shell.mjs',
+  ].includes(scriptName);
 }
 
 function runDesktopCli(commandArgs) {
