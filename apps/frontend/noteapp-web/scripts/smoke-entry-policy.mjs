@@ -111,8 +111,12 @@ assert(
   'Explorer does not load attachment blob previews from the bridge',
 );
 assert(
-  explorerSource.includes("attachmentPreviewKind(attachmentPreview.mime_type) === 'pdf'"),
+  explorerSource.includes("attachmentPreviewKindValue === 'pdf'"),
   'Explorer does not expose a PDF preview path for attachments',
+);
+assert(
+  explorerSource.includes("attachmentPreviewKindValue === 'docx'") && explorerSource.includes('extractDocxPreview'),
+  'Explorer does not expose a DOCX preview path for attachments',
 );
 assert(
   explorerSource.includes("['note', 'attachment'].includes(selectedFile.type)"),

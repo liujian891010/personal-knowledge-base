@@ -43,6 +43,7 @@ import { useWorkspaceFileVersionsController } from '../useWorkspaceFileVersions'
 import { useWorkspaceSearchController } from '../useWorkspaceSearch';
 import { useSyncShellController } from '../useSyncShellSnapshot';
 import type { AiContextDraft } from '../aiContext';
+import { extractDocxPreview, type DocxPreview } from '../docxPreview';
 import type { SyncShellSummary } from '../syncShell';
 import type { WorkspaceFileEntry } from '../workspaceFiles';
 import type { WorkspaceSearchResult } from '../workspaceSearch';
@@ -241,7 +242,7 @@ type FileVisualKind =
   | 'video'
   | 'unknown';
 
-type AttachmentPreviewKind = 'image' | 'pdf' | 'text' | 'audio' | 'video' | 'other';
+type AttachmentPreviewKind = 'image' | 'pdf' | 'docx' | 'text' | 'audio' | 'video' | 'other';
 
 const codePreviewExtensions = new Set([
   '.bat',
@@ -308,6 +309,9 @@ function inferMimeTypeFromPath(path: string): string | null {
   }
   if (extension === '.pdf') {
     return 'application/pdf';
+  }
+  if (extension === '.docx') {
+    return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   }
   if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'].includes(extension)) {
     if (extension === '.svg') {
@@ -469,8 +473,14 @@ function isTextPreviewMimeType(mimeType: string): boolean {
   );
 }
 
-function attachmentPreviewKind(mimeType: string | null | undefined): AttachmentPreviewKind {
+function attachmentPreviewKind(mimeType: string | null | undefined, path = ''): AttachmentPreviewKind {
   const normalizedMimeType = (mimeType ?? '').toLowerCase();
+  if (
+    normalizedMimeType.includes('wordprocessingml.document')
+    || fileExtension(path) === '.docx'
+  ) {
+    return 'docx';
+  }
   if (normalizedMimeType.startsWith('image/')) {
     return 'image';
   }
@@ -1560,6 +1570,9 @@ export default function ExplorerView({
   const [attachmentPreview, setAttachmentPreview] = useState<WorkspaceFileBlobPreview | null>(null);
   const [attachmentPreviewError, setAttachmentPreviewError] = useState<string | null>(null);
   const [isAttachmentPreviewLoading, setIsAttachmentPreviewLoading] = useState(false);
+  const [docxPreview, setDocxPreview] = useState<DocxPreview | null>(null);
+  const [docxPreviewError, setDocxPreviewError] = useState<string | null>(null);
+  const [isDocxPreviewLoading, setIsDocxPreviewLoading] = useState(false);
   const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(false);
   const [isVersionPanelOpen, setIsVersionPanelOpen] = useState(false);
   const [versionPanelTab, setVersionPanelTab] = useState<VersionPanelTab>('preview');
@@ -1598,12 +1611,18 @@ export default function ExplorerView({
     const mimeType = attachmentPreview.mime_type || inferMimeTypeFromPath(attachmentPreview.path) || 'application/octet-stream';
     return `data:${mimeType};base64,${attachmentPreview.content_base64}`;
   }, [attachmentPreview]);
+  const attachmentPreviewKindValue = useMemo(() => {
+    if (!attachmentPreview) {
+      return null;
+    }
+    return attachmentPreviewKind(attachmentPreview.mime_type, attachmentPreview.path);
+  }, [attachmentPreview]);
   const attachmentPreviewText = useMemo(() => {
-    if (!attachmentPreview || attachmentPreviewKind(attachmentPreview.mime_type) !== 'text') {
+    if (!attachmentPreview || attachmentPreviewKindValue !== 'text') {
       return null;
     }
     return decodeAttachmentPreviewText(attachmentPreview);
-  }, [attachmentPreview]);
+  }, [attachmentPreview, attachmentPreviewKindValue]);
 
   useEffect(() => {
     refreshSyncRef.current = refreshSync;
@@ -1644,6 +1663,40 @@ export default function ExplorerView({
       cancelled = true;
     };
   }, [selectedFile]);
+
+  useEffect(() => {
+    if (!attachmentPreview || attachmentPreviewKindValue !== 'docx') {
+      setDocxPreview(null);
+      setDocxPreviewError(null);
+      setIsDocxPreviewLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setDocxPreview(null);
+    setDocxPreviewError(null);
+    setIsDocxPreviewLoading(true);
+    extractDocxPreview(attachmentPreview.content_base64)
+      .then((preview) => {
+        if (!cancelled) {
+          setDocxPreview(preview);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setDocxPreviewError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsDocxPreviewLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attachmentPreview, attachmentPreviewKindValue]);
 
   useEffect(() => {
     if (!initialContextFileIds) {
@@ -2852,7 +2905,7 @@ export default function ExplorerView({
                         )}
                         {!isAttachmentPreviewLoading && !attachmentPreviewError && attachmentPreview && attachmentPreviewDataUrl && (
                           <>
-                            {attachmentPreviewKind(attachmentPreview.mime_type) === 'image' && (
+                            {attachmentPreviewKindValue === 'image' && (
                               <div className="flex min-h-full items-center justify-center">
                                 <img
                                   src={attachmentPreviewDataUrl}
@@ -2861,14 +2914,67 @@ export default function ExplorerView({
                                 />
                               </div>
                             )}
-                            {attachmentPreviewKind(attachmentPreview.mime_type) === 'pdf' && (
+                            {attachmentPreviewKindValue === 'pdf' && (
                               <iframe
                                 src={attachmentPreviewDataUrl}
                                 title={fileName(selectedFile.path)}
                                 className="h-full min-h-[520px] w-full rounded-lg border border-[#0f3460] bg-white"
                               />
                             )}
-                            {attachmentPreviewKind(attachmentPreview.mime_type) === 'audio' && (
+                            {attachmentPreviewKindValue === 'docx' && (
+                              <div className="mx-auto max-w-4xl rounded-lg border border-[#0f3460] bg-[#121316] p-6 text-[#e3e2e6]">
+                                {(isDocxPreviewLoading || (!docxPreview && !docxPreviewError)) && (
+                                  <div className="py-10 text-center text-[13px] text-slate-400">
+                                    正在解析 Word 文档...
+                                  </div>
+                                )}
+                                {!isDocxPreviewLoading && docxPreviewError && (
+                                  <div className="rounded border border-[#ffb782]/30 bg-[#ffb782]/10 p-4 text-[13px] leading-relaxed text-[#ffb782]">
+                                    {docxPreviewError}
+                                  </div>
+                                )}
+                                {!isDocxPreviewLoading && !docxPreviewError && docxPreview && (
+                                  docxPreview.blocks.length > 0 ? (
+                                    <div className="space-y-4">
+                                      {docxPreview.blocks.map((block, blockIndex) => (
+                                        block.kind === 'paragraph' ? (
+                                          <p
+                                            key={`docx-paragraph-${blockIndex}`}
+                                            className="whitespace-pre-wrap text-[14px] leading-7 text-slate-200"
+                                          >
+                                            {block.text}
+                                          </p>
+                                        ) : (
+                                          <div key={`docx-table-${blockIndex}`} className="overflow-x-auto">
+                                            <table className="min-w-full border-collapse text-left text-[13px] text-slate-200">
+                                              <tbody>
+                                                {block.rows.map((row, rowIndex) => (
+                                                  <tr key={`docx-row-${blockIndex}-${rowIndex}`}>
+                                                    {row.map((cell, cellIndex) => (
+                                                      <td
+                                                        key={`docx-cell-${blockIndex}-${rowIndex}-${cellIndex}`}
+                                                        className="border border-[#0f3460] px-3 py-2 align-top"
+                                                      >
+                                                        {cell}
+                                                      </td>
+                                                    ))}
+                                                  </tr>
+                                                ))}
+                                              </tbody>
+                                            </table>
+                                          </div>
+                                        )
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <div className="py-10 text-center text-[13px] text-slate-400">
+                                      未提取到可预览文本。
+                                    </div>
+                                  )
+                                )}
+                              </div>
+                            )}
+                            {attachmentPreviewKindValue === 'audio' && (
                               <div className="flex min-h-full flex-col items-center justify-center text-center">
                                 <FileKindIcon
                                   kind="audio"
@@ -2879,7 +2985,7 @@ export default function ExplorerView({
                                 <audio controls src={attachmentPreviewDataUrl} className="mt-5 w-full max-w-xl" />
                               </div>
                             )}
-                            {attachmentPreviewKind(attachmentPreview.mime_type) === 'video' && (
+                            {attachmentPreviewKindValue === 'video' && (
                               <div className="flex min-h-full items-center justify-center">
                                 <video
                                   controls
@@ -2888,12 +2994,12 @@ export default function ExplorerView({
                                 />
                               </div>
                             )}
-                            {attachmentPreviewKind(attachmentPreview.mime_type) === 'text' && (
+                            {attachmentPreviewKindValue === 'text' && (
                               <pre className="min-h-full overflow-auto rounded-lg border border-[#0f3460] bg-[#121316] p-5 font-mono text-[12px] leading-relaxed text-slate-300">
                                 {attachmentPreviewText ?? ''}
                               </pre>
                             )}
-                            {attachmentPreviewKind(attachmentPreview.mime_type) === 'other' && (
+                            {attachmentPreviewKindValue === 'other' && (
                               <div className="flex min-h-full flex-col items-center justify-center text-center">
                                 <div className="rounded-2xl border border-[#0f3460] bg-[#121316] p-4">
                                   <FileKindIcon
