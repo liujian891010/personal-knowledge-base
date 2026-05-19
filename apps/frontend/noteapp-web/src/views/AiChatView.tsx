@@ -328,12 +328,10 @@ async function fetchWorkspaceText(fileId: string): Promise<string> {
 export default function AiChatView({
   initialContext,
   onOpenExplorer,
-  onOpenWorkspacePath,
   onClearInitialContext,
 }: {
   initialContext: AiContextDraft | null;
   onOpenExplorer: (fileIds: string[]) => void;
-  onOpenWorkspacePath: (path: string) => void;
   onClearInitialContext: () => void;
 }) {
   const { files } = useWorkspaceFilesController();
@@ -910,34 +908,6 @@ export default function AiChatView({
                           <div className="mt-3 flex items-center gap-2 text-[12px] text-slate-500">
                             <Loader2 size={13} className="animate-spin text-[#a9c8fc]" />
                             正在生成回答...
-                          </div>
-                        )}
-                        {message.result && message.result.sources.length > 0 && (
-                          <div className="mt-4 border-t border-[#0f3460] pt-3">
-                            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                              来源
-                            </div>
-                            <div className="grid gap-2">
-                              {message.result.sources.map((source) => (
-                                <button
-                                  key={`${message.id}-${source.file_id}-${source.path}`}
-                                  type="button"
-                                  onClick={() => onOpenWorkspacePath(source.path)}
-                                  className="flex min-w-0 items-start gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-left hover:border-[#a9c8fc]/60"
-                                  title={source.path}
-                                >
-                                  <FileText size={13} className="mt-0.5 flex-shrink-0 text-[#a9c8fc]" />
-                                  <span className="min-w-0">
-                                    <span className="block truncate text-[12px] font-semibold text-[#e3e2e6]">
-                                      {source.title}
-                                    </span>
-                                    <span className="mt-1 block truncate font-mono text-[10px] text-slate-500">
-                                      {source.path}
-                                    </span>
-                                  </span>
-                                </button>
-                              ))}
-                            </div>
                           </div>
                         )}
                       </>

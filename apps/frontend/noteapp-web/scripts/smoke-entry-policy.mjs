@@ -189,6 +189,12 @@ assert(
   'AI chat still renders internal request diagnostics below assistant answers',
 );
 assert(
+  !aiChatSource.includes('message.result.sources.length')
+    && !aiChatSource.includes('message.result.sources.map')
+    && !aiChatSource.includes('onOpenWorkspacePath'),
+  'AI chat still renders the assistant answer source module',
+);
+assert(
   !aiChatSource.includes('waiting_for_first_token')
     && !aiChatSource.includes('等待首 token')
     && !aiChatSource.includes('正在流式输出')
