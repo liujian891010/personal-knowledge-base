@@ -87,6 +87,8 @@ It forwards to:
   GET  /api/settings/snapshot    npm run settings:snapshot equivalent
   POST /api/settings/snapshot    npm run settings:write equivalent
   GET  /api/settings/live        Read current settings snapshot without running CLI
+  GET  /api/settings/ai-model-options
+                                  Read runtime AI model preset options
   GET  /api/crypto/status        Read local E2EE unlock state
   POST /api/crypto/unlock        Store a local E2EE vault key
   POST /api/crypto/lock          Remove the local E2EE vault key
@@ -175,6 +177,61 @@ function jsonResponse(request, response, statusCode, payload) {
     'content-type': 'application/json; charset=utf-8',
   });
   response.end(JSON.stringify(payload, null, 2));
+}
+
+function isAiModelOption(value) {
+  return value
+    && typeof value === 'object'
+    && typeof value.label === 'string'
+    && typeof value.providerApi === 'string'
+    && typeof value.baseUrl === 'string'
+    && typeof value.modelId === 'string'
+    && typeof value.environment === 'string'
+    && value.label.trim()
+    && value.providerApi.trim()
+    && value.baseUrl.trim()
+    && value.modelId.trim();
+}
+
+function readRuntimeAiModelOptions() {
+  const rawValue = (
+    process.env.NOTEAPP_AI_MODEL_OPTIONS_JSON
+    || process.env.VITE_NOTEAPP_AI_MODEL_OPTIONS_JSON
+    || ''
+  ).trim();
+  if (!rawValue) {
+    return {
+      schema_version: 'v1',
+      source: 'empty',
+      options: [],
+      error: null,
+    };
+  }
+  try {
+    const parsed = JSON.parse(rawValue);
+    const options = Array.isArray(parsed)
+      ? parsed.filter(isAiModelOption).map((option) => ({
+        label: option.label.trim(),
+        providerApi: option.providerApi.trim(),
+        baseUrl: option.baseUrl.trim(),
+        modelId: option.modelId.trim(),
+        environment: option.environment.trim() || 'Custom',
+      }))
+      : [];
+    return {
+      schema_version: 'v1',
+      source: 'environment',
+      options,
+      error: Array.isArray(parsed) ? null : 'NOTEAPP_AI_MODEL_OPTIONS_JSON must be a JSON array',
+    };
+  } catch (error) {
+    return {
+      schema_version: 'v1',
+      source: 'environment',
+      options: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function readRequestBody(request) {
@@ -1717,6 +1774,11 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/api/settings/live') {
       jsonResponse(request, response, 200, readSettingsSnapshot());
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/settings/ai-model-options') {
+      jsonResponse(request, response, 200, readRuntimeAiModelOptions());
       return;
     }
 

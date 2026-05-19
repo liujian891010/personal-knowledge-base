@@ -27,6 +27,7 @@ const graphSource = readProjectFile('src/views/GraphView.tsx');
 const trashSource = readProjectFile('src/views/TrashView.tsx');
 const settingsSource = readProjectFile('src/views/SettingsView.tsx');
 const localSettingsSource = readProjectFile('src/useLocalSettingsSnapshot.ts');
+const syncShellBridgeSource = readProjectFile('scripts/sync-shell-bridge.mjs');
 const navItemsBlock = extractNavItemsBlock(appSource);
 
 const openMainViews = ['explorer', 'ai-chat', 'graph', 'trash', 'settings'];
@@ -145,6 +146,13 @@ assert(
 assert(
   trashSource.includes('pendingTrashAction') && trashSource.includes('confirmPendingTrashAction'),
   'TrashView high-risk delete actions do not require a consequence confirmation',
+);
+assert(
+  settingsSource.includes('/api/settings/ai-model-options')
+    && settingsSource.includes('effectiveAiModelOptions')
+    && syncShellBridgeSource.includes('/api/settings/ai-model-options')
+    && syncShellBridgeSource.includes('NOTEAPP_AI_MODEL_OPTIONS_JSON'),
+  'Settings AI model dropdown is not wired to runtime model presets',
 );
 assert(
   graphSource.includes('links?.outgoing') && graphSource.includes('links?.backlinks'),

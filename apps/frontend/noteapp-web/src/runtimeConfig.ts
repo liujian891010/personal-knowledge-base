@@ -6,7 +6,7 @@ export type AiModelOption = {
   environment: string;
 };
 
-const defaultAiModelOptions: AiModelOption[] = [
+export const defaultAiModelOptions: AiModelOption[] = [
   {
     label: 'OpenAI compatible',
     providerApi: 'openai-completions',
@@ -15,6 +15,10 @@ const defaultAiModelOptions: AiModelOption[] = [
     environment: 'Default',
   },
 ];
+
+export function aiModelOptionKey(option: AiModelOption): string {
+  return `${option.providerApi}|${option.baseUrl}|${option.modelId}`;
+}
 
 function isAiModelOption(value: unknown): value is AiModelOption {
   if (typeof value !== 'object' || value === null) {
@@ -34,22 +38,35 @@ function isAiModelOption(value: unknown): value is AiModelOption {
   );
 }
 
-function readAiModelOptions(value: string | undefined): AiModelOption[] {
-  if (!value?.trim()) {
-    return defaultAiModelOptions;
+export function normalizeAiModelOptions(value: unknown): AiModelOption[] {
+  if (!Array.isArray(value)) {
+    return [];
   }
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (!Array.isArray(parsed)) {
-      return defaultAiModelOptions;
-    }
-    const options = parsed.filter(isAiModelOption).map((option) => ({
+  return value
+    .filter(isAiModelOption)
+    .map((option) => ({
       label: option.label.trim(),
       providerApi: option.providerApi.trim(),
       baseUrl: option.baseUrl.trim(),
       modelId: option.modelId.trim(),
       environment: option.environment.trim() || 'Custom',
     }));
+}
+
+export function mergeAiModelOptions(options: AiModelOption[]): AiModelOption[] {
+  const result = new Map<string, AiModelOption>();
+  for (const option of options) {
+    result.set(aiModelOptionKey(option), option);
+  }
+  return Array.from(result.values());
+}
+
+function readAiModelOptions(value: string | undefined): AiModelOption[] {
+  if (!value?.trim()) {
+    return defaultAiModelOptions;
+  }
+  try {
+    const options = normalizeAiModelOptions(JSON.parse(value));
     return options.length > 0 ? options : defaultAiModelOptions;
   } catch {
     return defaultAiModelOptions;

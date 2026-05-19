@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   Bot,
@@ -20,7 +20,14 @@ import {
   X,
 } from 'lucide-react';
 
-import { aiModelOptions, type AiModelOption } from '../runtimeConfig';
+import {
+  aiModelOptionKey,
+  aiModelOptions as bundledAiModelOptions,
+  defaultAiModelOptions,
+  mergeAiModelOptions,
+  normalizeAiModelOptions,
+  type AiModelOption,
+} from '../runtimeConfig';
 import { syncBridgeUrl } from '../syncBridgeConfig';
 import type { SyncShellAction, SyncShellActionEmphasis, SyncShellLevel } from '../syncShell';
 import type { LocalSettingsController } from '../useLocalSettingsSnapshot';
@@ -202,16 +209,36 @@ function localizeMessage(value: string): string {
     .replace(/Failed to fetch/g, '请求失败');
 }
 
-function aiModelOptionKey(option: AiModelOption): string {
-  return `${option.providerApi}|${option.baseUrl}|${option.modelId}`;
+function currentAiModelOption(providerApi: string, baseUrl: string, modelId: string): AiModelOption | null {
+  if (!providerApi.trim() || !baseUrl.trim() || !modelId.trim()) {
+    return null;
+  }
+  return {
+    label: modelId.trim(),
+    providerApi: providerApi.trim(),
+    baseUrl: baseUrl.trim(),
+    modelId: modelId.trim(),
+    environment: '当前设置',
+  };
 }
 
-function findAiModelOption(providerApi: string, baseUrl: string, modelId: string) {
-  return aiModelOptions.find(
+function findAiModelOption(options: AiModelOption[], providerApi: string, baseUrl: string, modelId: string) {
+  return options.find(
     (option) => option.providerApi === providerApi
       && option.baseUrl === baseUrl
       && option.modelId === modelId,
-  ) ?? aiModelOptions[0];
+  ) ?? options[0] ?? defaultAiModelOptions[0];
+}
+
+function parseRuntimeAiModelOptionsPayload(payload: unknown): AiModelOption[] {
+  if (Array.isArray(payload)) {
+    return normalizeAiModelOptions(payload);
+  }
+  if (typeof payload !== 'object' || payload === null) {
+    return [];
+  }
+  const record = payload as Record<string, unknown>;
+  return normalizeAiModelOptions(record.options);
 }
 
 function SettingsSelect({
@@ -389,6 +416,7 @@ export default function SettingsView({
   const [isAiKeyVisible, setIsAiKeyVisible] = useState(false);
   const [isTestingAiProvider, setIsTestingAiProvider] = useState(false);
   const [aiProviderHealth, setAiProviderHealth] = useState<AiProviderHealthResult | null>(null);
+  const [runtimeAiModelOptions, setRuntimeAiModelOptions] = useState<AiModelOption[]>(bundledAiModelOptions);
   const [vaultKeyDraft, setVaultKeyDraft] = useState('');
   const [isVaultKeyVisible, setIsVaultKeyVisible] = useState(false);
   const [recoveryPhraseDraft, setRecoveryPhraseDraft] = useState('');
@@ -427,6 +455,31 @@ export default function SettingsView({
     settingsSummary.aiKey,
     settingsSummary.cryptoUnlocked,
   ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${syncBridgeUrl}/api/settings/ai-model-options`, { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) {
+          return bundledAiModelOptions;
+        }
+        const options = parseRuntimeAiModelOptionsPayload(await response.json());
+        return options.length > 0 ? options : bundledAiModelOptions;
+      })
+      .then((options) => {
+        if (!cancelled) {
+          setRuntimeAiModelOptions(options);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRuntimeAiModelOptions(bundledAiModelOptions);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (activeTab !== 'sync' || !activeWorkspaceId) {
@@ -468,7 +521,27 @@ export default function SettingsView({
     || aiModelIdDraft !== settingsSummary.aiModelId
     || confirmedAiKeyDraft !== settingsSummary.aiKey
   );
-  const selectedAiModelOption = findAiModelOption(aiProviderApiDraft, aiBaseUrlDraft, aiModelIdDraft);
+  const effectiveAiModelOptions = useMemo(
+    () => mergeAiModelOptions([
+      ...runtimeAiModelOptions,
+      currentAiModelOption(
+        settingsSummary.aiProviderApi,
+        settingsSummary.aiBaseUrl,
+        settingsSummary.aiModelId,
+      ),
+      currentAiModelOption(aiProviderApiDraft, aiBaseUrlDraft, aiModelIdDraft),
+    ].filter((option): option is AiModelOption => option !== null)),
+    [
+      aiBaseUrlDraft,
+      aiModelIdDraft,
+      aiProviderApiDraft,
+      runtimeAiModelOptions,
+      settingsSummary.aiBaseUrl,
+      settingsSummary.aiModelId,
+      settingsSummary.aiProviderApi,
+    ],
+  );
+  const selectedAiModelOption = findAiModelOption(effectiveAiModelOptions, aiProviderApiDraft, aiBaseUrlDraft, aiModelIdDraft);
   const testAiProvider = async () => {
     setIsTestingAiProvider(true);
     try {
@@ -1341,8 +1414,9 @@ export default function SettingsView({
                       value={aiModelOptionKey(selectedAiModelOption)}
                       disabled={isSettingsSaving || isSettingsRefreshing}
                       onChange={(event) => {
-                        const option = aiModelOptions.find((item) => aiModelOptionKey(item) === event.target.value)
-                          ?? aiModelOptions[0];
+                        const option = effectiveAiModelOptions.find((item) => aiModelOptionKey(item) === event.target.value)
+                          ?? effectiveAiModelOptions[0]
+                          ?? defaultAiModelOptions[0];
                         setAiProviderApiDraft(option.providerApi);
                         setAiBaseUrlDraft(option.baseUrl);
                         setAiModelIdDraft(option.modelId);
@@ -1350,7 +1424,7 @@ export default function SettingsView({
                       }}
                       className="w-full rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[13px] text-[#e3e2e6] disabled:opacity-50 focus:outline-none focus:border-[#e94560]"
                     >
-                      {aiModelOptions.map((option) => (
+                      {effectiveAiModelOptions.map((option) => (
                         <option key={aiModelOptionKey(option)} value={aiModelOptionKey(option)}>
                           {option.label} / {option.environment}
                         </option>
