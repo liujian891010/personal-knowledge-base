@@ -597,6 +597,58 @@ def _infer_imported_workspace_file_type(relative_path: str) -> str:
 
 def _infer_imported_workspace_mime_type(relative_path: str) -> Optional[str]:
     suffix = PurePosixPath(relative_path).suffix.lower()
+    explicit_mime_types = {
+        ".7z": "application/x-7z-compressed",
+        ".avi": "video/x-msvideo",
+        ".bmp": "image/bmp",
+        ".csv": "text/csv",
+        ".css": "text/css",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".flac": "audio/flac",
+        ".gif": "image/gif",
+        ".gz": "application/gzip",
+        ".htm": "text/html",
+        ".html": "text/html",
+        ".ini": "text/plain",
+        ".java": "text/x-java-source",
+        ".jpeg": "image/jpeg",
+        ".jpg": "image/jpeg",
+        ".js": "text/javascript",
+        ".jsx": "text/javascript",
+        ".json": "application/json",
+        ".m4a": "audio/mp4",
+        ".mkv": "video/x-matroska",
+        ".mov": "video/quicktime",
+        ".mp3": "audio/mpeg",
+        ".mp4": "video/mp4",
+        ".ogg": "audio/ogg",
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".ppt": "application/vnd.ms-powerpoint",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".py": "text/x-python",
+        ".rar": "application/vnd.rar",
+        ".rs": "text/rust",
+        ".sh": "text/x-shellscript",
+        ".sql": "text/plain",
+        ".svg": "image/svg+xml",
+        ".tar": "application/x-tar",
+        ".toml": "text/plain",
+        ".ts": "text/typescript",
+        ".tsx": "text/typescript",
+        ".wav": "audio/wav",
+        ".webm": "video/webm",
+        ".webp": "image/webp",
+        ".xls": "application/vnd.ms-excel",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xml": "application/xml",
+        ".yaml": "text/yaml",
+        ".yml": "text/yaml",
+        ".zip": "application/zip",
+    }
+    if suffix in explicit_mime_types:
+        return explicit_mime_types[suffix]
     if suffix in {".md", ".markdown"}:
         return "text/markdown"
     if suffix == ".txt":
@@ -1471,6 +1523,7 @@ class DesktopWorkspaceFileEntry:
     content_hash: Optional[str] = None
     last_known_revision: Optional[int] = None
     conflict_source_file_id: Optional[str] = None
+    mime_type: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -2009,6 +2062,12 @@ class DesktopSyncService:
             disk_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
             exists_on_disk = disk_path.exists() and disk_path.is_file()
             size_bytes = disk_path.stat().st_size if exists_on_disk else None
+            meta = record.meta or {}
+            mime_type = (
+                meta.get("mime_type")
+                if isinstance(meta.get("mime_type"), str)
+                else _infer_imported_workspace_mime_type(record.path)
+            )
             files.append(
                 DesktopWorkspaceFileEntry(
                     file_id=record.file_id,
@@ -2021,6 +2080,7 @@ class DesktopSyncService:
                     content_hash=record.content_hash,
                     last_known_revision=record.last_known_revision,
                     conflict_source_file_id=record.conflict_source_file_id,
+                    mime_type=mime_type,
                 )
             )
         return DesktopWorkspaceFilesSnapshot(

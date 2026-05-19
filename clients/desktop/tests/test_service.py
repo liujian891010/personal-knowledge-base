@@ -672,6 +672,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(snapshot.total_count, 2)
             self.assertEqual([item.path for item in snapshot.files], ["Assets/photo.png", "Docs/manual.pdf"])
             self.assertEqual([item.type for item in snapshot.files], ["attachment", "attachment"])
+            self.assertEqual([item.mime_type for item in snapshot.files], ["image/png", "application/pdf"])
             self.assertTrue(all(item.exists_on_disk for item in snapshot.files))
             document = load_filemap(service.workspace.paths.filemap_path)
             meta_by_path = {record.path: record.meta for record in document.files}
@@ -717,6 +718,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(created.operation, "create_attachment")
             self.assertEqual(created.file.path, "Attachments/photo.png")
             self.assertEqual(created.file.type, "attachment")
+            self.assertEqual(created.file.mime_type, "image/png")
             self.assertTrue((root / "Attachments" / "photo.png").exists())
             blob = service.load_workspace_file_blob(created.file.file_id)
             self.assertEqual(blob.mime_type, "image/png")

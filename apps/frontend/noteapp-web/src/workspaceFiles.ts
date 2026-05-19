@@ -11,6 +11,7 @@ export interface WorkspaceFileEntry {
   content_hash?: string | null;
   last_known_revision?: number | null;
   conflict_source_file_id?: string | null;
+  mime_type?: string | null;
 }
 
 export interface WorkspaceFilesSnapshot {
@@ -95,6 +96,7 @@ function parseFileEntry(payload: unknown, context: string): WorkspaceFileEntry {
     content_hash: optionalString(payload, 'content_hash'),
     last_known_revision: optionalNumber(payload, 'last_known_revision'),
     conflict_source_file_id: optionalString(payload, 'conflict_source_file_id'),
+    mime_type: optionalString(payload, 'mime_type'),
   };
 }
 

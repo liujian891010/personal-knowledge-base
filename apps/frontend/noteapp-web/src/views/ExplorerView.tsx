@@ -5,9 +5,18 @@ import {
   ChevronDown,
   ChevronRight,
   Columns2,
-  Code2,
   Edit3,
   Eye,
+  FileArchive,
+  FileAudio,
+  FileCode,
+  FileImage,
+  FileJson,
+  FileQuestionMark,
+  FileSpreadsheet,
+  FileText,
+  FileType,
+  FileVideoCamera,
   Folder,
   FolderOpen,
   GitCompare,
@@ -16,6 +25,7 @@ import {
   PanelRightOpen,
   Paperclip,
   Pin,
+  Presentation,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -216,6 +226,113 @@ function isImageAttachment(path: string): boolean {
   return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(path);
 }
 
+type FileVisualKind =
+  | 'markdown'
+  | 'image'
+  | 'pdf'
+  | 'text'
+  | 'json'
+  | 'code'
+  | 'spreadsheet'
+  | 'presentation'
+  | 'document'
+  | 'archive'
+  | 'audio'
+  | 'video'
+  | 'unknown';
+
+type AttachmentPreviewKind = 'image' | 'pdf' | 'text' | 'audio' | 'video' | 'other';
+
+const codePreviewExtensions = new Set([
+  '.bat',
+  '.c',
+  '.cmd',
+  '.cpp',
+  '.cs',
+  '.css',
+  '.go',
+  '.h',
+  '.html',
+  '.java',
+  '.js',
+  '.jsx',
+  '.kt',
+  '.lua',
+  '.php',
+  '.ps1',
+  '.py',
+  '.rb',
+  '.rs',
+  '.sh',
+  '.sql',
+  '.tsx',
+  '.ts',
+  '.vue',
+  '.xml',
+  '.yaml',
+  '.yml',
+]);
+const textPreviewExtensions = new Set([
+  '.csv',
+  '.ini',
+  '.log',
+  '.markdown',
+  '.md',
+  '.toml',
+  '.txt',
+]);
+const archiveExtensions = new Set(['.7z', '.gz', '.rar', '.tar', '.tgz', '.zip']);
+const spreadsheetExtensions = new Set(['.csv', '.ods', '.xls', '.xlsx']);
+const presentationExtensions = new Set(['.odp', '.ppt', '.pptx']);
+const documentExtensions = new Set(['.doc', '.docx', '.odt', '.rtf']);
+
+function fileExtension(path: string): string {
+  const name = fileName(path).toLowerCase();
+  const dotIndex = name.lastIndexOf('.');
+  return dotIndex >= 0 ? name.slice(dotIndex) : '';
+}
+
+function inferMimeTypeFromPath(path: string): string | null {
+  const extension = fileExtension(path);
+  if (extension === '.md' || extension === '.markdown') {
+    return 'text/markdown';
+  }
+  if (extension === '.txt' || extension === '.log') {
+    return 'text/plain';
+  }
+  if (extension === '.csv') {
+    return 'text/csv';
+  }
+  if (extension === '.json') {
+    return 'application/json';
+  }
+  if (extension === '.pdf') {
+    return 'application/pdf';
+  }
+  if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'].includes(extension)) {
+    if (extension === '.svg') {
+      return 'image/svg+xml';
+    }
+    return `image/${extension === '.jpg' ? 'jpeg' : extension.slice(1)}`;
+  }
+  if (['.mp3', '.wav', '.ogg', '.m4a', '.flac'].includes(extension)) {
+    if (extension === '.m4a') {
+      return 'audio/mp4';
+    }
+    return extension === '.mp3' ? 'audio/mpeg' : `audio/${extension.slice(1)}`;
+  }
+  if (['.mp4', '.webm', '.mov', '.avi', '.mkv'].includes(extension)) {
+    if (extension === '.avi') {
+      return 'video/x-msvideo';
+    }
+    if (extension === '.mkv') {
+      return 'video/x-matroska';
+    }
+    return extension === '.mov' ? 'video/quicktime' : `video/${extension.slice(1)}`;
+  }
+  return null;
+}
+
 function markdownAttachmentLink(notePath: string, attachment: WorkspaceFileEntry): string {
   const label = escapeMarkdownLabel(fileName(attachment.path));
   const relativePath = relativePathBetweenFiles(notePath, attachment.path);
@@ -279,14 +396,97 @@ async function fetchWorkspaceFileBlobPreview(fileId: string): Promise<WorkspaceF
   return payload;
 }
 
-function attachmentPreviewKind(mimeType: string | null | undefined): 'image' | 'pdf' | 'other' {
-  if (mimeType?.startsWith('image/')) {
+function fileVisualKind(path: string, mimeType?: string | null, fileType?: string): FileVisualKind {
+  if (fileType === 'note' || fileType === 'ai_index' || fileType === 'ai_wiki' || fileType === 'ai_agents') {
+    return 'markdown';
+  }
+  const normalizedMimeType = (mimeType ?? inferMimeTypeFromPath(path) ?? '').toLowerCase();
+  const extension = fileExtension(path);
+  if (normalizedMimeType.startsWith('image/')) {
     return 'image';
   }
-  if (mimeType === 'application/pdf') {
+  if (normalizedMimeType === 'application/pdf') {
     return 'pdf';
   }
+  if (normalizedMimeType.startsWith('audio/')) {
+    return 'audio';
+  }
+  if (normalizedMimeType.startsWith('video/')) {
+    return 'video';
+  }
+  if (normalizedMimeType.includes('spreadsheet') || normalizedMimeType.includes('excel') || spreadsheetExtensions.has(extension)) {
+    return 'spreadsheet';
+  }
+  if (normalizedMimeType.includes('presentation') || normalizedMimeType.includes('powerpoint') || presentationExtensions.has(extension)) {
+    return 'presentation';
+  }
+  if (normalizedMimeType.includes('wordprocessing') || normalizedMimeType.includes('msword') || documentExtensions.has(extension)) {
+    return 'document';
+  }
+  if (
+    normalizedMimeType.includes('zip')
+    || normalizedMimeType.includes('rar')
+    || normalizedMimeType.includes('tar')
+    || normalizedMimeType.includes('gzip')
+    || archiveExtensions.has(extension)
+  ) {
+    return 'archive';
+  }
+  if (normalizedMimeType.includes('json') || extension === '.json') {
+    return 'json';
+  }
+  if (codePreviewExtensions.has(extension)) {
+    return 'code';
+  }
+  if (normalizedMimeType.startsWith('text/') || textPreviewExtensions.has(extension)) {
+    return 'text';
+  }
+  return 'unknown';
+}
+
+function attachmentPreviewKind(mimeType: string | null | undefined): AttachmentPreviewKind {
+  const normalizedMimeType = (mimeType ?? '').toLowerCase();
+  if (normalizedMimeType.startsWith('image/')) {
+    return 'image';
+  }
+  if (normalizedMimeType === 'application/pdf') {
+    return 'pdf';
+  }
+  if (normalizedMimeType.startsWith('audio/')) {
+    return 'audio';
+  }
+  if (normalizedMimeType.startsWith('video/')) {
+    return 'video';
+  }
+  if (
+    normalizedMimeType.startsWith('text/')
+    || normalizedMimeType.includes('json')
+    || normalizedMimeType.includes('xml')
+    || normalizedMimeType.includes('javascript')
+    || normalizedMimeType.includes('typescript')
+  ) {
+    return 'text';
+  }
   return 'other';
+}
+
+function decodeAttachmentPreviewText(preview: WorkspaceFileBlobPreview): string {
+  try {
+    const binary = window.atob(preview.content_base64);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    const decoded = new TextDecoder('utf-8').decode(bytes);
+    const mimeType = (preview.mime_type ?? '').toLowerCase();
+    if (mimeType.includes('json') || fileExtension(preview.path) === '.json') {
+      try {
+        return JSON.stringify(JSON.parse(decoded), null, 2);
+      } catch {
+        return decoded;
+      }
+    }
+    return decoded;
+  } catch {
+    return '';
+  }
 }
 
 function versionSourceLabel(source: WorkspaceFileVersionRecord['source']): string {
@@ -425,6 +625,86 @@ function MarkdownFileIcon({ size = 16, tone = 'normal' }: { size?: number; tone?
     >
       <path d="M475.64 95.36H36.36A36.4 36.4 0 0 0 0 131.72v248.56a36.4 36.4 0 0 0 36.36 36.36h439.28A36.4 36.4 0 0 0 512 380.28V131.72a36.4 36.4 0 0 0-36.36-36.36ZM283.91 320h-54.82v-94.55l-40.91 51.14-40.91-51.14V320H92.45V192h54.82l40.91 54.55L229.09 192h54.82Zm68.36 0-68.36-64h45.45v-64h45.46v64h45.45Z" />
     </svg>
+  );
+}
+
+function fileIconClassName(kind: FileVisualKind, tone: 'normal' | 'danger'): string {
+  if (tone === 'danger') {
+    return 'flex-shrink-0 text-[#e94560]';
+  }
+  switch (kind) {
+    case 'image':
+      return 'flex-shrink-0 text-emerald-300';
+    case 'pdf':
+      return 'flex-shrink-0 text-[#e94560]';
+    case 'audio':
+    case 'video':
+      return 'flex-shrink-0 text-[#c4b5fd]';
+    case 'spreadsheet':
+      return 'flex-shrink-0 text-emerald-300';
+    case 'presentation':
+      return 'flex-shrink-0 text-[#ffb782]';
+    case 'archive':
+      return 'flex-shrink-0 text-[#ffd8a8]';
+    case 'code':
+    case 'json':
+      return 'flex-shrink-0 text-[#a9c8fc]';
+    case 'document':
+    case 'text':
+      return 'flex-shrink-0 text-slate-300';
+    default:
+      return 'flex-shrink-0 text-slate-400';
+  }
+}
+
+function FileKindIcon({
+  kind,
+  size = 16,
+  tone = 'normal',
+}: {
+  kind: FileVisualKind;
+  size?: number;
+  tone?: 'normal' | 'danger';
+}) {
+  if (kind === 'markdown') {
+    return <MarkdownFileIcon size={size} tone={tone} />;
+  }
+  const className = fileIconClassName(kind, tone);
+  switch (kind) {
+    case 'image':
+      return <FileImage size={size} className={className} />;
+    case 'pdf':
+      return <FileText size={size} className={className} />;
+    case 'audio':
+      return <FileAudio size={size} className={className} />;
+    case 'video':
+      return <FileVideoCamera size={size} className={className} />;
+    case 'spreadsheet':
+      return <FileSpreadsheet size={size} className={className} />;
+    case 'presentation':
+      return <Presentation size={size} className={className} />;
+    case 'archive':
+      return <FileArchive size={size} className={className} />;
+    case 'code':
+      return <FileCode size={size} className={className} />;
+    case 'json':
+      return <FileJson size={size} className={className} />;
+    case 'document':
+      return <FileType size={size} className={className} />;
+    case 'text':
+      return <FileText size={size} className={className} />;
+    default:
+      return <FileQuestionMark size={size} className={className} />;
+  }
+}
+
+function WorkspaceFileIcon({ file, size = 16 }: { file: WorkspaceFileEntry; size?: number }) {
+  return (
+    <FileKindIcon
+      kind={fileVisualKind(file.path, file.mime_type, file.type)}
+      size={size}
+      tone={file.exists_on_disk ? 'normal' : 'danger'}
+    />
   );
 }
 
@@ -1296,8 +1576,14 @@ export default function ExplorerView({
     if (!attachmentPreview) {
       return null;
     }
-    const mimeType = attachmentPreview.mime_type || 'application/octet-stream';
+    const mimeType = attachmentPreview.mime_type || inferMimeTypeFromPath(attachmentPreview.path) || 'application/octet-stream';
     return `data:${mimeType};base64,${attachmentPreview.content_base64}`;
+  }, [attachmentPreview]);
+  const attachmentPreviewText = useMemo(() => {
+    if (!attachmentPreview || attachmentPreviewKind(attachmentPreview.mime_type) !== 'text') {
+      return null;
+    }
+    return decodeAttachmentPreviewText(attachmentPreview);
   }, [attachmentPreview]);
 
   useEffect(() => {
@@ -2139,9 +2425,7 @@ export default function ExplorerView({
                       className="flex-shrink-0"
                       style={{ width: '0px' }}
                     />
-                    {row.file.type === 'attachment'
-                      ? <Paperclip size={14} className={row.file.exists_on_disk ? 'flex-shrink-0 text-[#ffb782]' : 'flex-shrink-0 text-[#e94560]'} />
-                      : <MarkdownFileIcon size={14} tone={row.file.exists_on_disk ? 'normal' : 'danger'} />}
+                    <WorkspaceFileIcon file={row.file} size={14} />
                     <span className="truncate">{fileName(row.file.path)}</span>
                   </button>
                 </div>
@@ -2155,9 +2439,9 @@ export default function ExplorerView({
         <header className="bg-[#16213e] border-b border-[#0f3460] h-14 flex items-center justify-between px-4 flex-shrink-0 z-10 shadow-sm">
           <div className="flex items-center gap-4 min-w-0">
             <div className="flex items-center gap-2 text-slate-300 min-w-0">
-              {selectedFile?.type === 'attachment'
-                ? <Paperclip size={18} className="flex-shrink-0 text-[#ffb782]" />
-                : <MarkdownFileIcon size={18} />}
+              {selectedFile
+                ? <WorkspaceFileIcon file={selectedFile} size={18} />
+                : <FileQuestionMark size={18} className="flex-shrink-0 text-slate-400" />}
               <span className="text-[13px] font-semibold truncate">
                 {selectedFile ? fileName(selectedFile.path) : '工作区'}
               </span>
@@ -2311,8 +2595,12 @@ export default function ExplorerView({
               <section className="flex min-h-0 flex-1 flex-col border border-[#0f3460] rounded-xl bg-[#16213e] shadow-lg shadow-black/20 overflow-hidden">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#0f3460] px-5 py-3">
                   <div className="flex items-center gap-3 min-w-0">
-                    <Code2 size={16} className="flex-shrink-0 text-[#a9c8fc]" />
-                    <h3 className="text-[15px] font-bold text-[#e3e2e6]">Markdown 编辑器</h3>
+                    {selectedFile
+                      ? <WorkspaceFileIcon file={selectedFile} size={16} />
+                      : <FileQuestionMark size={16} className="flex-shrink-0 text-slate-400" />}
+                    <h3 className="text-[15px] font-bold text-[#e3e2e6]">
+                      {selectedFileIsEditable ? 'Markdown 编辑器' : '文件预览'}
+                    </h3>
                     {isContentDirty && autoSaveStatus !== 'idle' && (
                       <span className="hidden sm:inline font-mono text-[11px] text-slate-400">
                         {autoSaveStatus === 'draft' && (isDraftSaving ? 'Writing draft' : 'Draft written')}
@@ -2561,10 +2849,43 @@ export default function ExplorerView({
                                 className="h-full min-h-[520px] w-full rounded-lg border border-[#0f3460] bg-white"
                               />
                             )}
+                            {attachmentPreviewKind(attachmentPreview.mime_type) === 'audio' && (
+                              <div className="flex min-h-full flex-col items-center justify-center text-center">
+                                <FileKindIcon
+                                  kind="audio"
+                                  size={46}
+                                  tone={selectedFile.exists_on_disk ? 'normal' : 'danger'}
+                                />
+                                <h3 className="mt-4 text-lg font-bold text-[#e3e2e6]">{fileName(selectedFile.path)}</h3>
+                                <audio controls src={attachmentPreviewDataUrl} className="mt-5 w-full max-w-xl" />
+                              </div>
+                            )}
+                            {attachmentPreviewKind(attachmentPreview.mime_type) === 'video' && (
+                              <div className="flex min-h-full items-center justify-center">
+                                <video
+                                  controls
+                                  src={attachmentPreviewDataUrl}
+                                  className="max-h-full max-w-full rounded-lg border border-[#0f3460] bg-black"
+                                />
+                              </div>
+                            )}
+                            {attachmentPreviewKind(attachmentPreview.mime_type) === 'text' && (
+                              <pre className="min-h-full overflow-auto rounded-lg border border-[#0f3460] bg-[#121316] p-5 font-mono text-[12px] leading-relaxed text-slate-300">
+                                {attachmentPreviewText ?? ''}
+                              </pre>
+                            )}
                             {attachmentPreviewKind(attachmentPreview.mime_type) === 'other' && (
                               <div className="flex min-h-full flex-col items-center justify-center text-center">
-                                <div className="rounded-2xl border border-[#ffb782]/30 bg-[#ffb782]/10 p-4 text-[#ffb782]">
-                                  <Paperclip size={34} />
+                                <div className="rounded-2xl border border-[#0f3460] bg-[#121316] p-4">
+                                  <FileKindIcon
+                                    kind={fileVisualKind(
+                                      attachmentPreview.path,
+                                      attachmentPreview.mime_type,
+                                      attachmentPreview.type,
+                                    )}
+                                    size={34}
+                                    tone={selectedFile.exists_on_disk ? 'normal' : 'danger'}
+                                  />
                                 </div>
                                 <h3 className="mt-4 text-lg font-bold text-[#e3e2e6]">此附件暂不支持内嵌预览</h3>
                                 <p className="mt-2 max-w-md text-[13px] leading-relaxed text-slate-400">
