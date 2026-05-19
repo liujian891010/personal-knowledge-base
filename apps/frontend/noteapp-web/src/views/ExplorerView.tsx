@@ -25,6 +25,7 @@ import {
   Trash2,
 } from 'lucide-react';
 
+import { syncBridgeUrl } from '../syncBridgeConfig';
 import { useWorkspaceFilesController } from '../useWorkspaceFiles';
 import { useWorkspaceFileContentController } from '../useWorkspaceFileContent';
 import { useWorkspaceLinksController } from '../useWorkspaceLinks';
@@ -43,10 +44,6 @@ import type {
 import type { WorkspaceNoteLink } from '../workspaceLinks';
 
 const explorerCollapsedFoldersStoragePrefix = 'noteapp.explorer.collapsedFolders.v1';
-const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
-const syncBridgeUrl = (
-  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
-).replace(/\/+$/, '');
 
 function fileName(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);

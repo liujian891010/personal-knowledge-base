@@ -20,17 +20,13 @@ import {
   X,
 } from 'lucide-react';
 
+import { syncBridgeUrl } from '../syncBridgeConfig';
 import type { SyncShellAction, SyncShellActionEmphasis, SyncShellLevel } from '../syncShell';
 import { useLocalSettingsController } from '../useLocalSettingsSnapshot';
 import { useSyncShellController } from '../useSyncShellSnapshot';
 import { useWorkspaceDevicesController } from '../useWorkspaceDevices';
 import type { RegisteredWorkspace } from '../useWorkspaceRegistry';
 import type { WorkspaceVaultDeviceRecord } from '../workspaceDevices';
-
-const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
-const syncBridgeUrl = (
-  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
-).replace(/\/+$/, '');
 
 type SettingsTab = 'general' | 'sync' | 'appearance' | 'ai';
 

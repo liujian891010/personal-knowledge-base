@@ -12,11 +12,7 @@ import {
   type WorkspaceFileVersionRecord,
   type WorkspaceFileVersionRestoreResult,
 } from './workspaceFileVersions';
-
-const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
-const syncBridgeUrl = (
-  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
-).replace(/\/+$/, '');
+import { syncBridgeUrl } from './syncBridgeConfig';
 
 export interface WorkspaceFileVersionsController {
   versions: WorkspaceFileVersionRecord[];

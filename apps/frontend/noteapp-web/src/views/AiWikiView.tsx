@@ -1,14 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Bot, Clock, ExternalLink, FileText, Fingerprint, MessageSquare, RefreshCw, Send, Sparkles } from 'lucide-react';
 
+import { syncBridgeUrl } from '../syncBridgeConfig';
 import { invalidateWorkspaceFilesCache, useWorkspaceFilesController } from '../useWorkspaceFiles';
 import { parseWorkspaceFileContent } from '../workspaceFileContent';
 import type { WorkspaceFileEntry } from '../workspaceFiles';
-
-const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
-const syncBridgeUrl = (
-  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
-).replace(/\/+$/, '');
 
 interface AiWikiArtifact {
   title: string;

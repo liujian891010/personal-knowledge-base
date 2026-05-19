@@ -22,6 +22,7 @@ import AiWikiView from './views/AiWikiView';
 import AiChatView from './views/AiChatView';
 import GraphView from './views/GraphView';
 import type { AiContextDraft } from './aiContext';
+import { syncBridgeUrl } from './syncBridgeConfig';
 import { exportDesktopDiagnostics, getDesktopApi } from './desktop';
 import { invalidateLocalSettingsCache } from './useLocalSettingsSnapshot';
 import { invalidateWorkspaceFilesCache } from './useWorkspaceFiles';
@@ -31,10 +32,6 @@ type AppView = 'explorer' | 'conflicts' | 'trash' | 'ai-chat' | 'ai-wiki' | 'gra
 
 const loginSessionStorageKey = 'userInfo';
 const loginCheckUrl = 'https://sg-al-cwork-web.mediportal.com.cn/user/login/appkey';
-const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
-const syncBridgeUrl = (
-  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
-).replace(/\/+$/, '');
 
 interface NavItem {
   id: AppView;

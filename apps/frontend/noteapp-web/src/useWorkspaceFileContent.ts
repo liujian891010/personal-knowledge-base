@@ -6,11 +6,7 @@ import {
   type WorkspaceFileDraft,
   type WorkspaceFileContent,
 } from './workspaceFileContent';
-
-const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
-const syncBridgeUrl = (
-  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
-).replace(/\/+$/, '');
+import { syncBridgeUrl } from './syncBridgeConfig';
 
 const cachedContentByFileId = new Map<string, WorkspaceFileContent>();
 const cachedDraftByFileId = new Map<string, WorkspaceFileDraft>();

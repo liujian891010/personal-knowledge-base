@@ -14,12 +14,8 @@ import {
   type AiChatSessionSummary,
   type AiChatTaskResult,
 } from '../aiChatSessions';
+import { syncBridgeUrl } from '../syncBridgeConfig';
 import { useWorkspaceFilesController } from '../useWorkspaceFiles';
-
-const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
-const syncBridgeUrl = (
-  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
-).replace(/\/+$/, '');
 
 function renderInlineMarkdown(text: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];

@@ -8,11 +8,8 @@ import {
   type LocalSettingsSummary,
   type LocalSettingsWritePayload,
 } from './settingsSnapshot';
+import { syncBridgeUrl } from './syncBridgeConfig';
 
-const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
-const syncBridgeUrl = (
-  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
-).replace(/\/+$/, '');
 const fallbackSnapshot = parseLocalSettingsSnapshot(bundledExampleSnapshot);
 
 type LocalSettingsSnapshotSource = 'loading' | 'bridge' | 'live-fixture' | 'example';

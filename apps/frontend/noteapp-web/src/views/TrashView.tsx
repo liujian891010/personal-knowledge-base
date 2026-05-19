@@ -1,12 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, FileText, Paperclip, RefreshCw, Search, Trash2 } from 'lucide-react';
 
+import { syncBridgeUrl } from '../syncBridgeConfig';
 import { invalidateWorkspaceFilesCache } from '../useWorkspaceFiles';
-
-const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
-const syncBridgeUrl = (
-  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
-).replace(/\/+$/, '');
 
 interface TrashItem {
   file_id: string;

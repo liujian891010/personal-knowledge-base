@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { selectDesktopWorkspaceFolder } from './desktop';
-
-const defaultSyncBridgeUrl = 'http://127.0.0.1:3187';
-const syncBridgeUrl = (
-  import.meta.env.VITE_NOTEAPP_SYNC_BRIDGE_URL || defaultSyncBridgeUrl
-).replace(/\/+$/, '');
+import { syncBridgeUrl } from './syncBridgeConfig';
 
 export interface RegisteredWorkspace {
   id: string;
