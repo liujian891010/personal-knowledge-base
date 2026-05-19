@@ -22,7 +22,7 @@ Runtime configuration:
 - `VITE_NOTEAPP_SYNC_BRIDGE_URL`: bridge address when it differs from `http://127.0.0.1:3187`.
 - `VITE_NOTEAPP_LOGIN_CHECK_URL`: appKey verification endpoint. No production/internal login URL is bundled by default.
 - `VITE_NOTEAPP_AI_MODEL_OPTIONS_JSON`: optional build-time JSON array of AI model presets with `label`, `providerApi`, `baseUrl`, `modelId`, and `environment`.
-- `NOTEAPP_AI_MODEL_OPTIONS_JSON`: optional runtime JSON array read by the local bridge for packaged desktop builds. It uses the same shape as `VITE_NOTEAPP_AI_MODEL_OPTIONS_JSON`.
+- `NOTEAPP_AI_MODEL_OPTIONS_JSON`: optional runtime JSON array read by the local bridge for packaged desktop builds. It uses the same shape as `VITE_NOTEAPP_AI_MODEL_OPTIONS_JSON`; when omitted, the bridge serves the company model presets from the dev-guide model list.
 
 ## Build
 

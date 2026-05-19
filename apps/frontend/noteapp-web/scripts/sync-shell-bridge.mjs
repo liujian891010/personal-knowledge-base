@@ -60,6 +60,135 @@ let cachedSyncSession = null;
 
 const args = new Set(process.argv.slice(2));
 
+const defaultRuntimeAiModelOptions = [
+  {
+    label: 'GLM-5 CodingPlan',
+    providerApi: 'openai-completions',
+    baseUrl: 'https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_ai/',
+    modelId: 'glm-5_codingplan',
+    environment: '生产',
+  },
+  {
+    label: 'MiniMax M2.7 Highspeed CodingPlan',
+    providerApi: 'anthropic-messages',
+    baseUrl: 'https://sg-al-cwork-web.mediportal.com.cn/filegpt/ai_router/nologin/xg_claude/',
+    modelId: 'MiniMax-M2.7-highspeed_codingplan',
+    environment: '生产',
+  },
+  {
+    label: 'Gemini 3.1 Flash Lite Preview',
+    providerApi: 'google-generative-ai',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_genai/',
+    modelId: 'gemini-3.1-flash-lite-preview',
+    environment: '开发',
+  },
+  {
+    label: 'Gemini 3 Flash Preview',
+    providerApi: 'google-generative-ai',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_genai/',
+    modelId: 'gemini-3-flash-preview',
+    environment: '开发',
+  },
+  {
+    label: 'Doubao Seed 1.8',
+    providerApi: 'openai-completions',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_ai/',
+    modelId: 'doubao-seed-1-8-251215',
+    environment: '开发',
+  },
+  {
+    label: 'Kimi K2.5',
+    providerApi: 'openai-completions',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_ai/',
+    modelId: 'kimi-k2.5',
+    environment: '开发',
+  },
+  {
+    label: 'Doubao Seed 2.0 Pro',
+    providerApi: 'openai-completions',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_ai/',
+    modelId: 'doubao-seed-2-0-pro-260215',
+    environment: '开发',
+  },
+  {
+    label: 'GLM-5',
+    providerApi: 'openai-completions',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_ai/',
+    modelId: 'glm-5',
+    environment: '开发',
+  },
+  {
+    label: 'GLM-5 CodingPlan',
+    providerApi: 'openai-completions',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_ai/',
+    modelId: 'glm-5_codingplan',
+    environment: '开发',
+  },
+  {
+    label: 'GPT 5.4 Mini',
+    providerApi: 'openai-completions',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_ai/',
+    modelId: 'gpt-5.4-mini',
+    environment: '开发',
+  },
+  {
+    label: 'Mimo V2 Pro',
+    providerApi: 'openai-completions',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_ai/',
+    modelId: 'mimo-v2-pro',
+    environment: '开发',
+  },
+  {
+    label: 'Mimo V2 Omni',
+    providerApi: 'openai-completions',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_ai/',
+    modelId: 'mimo-v2-omni',
+    environment: '开发',
+  },
+  {
+    label: 'MiniMax M2.5',
+    providerApi: 'anthropic-messages',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_claude/',
+    modelId: 'MiniMax-M2.5',
+    environment: '开发',
+  },
+  {
+    label: 'MiniMax M2.7 Highspeed',
+    providerApi: 'anthropic-messages',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_claude/',
+    modelId: 'MiniMax-M2.7-highspeed',
+    environment: '开发',
+  },
+  {
+    label: 'MiniMax M2.7 Highspeed CodingPlan',
+    providerApi: 'anthropic-messages',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_claude/',
+    modelId: 'MiniMax-M2.7-highspeed_codingplan',
+    environment: '开发',
+  },
+  {
+    label: 'MiniMax M2.7',
+    providerApi: 'anthropic-messages',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_claude/',
+    modelId: 'MiniMax-M2.7',
+    environment: '开发',
+  },
+  {
+    label: 'Claude Opus 4.6',
+    providerApi: 'anthropic-messages',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_claude/',
+    modelId: 'claude-opus-4-6',
+    environment: '开发',
+  },
+  {
+    label: 'Claude Sonnet 4.6',
+    providerApi: 'anthropic-messages',
+    baseUrl: 'https://cwork-api-test.xgjktech.com.cn/filegpt/ai_router/nologin/xgdev_claude/',
+    modelId: 'claude-sonnet-4-6',
+    environment: '开发',
+  },
+];
+
 function printHelp() {
   console.log(`sync-shell-bridge
 
@@ -202,8 +331,8 @@ function readRuntimeAiModelOptions() {
   if (!rawValue) {
     return {
       schema_version: 'v1',
-      source: 'empty',
-      options: [],
+      source: 'bundled-dev-guide',
+      options: defaultRuntimeAiModelOptions,
       error: null,
     };
   }
@@ -221,14 +350,16 @@ function readRuntimeAiModelOptions() {
     return {
       schema_version: 'v1',
       source: 'environment',
-      options,
-      error: Array.isArray(parsed) ? null : 'NOTEAPP_AI_MODEL_OPTIONS_JSON must be a JSON array',
+      options: options.length > 0 ? options : defaultRuntimeAiModelOptions,
+      error: Array.isArray(parsed) && options.length > 0
+        ? null
+        : 'NOTEAPP_AI_MODEL_OPTIONS_JSON must be a non-empty JSON array of model options',
     };
   } catch (error) {
     return {
       schema_version: 'v1',
       source: 'environment',
-      options: [],
+      options: defaultRuntimeAiModelOptions,
       error: error instanceof Error ? error.message : String(error),
     };
   }

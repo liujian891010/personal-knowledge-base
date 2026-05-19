@@ -155,6 +155,15 @@ assert(
   'Settings AI model dropdown is not wired to runtime model presets',
 );
 assert(
+  syncShellBridgeSource.includes('defaultRuntimeAiModelOptions')
+    && syncShellBridgeSource.includes('gemini-3.1-flash-lite-preview')
+    && syncShellBridgeSource.includes('doubao-seed-2-0-pro-260215')
+    && syncShellBridgeSource.includes('claude-opus-4-6')
+    && syncShellBridgeSource.includes('MiniMax-M2.7-highspeed_codingplan')
+    && syncShellBridgeSource.includes('glm-5_codingplan'),
+  'Settings AI model dropdown does not include the dev-guide company model presets',
+);
+assert(
   graphSource.includes('links?.outgoing') && graphSource.includes('links?.backlinks'),
   'GraphView does not build nodes and edges from outgoing/backlink links data',
 );
