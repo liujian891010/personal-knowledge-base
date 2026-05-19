@@ -189,6 +189,14 @@ assert(
   'AI chat still renders internal request diagnostics below assistant answers',
 );
 assert(
+  !aiChatSource.includes('waiting_for_first_token')
+    && !aiChatSource.includes('等待首 token')
+    && !aiChatSource.includes('正在流式输出')
+    && aiChatSource.includes('AI 正在思考...')
+    && aiChatSource.includes('正在生成回答...'),
+  'AI chat loading state still exposes technical token/streaming wording',
+);
+assert(
   syncShellBridgeSource.includes('x-noteapp-request-id')
     && syncShellBridgeSource.includes("'access-control-allow-headers': corsAllowedHeaders"),
   'Sync bridge CORS does not allow the AI request diagnostics header',

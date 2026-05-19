@@ -651,7 +651,7 @@ export default function AiChatView({
       pending: true,
       diagnostic: {
         requestId,
-        summary: 'waiting_for_first_token',
+        summary: 'ai_response_pending',
       },
     };
     setInput('');
@@ -903,13 +903,13 @@ export default function AiChatView({
                         ) : (
                           <div className="flex items-center gap-2 text-[13px] text-slate-400">
                             <Loader2 size={15} className="animate-spin text-[#a9c8fc]" />
-                            等待首 token...
+                            AI 正在思考...
                           </div>
                         )}
                         {message.pending && message.content && (
                           <div className="mt-3 flex items-center gap-2 text-[12px] text-slate-500">
                             <Loader2 size={13} className="animate-spin text-[#a9c8fc]" />
-                            正在流式输出...
+                            正在生成回答...
                           </div>
                         )}
                         {message.result && message.result.sources.length > 0 && (
