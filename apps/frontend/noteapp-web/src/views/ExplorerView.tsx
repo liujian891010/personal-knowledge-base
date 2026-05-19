@@ -444,6 +444,31 @@ function fileVisualKind(path: string, mimeType?: string | null, fileType?: strin
   return 'unknown';
 }
 
+function isTextPreviewMimeType(mimeType: string): boolean {
+  if (
+    mimeType.includes('openxmlformats')
+    || mimeType.includes('officedocument')
+    || mimeType.includes('msword')
+    || mimeType.includes('ms-excel')
+    || mimeType.includes('ms-powerpoint')
+  ) {
+    return false;
+  }
+  return (
+    mimeType.startsWith('text/')
+    || mimeType === 'application/json'
+    || mimeType.endsWith('+json')
+    || mimeType === 'application/xml'
+    || mimeType === 'text/xml'
+    || mimeType.endsWith('+xml')
+    || mimeType === 'application/javascript'
+    || mimeType === 'application/typescript'
+    || mimeType === 'application/x-yaml'
+    || mimeType === 'application/yaml'
+    || mimeType === 'application/toml'
+  );
+}
+
 function attachmentPreviewKind(mimeType: string | null | undefined): AttachmentPreviewKind {
   const normalizedMimeType = (mimeType ?? '').toLowerCase();
   if (normalizedMimeType.startsWith('image/')) {
@@ -458,13 +483,7 @@ function attachmentPreviewKind(mimeType: string | null | undefined): AttachmentP
   if (normalizedMimeType.startsWith('video/')) {
     return 'video';
   }
-  if (
-    normalizedMimeType.startsWith('text/')
-    || normalizedMimeType.includes('json')
-    || normalizedMimeType.includes('xml')
-    || normalizedMimeType.includes('javascript')
-    || normalizedMimeType.includes('typescript')
-  ) {
+  if (isTextPreviewMimeType(normalizedMimeType)) {
     return 'text';
   }
   return 'other';
