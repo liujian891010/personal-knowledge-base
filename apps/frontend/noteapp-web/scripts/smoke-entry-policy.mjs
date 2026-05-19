@@ -28,6 +28,7 @@ const trashSource = readProjectFile('src/views/TrashView.tsx');
 const settingsSource = readProjectFile('src/views/SettingsView.tsx');
 const localSettingsSource = readProjectFile('src/useLocalSettingsSnapshot.ts');
 const syncShellBridgeSource = readProjectFile('scripts/sync-shell-bridge.mjs');
+const runtimeConfigSource = readProjectFile('src/runtimeConfig.ts');
 const navItemsBlock = extractNavItemsBlock(appSource);
 
 const openMainViews = ['explorer', 'ai-chat', 'graph', 'trash', 'settings'];
@@ -162,6 +163,15 @@ assert(
     && syncShellBridgeSource.includes('MiniMax-M2.7-highspeed_codingplan')
     && syncShellBridgeSource.includes('glm-5_codingplan'),
   'Settings AI model dropdown does not include the dev-guide company model presets',
+);
+assert(
+  runtimeConfigSource.includes('defaultAiModelOptions')
+    && runtimeConfigSource.includes('gemini-3.1-flash-lite-preview')
+    && runtimeConfigSource.includes('doubao-seed-2-0-pro-260215')
+    && runtimeConfigSource.includes('claude-opus-4-6')
+    && runtimeConfigSource.includes('MiniMax-M2.7-highspeed_codingplan')
+    && runtimeConfigSource.includes('glm-5_codingplan'),
+  'Bundled Settings AI model fallback does not include all company model presets',
 );
 assert(
   graphSource.includes('links?.outgoing') && graphSource.includes('links?.backlinks'),
