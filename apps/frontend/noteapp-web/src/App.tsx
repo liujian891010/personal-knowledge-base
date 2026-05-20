@@ -109,6 +109,20 @@ function isLoginResponse(payload: unknown): payload is { resultCode: number; mes
   return typeof payload === 'object' && payload !== null && 'resultCode' in payload;
 }
 
+function loginResponseMessage(payload: unknown): string | null {
+  if (typeof payload !== 'object' || payload === null) {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  for (const key of ['message', 'resultMsg', 'detailMsg']) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
 function userNameFromUserInfo(userInfo: unknown): string {
   if (typeof userInfo !== 'object' || userInfo === null) {
     return '已登录用户';
@@ -133,9 +147,7 @@ async function verifyAppKey(appKey: string): Promise<unknown> {
   }
   const payload: unknown = await response.json();
   if (!isLoginResponse(payload) || payload.resultCode !== 1) {
-    const message = isLoginResponse(payload) && typeof payload.message === 'string'
-      ? payload.message
-      : '登录接口未返回成功状态';
+    const message = loginResponseMessage(payload) ?? '登录接口未返回成功状态';
     throw new Error(message);
   }
   return payload.data ?? null;
