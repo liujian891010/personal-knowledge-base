@@ -1,5 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, FileText, Paperclip, RefreshCw, Search, Trash2 } from 'lucide-react';
+import {
+  AlertCircle,
+  FileArchive,
+  FileAudio,
+  FileCode,
+  FileImage,
+  FileJson,
+  FileQuestionMark,
+  FileSpreadsheet,
+  FileText,
+  FileType,
+  FileVideoCamera,
+  Presentation,
+  RefreshCw,
+  Search,
+  Trash2,
+} from 'lucide-react';
 
 import { syncBridgeUrl } from '../syncBridgeConfig';
 import { invalidateWorkspaceFilesCache } from '../useWorkspaceFiles';
@@ -12,6 +28,7 @@ interface TrashItem {
   trash_path: string;
   exists_in_trash: boolean;
   size_bytes: number | null;
+  mime_type?: string | null;
 }
 
 interface TrashSnapshot {
@@ -48,6 +65,11 @@ function optionalNumber(payload: Record<string, unknown>, key: string): number |
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function optionalString(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  return typeof value === 'string' ? value : null;
+}
+
 function parseTrashSnapshot(payload: unknown): TrashSnapshot {
   if (!isObject(payload) || !Array.isArray(payload.items)) {
     throw new Error('trash snapshot must include items');
@@ -66,6 +88,7 @@ function parseTrashSnapshot(payload: unknown): TrashSnapshot {
         trash_path: requireString(item, 'trash_path'),
         exists_in_trash: Boolean(item.exists_in_trash),
         size_bytes: optionalNumber(item, 'size_bytes'),
+        mime_type: optionalString(item, 'mime_type'),
       };
     }),
   };
@@ -96,6 +119,258 @@ function formatTime(ms: number): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(ms));
+}
+
+type FileVisualKind =
+  | 'markdown'
+  | 'image'
+  | 'pdf'
+  | 'text'
+  | 'json'
+  | 'code'
+  | 'spreadsheet'
+  | 'presentation'
+  | 'document'
+  | 'archive'
+  | 'audio'
+  | 'video'
+  | 'unknown';
+
+const codePreviewExtensions = new Set([
+  '.bat',
+  '.c',
+  '.cmd',
+  '.cpp',
+  '.cs',
+  '.css',
+  '.go',
+  '.h',
+  '.html',
+  '.java',
+  '.js',
+  '.jsx',
+  '.kt',
+  '.lua',
+  '.php',
+  '.ps1',
+  '.py',
+  '.rb',
+  '.rs',
+  '.sh',
+  '.sql',
+  '.tsx',
+  '.ts',
+  '.vue',
+  '.xml',
+  '.yaml',
+  '.yml',
+]);
+const textPreviewExtensions = new Set([
+  '.csv',
+  '.ini',
+  '.log',
+  '.markdown',
+  '.md',
+  '.toml',
+  '.txt',
+]);
+const archiveExtensions = new Set(['.7z', '.gz', '.rar', '.tar', '.tgz', '.zip']);
+const spreadsheetExtensions = new Set(['.csv', '.ods', '.xls', '.xlsx']);
+const presentationExtensions = new Set(['.odp', '.ppt', '.pptx']);
+const documentExtensions = new Set(['.doc', '.docx', '.odt', '.rtf']);
+
+function fileExtension(path: string): string {
+  const name = fileName(path).toLowerCase();
+  const dotIndex = name.lastIndexOf('.');
+  return dotIndex >= 0 ? name.slice(dotIndex) : '';
+}
+
+function inferMimeTypeFromPath(path: string): string | null {
+  const extension = fileExtension(path);
+  if (extension === '.md' || extension === '.markdown') {
+    return 'text/markdown';
+  }
+  if (extension === '.txt' || extension === '.log') {
+    return 'text/plain';
+  }
+  if (extension === '.csv') {
+    return 'text/csv';
+  }
+  if (extension === '.json') {
+    return 'application/json';
+  }
+  if (extension === '.pdf') {
+    return 'application/pdf';
+  }
+  if (extension === '.docx') {
+    return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  }
+  if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'].includes(extension)) {
+    return extension === '.svg' ? 'image/svg+xml' : `image/${extension === '.jpg' ? 'jpeg' : extension.slice(1)}`;
+  }
+  if (['.mp3', '.wav', '.ogg', '.m4a', '.flac'].includes(extension)) {
+    if (extension === '.m4a') {
+      return 'audio/mp4';
+    }
+    return extension === '.mp3' ? 'audio/mpeg' : `audio/${extension.slice(1)}`;
+  }
+  if (['.mp4', '.webm', '.mov', '.avi', '.mkv'].includes(extension)) {
+    if (extension === '.avi') {
+      return 'video/x-msvideo';
+    }
+    if (extension === '.mkv') {
+      return 'video/x-matroska';
+    }
+    return extension === '.mov' ? 'video/quicktime' : `video/${extension.slice(1)}`;
+  }
+  return null;
+}
+
+function fileVisualKind(path: string, mimeType?: string | null, fileType?: string): FileVisualKind {
+  if (fileType === 'note' || fileType === 'ai_index' || fileType === 'ai_wiki' || fileType === 'ai_agents') {
+    return 'markdown';
+  }
+  const normalizedMimeType = (mimeType ?? inferMimeTypeFromPath(path) ?? '').toLowerCase();
+  const extension = fileExtension(path);
+  if (normalizedMimeType === 'text/markdown' || extension === '.md' || extension === '.markdown') {
+    return 'markdown';
+  }
+  if (normalizedMimeType.startsWith('image/')) {
+    return 'image';
+  }
+  if (normalizedMimeType === 'application/pdf') {
+    return 'pdf';
+  }
+  if (normalizedMimeType.startsWith('audio/')) {
+    return 'audio';
+  }
+  if (normalizedMimeType.startsWith('video/')) {
+    return 'video';
+  }
+  if (normalizedMimeType.includes('spreadsheet') || normalizedMimeType.includes('excel') || spreadsheetExtensions.has(extension)) {
+    return 'spreadsheet';
+  }
+  if (normalizedMimeType.includes('presentation') || normalizedMimeType.includes('powerpoint') || presentationExtensions.has(extension)) {
+    return 'presentation';
+  }
+  if (normalizedMimeType.includes('wordprocessing') || normalizedMimeType.includes('msword') || documentExtensions.has(extension)) {
+    return 'document';
+  }
+  if (
+    normalizedMimeType.includes('zip')
+    || normalizedMimeType.includes('rar')
+    || normalizedMimeType.includes('tar')
+    || normalizedMimeType.includes('gzip')
+    || archiveExtensions.has(extension)
+  ) {
+    return 'archive';
+  }
+  if (normalizedMimeType.includes('json') || extension === '.json') {
+    return 'json';
+  }
+  if (codePreviewExtensions.has(extension)) {
+    return 'code';
+  }
+  if (normalizedMimeType.startsWith('text/') || textPreviewExtensions.has(extension)) {
+    return 'text';
+  }
+  return 'unknown';
+}
+
+function MarkdownFileIcon({ size = 16, tone = 'normal' }: { size?: number; tone?: 'normal' | 'danger' }) {
+  const iconClassName = tone === 'danger' ? 'text-[#e94560]' : 'text-[#a9c8fc]';
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 512 512"
+      width={size}
+      height={size}
+      className={`flex-shrink-0 ${iconClassName}`}
+      fill="currentColor"
+    >
+      <path d="M475.64 95.36H36.36A36.4 36.4 0 0 0 0 131.72v248.56a36.4 36.4 0 0 0 36.36 36.36h439.28A36.4 36.4 0 0 0 512 380.28V131.72a36.4 36.4 0 0 0-36.36-36.36ZM283.91 320h-54.82v-94.55l-40.91 51.14-40.91-51.14V320H92.45V192h54.82l40.91 54.55L229.09 192h54.82Zm68.36 0-68.36-64h45.45v-64h45.46v64h45.45Z" />
+    </svg>
+  );
+}
+
+function fileIconClassName(kind: FileVisualKind, tone: 'normal' | 'danger'): string {
+  if (tone === 'danger') {
+    return 'flex-shrink-0 text-[#e94560]';
+  }
+  switch (kind) {
+    case 'image':
+      return 'flex-shrink-0 text-emerald-300';
+    case 'pdf':
+      return 'flex-shrink-0 text-[#e94560]';
+    case 'audio':
+    case 'video':
+      return 'flex-shrink-0 text-[#c4b5fd]';
+    case 'spreadsheet':
+      return 'flex-shrink-0 text-emerald-300';
+    case 'presentation':
+      return 'flex-shrink-0 text-[#ffb782]';
+    case 'archive':
+      return 'flex-shrink-0 text-[#ffd8a8]';
+    case 'code':
+    case 'json':
+      return 'flex-shrink-0 text-[#a9c8fc]';
+    case 'document':
+    case 'text':
+      return 'flex-shrink-0 text-slate-300';
+    default:
+      return 'flex-shrink-0 text-slate-400';
+  }
+}
+
+function FileKindIcon({
+  kind,
+  size = 16,
+  tone = 'normal',
+}: {
+  kind: FileVisualKind;
+  size?: number;
+  tone?: 'normal' | 'danger';
+}) {
+  if (kind === 'markdown') {
+    return <MarkdownFileIcon size={size} tone={tone} />;
+  }
+  const className = fileIconClassName(kind, tone);
+  switch (kind) {
+    case 'image':
+      return <FileImage size={size} className={className} />;
+    case 'pdf':
+      return <FileText size={size} className={className} />;
+    case 'audio':
+      return <FileAudio size={size} className={className} />;
+    case 'video':
+      return <FileVideoCamera size={size} className={className} />;
+    case 'spreadsheet':
+      return <FileSpreadsheet size={size} className={className} />;
+    case 'presentation':
+      return <Presentation size={size} className={className} />;
+    case 'archive':
+      return <FileArchive size={size} className={className} />;
+    case 'code':
+      return <FileCode size={size} className={className} />;
+    case 'json':
+      return <FileJson size={size} className={className} />;
+    case 'document':
+      return <FileType size={size} className={className} />;
+    case 'text':
+      return <FileText size={size} className={className} />;
+    default:
+      return <FileQuestionMark size={size} className={className} />;
+  }
+}
+
+function TrashFileIcon({ item, size = 20 }: { item: TrashItem; size?: number }) {
+  return (
+    <FileKindIcon
+      kind={fileVisualKind(item.path, item.mime_type, item.type)}
+      size={size}
+      tone={item.exists_in_trash ? 'normal' : 'danger'}
+    />
+  );
 }
 
 async function responseError(response: Response): Promise<string> {
@@ -252,9 +527,7 @@ export default function TrashView() {
                   <div key={item.file_id} className="group grid grid-cols-1 items-center gap-4 p-4 transition-colors hover:bg-[#1f2b4a] md:grid-cols-12">
                     <div className="col-span-1 flex items-center gap-3 md:col-span-5">
                       <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-[#0f3460] bg-[#121316]">
-                        {item.type === 'attachment'
-                          ? <Paperclip size={20} className={item.exists_in_trash ? 'text-[#ffb782]' : 'text-[#e94560]'} />
-                          : <FileText size={20} className={item.exists_in_trash ? 'text-slate-400' : 'text-[#e94560]'} />}
+                        <TrashFileIcon item={item} />
                       </div>
                       <div className="min-w-0">
                         <p className="truncate text-[14px] font-medium text-[#e3e2e6]">{fileName(item.path)}</p>

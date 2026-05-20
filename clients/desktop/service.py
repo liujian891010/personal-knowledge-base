@@ -1976,6 +1976,7 @@ class DesktopWorkspaceTrashItem:
     trash_path: Path
     exists_in_trash: bool
     size_bytes: Optional[int]
+    mime_type: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -3903,6 +3904,7 @@ class DesktopSyncService:
                 continue
             trash_path = self._workspace_trash_path_for_record(record)
             exists_in_trash = trash_path.exists() and trash_path.is_file()
+            mime_type = _record_mime_type(record) or _infer_imported_workspace_mime_type(record.path)
             items.append(
                 DesktopWorkspaceTrashItem(
                     file_id=record.file_id,
@@ -3912,6 +3914,7 @@ class DesktopSyncService:
                     trash_path=trash_path,
                     exists_in_trash=exists_in_trash,
                     size_bytes=trash_path.stat().st_size if exists_in_trash else None,
+                    mime_type=mime_type,
                 )
             )
         return DesktopWorkspaceTrashSnapshot(

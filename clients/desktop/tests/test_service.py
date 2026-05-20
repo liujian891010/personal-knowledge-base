@@ -890,6 +890,7 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(trash.total_count, 1)
             self.assertEqual(trash.items[0].type, "attachment")
             self.assertEqual(trash.items[0].path, "Attachments/photo.png")
+            self.assertEqual(trash.items[0].mime_type, "image/png")
 
             restored = service.restore_workspace_trash_item(attachment_file_id, now_ms=1770000034000)
 
