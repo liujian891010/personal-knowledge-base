@@ -106,19 +106,26 @@ function isAttachmentPath(path: string): boolean {
   return path === 'Attachments' || path.startsWith('Attachments/');
 }
 
+function isMarkdownPath(path: string): boolean {
+  return /\.(md|markdown)$/i.test(path);
+}
+
 function isEditableWorkspaceFile(file: WorkspaceFileEntry | null): boolean {
   if (!file) {
     return false;
   }
-  return ['note', 'ai_index', 'ai_wiki', 'ai_agents'].includes(file.type);
+  return (
+    ['note', 'ai_index', 'ai_wiki', 'ai_agents'].includes(file.type)
+    || (file.type === 'attachment' && isMarkdownPath(file.path))
+  );
 }
 
 function isAiContextEligibleFile(file: WorkspaceFileEntry): boolean {
-  return file.type === 'note' && file.status === 'active' && file.exists_on_disk && !isSystemAiPath(file.path);
+  return isEditableWorkspaceFile(file) && file.status === 'active' && file.exists_on_disk && !isSystemAiPath(file.path);
 }
 
 function isVisibleMarkdownFile(file: WorkspaceFileEntry): boolean {
-  return file.type === 'note' && file.status !== 'deleted' && !isSystemAiPath(file.path);
+  return isEditableWorkspaceFile(file) && file.status !== 'deleted' && !isSystemAiPath(file.path);
 }
 
 function isVisibleWorkspaceFile(file: WorkspaceFileEntry): boolean {
@@ -1640,7 +1647,7 @@ export default function ExplorerView({
   }, []);
 
   useEffect(() => {
-    if (!selectedFile || selectedFile.type !== 'attachment' || selectedFile.status !== 'active') {
+    if (!selectedFile || selectedFileIsEditable || selectedFile.type !== 'attachment' || selectedFile.status !== 'active') {
       setAttachmentPreview(null);
       setAttachmentPreviewError(null);
       setIsAttachmentPreviewLoading(false);
@@ -1669,7 +1676,7 @@ export default function ExplorerView({
     return () => {
       cancelled = true;
     };
-  }, [selectedFile]);
+  }, [selectedFile, selectedFileIsEditable]);
 
   useEffect(() => {
     if (!attachmentPreview || attachmentPreviewKindValue !== 'docx') {
@@ -2172,7 +2179,7 @@ export default function ExplorerView({
     try {
       const contentBase64 = await readFileAsBase64(file);
       const created = await createAttachment(file.name, contentBase64);
-      if (selectedFile?.type === 'note' && canEditContent) {
+      if (selectedFile && canEditContent) {
         insertTextIntoDraft(markdownAttachmentLink(selectedFile.path, created));
       } else {
         openWorkspaceFile(created.file_id);
@@ -2773,7 +2780,7 @@ export default function ExplorerView({
                     </button>
                     <button
                       onClick={handleRenameNote}
-                      disabled={!selectedFile || selectedFile.type !== 'note' || selectedFile.status !== 'active'}
+                      disabled={!selectedFile || !selectedFileIsEditable || selectedFile.status !== 'active'}
                       title="重命名文档"
                       className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
                     >
@@ -2782,7 +2789,7 @@ export default function ExplorerView({
                     </button>
                     <button
                       onClick={handleMoveNote}
-                      disabled={!selectedFile || selectedFile.type !== 'note' || selectedFile.status !== 'active'}
+                      disabled={!selectedFile || !selectedFileIsEditable || selectedFile.status !== 'active'}
                       title="移动文档"
                       className="inline-flex h-8 items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 text-[12px] font-semibold text-slate-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
                     >

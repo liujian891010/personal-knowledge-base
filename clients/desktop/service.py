@@ -675,8 +675,18 @@ def _note_title_from_path(path: str) -> str:
     return name
 
 
-def _is_search_indexable_type(file_type: str) -> bool:
-    return file_type in {"note", "ai_index", "ai_wiki", "ai_agents"}
+def _is_markdown_workspace_path(path: str) -> bool:
+    return PurePosixPath(path).suffix.lower() in {".md", ".markdown"}
+
+
+def _is_editable_markdown_record(record: FileRecord) -> bool:
+    return record.type in {"note", "ai_index", "ai_wiki", "ai_agents"} or (
+        record.type == "attachment" and _is_markdown_workspace_path(record.path)
+    )
+
+
+def _is_user_context_markdown_record(record: FileRecord) -> bool:
+    return record.type == "note" or (record.type == "attachment" and _is_markdown_workspace_path(record.path))
 
 
 def _normalize_wiki_link_target(value: str) -> str:
@@ -2177,7 +2187,7 @@ class DesktopSyncService:
         )
 
     def _upsert_workspace_search_index_for_record(self, record: FileRecord) -> None:
-        if record.status != "active" or not _is_search_indexable_type(record.type):
+        if record.status != "active" or not _is_editable_markdown_record(record):
             self._delete_workspace_search_index_for_file(record.file_id)
             return
         content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
@@ -2215,7 +2225,11 @@ class DesktopSyncService:
     ) -> None:
         snapshot = self.load_snapshot()
         for record in snapshot.document.sorted_files():
-            if record.status != "active" or record.type != "note" or record.file_id == renamed_file_id:
+            if (
+                record.status != "active"
+                or not _is_user_context_markdown_record(record)
+                or record.file_id == renamed_file_id
+            ):
                 continue
             content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
             if not content_path.exists() or not content_path.is_file():
@@ -2948,8 +2962,8 @@ class DesktopSyncService:
             raise KeyError(f"file_id not found in workspace filemap: {file_id}")
         if record.status != "active":
             raise ValueError(f"workspace file is not active: {file_id}")
-        if record.type != "note":
-            raise ValueError("ai_writeback_invalid_request: insert_current_note target must be a note")
+        if not _is_user_context_markdown_record(record):
+            raise ValueError("ai_writeback_invalid_request: insert_current_note target must be editable Markdown")
         content = self.load_workspace_file_content(file_id)
         draft = self.load_workspace_file_draft(file_id)
         base_text = draft.text if draft.has_draft and draft.text is not None else content.text
@@ -3138,22 +3152,22 @@ class DesktopSyncService:
         max_files: int,
     ) -> list[FileRecord]:
         snapshot = self.load_snapshot()
-        active_notes = [
+        active_markdown_records = [
             record
             for record in snapshot.document.sorted_files()
             if record.status == "active"
-            and record.type == "note"
+            and _is_user_context_markdown_record(record)
             and not _is_hidden_workspace_context_path(record.path)
         ]
         if context_type == "selected_files":
             requested_ids = list(dict.fromkeys(file_ids or []))
-            by_id = {record.file_id: record for record in active_notes}
+            by_id = {record.file_id: record for record in active_markdown_records}
             return [by_id[file_id] for file_id in requested_ids if file_id in by_id][:max_files]
         if context_type == "folder":
             normalized_folder = _normalize_ai_context_folder_path(folder_path or "")
             return [
                 record
-                for record in active_notes
+                for record in active_markdown_records
                 if _record_belongs_to_ai_context_folder(record.path, normalized_folder, recursive=recursive)
             ][:max_files]
         raise ValueError(f"unsupported AI context type: {context_type}")
@@ -3789,24 +3803,24 @@ class DesktopSyncService:
         _write_bytes_atomic(content_path, payload)
         mime_type = _infer_imported_workspace_mime_type(normalized_path)
         records = list(snapshot.document.files)
-        records.append(
-            FileRecord(
-                file_id=file_id,
-                path=normalized_path,
-                type="attachment",
-                status="active",
-                updated_at=created_at,
-                meta={
-                    "size": len(payload),
-                    "mtime": created_at,
-                    **({} if mime_type is None else {"mime_type": mime_type}),
-                },
-            )
+        created_record = FileRecord(
+            file_id=file_id,
+            path=normalized_path,
+            type="attachment",
+            status="active",
+            updated_at=created_at,
+            meta={
+                "size": len(payload),
+                "mtime": created_at,
+                **({} if mime_type is None else {"mime_type": mime_type}),
+            },
         )
+        records.append(created_record)
         write_filemap_atomic(
             self.workspace.paths.filemap_path,
             snapshot.document.replace_files(records, updated_at=created_at),
         )
+        self._upsert_workspace_search_index_for_record(created_record)
         files_snapshot = self.list_workspace_files()
         return DesktopWorkspaceFileMutationResult(
             schema_version="v1",
@@ -3831,8 +3845,8 @@ class DesktopSyncService:
             raise KeyError(f"file_id not found in workspace filemap: {file_id}")
         if record.status != "active":
             raise ValueError(f"workspace file is not active: {file_id}")
-        if record.type != "note":
-            raise ValueError(f"workspace file is not a note: {file_id}")
+        if not _is_user_context_markdown_record(record):
+            raise ValueError(f"workspace file is not editable Markdown: {file_id}")
         normalized_path = _normalize_workspace_note_rename_path(record.path, new_path)
         source_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
         target_path = _resolve_workspace_file_path(self.workspace.vault_root, normalized_path)
@@ -3895,8 +3909,8 @@ class DesktopSyncService:
             raise KeyError(f"file_id not found in workspace filemap: {file_id}")
         if record.status != "active":
             raise ValueError(f"workspace file is not active: {file_id}")
-        if record.type not in {"note", "attachment"}:
-            raise ValueError(f"workspace file is not movable: {file_id}")
+        if not _is_user_context_markdown_record(record):
+            raise ValueError(f"workspace file is not movable Markdown: {file_id}")
         normalized_path = _normalize_workspace_note_move_path(target_path)
         source_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
         target_file_path = _resolve_workspace_file_path(self.workspace.vault_root, normalized_path)
@@ -4080,7 +4094,7 @@ class DesktopSyncService:
         snapshot = self.load_snapshot()
         entries: list[dict[str, str]] = []
         for record in snapshot.document.sorted_files():
-            if record.status != "active" or record.type != "note":
+            if record.status != "active" or not _is_editable_markdown_record(record):
                 continue
             content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
             if not content_path.exists() or not content_path.is_file():
@@ -4146,13 +4160,13 @@ class DesktopSyncService:
 
     def rebuild_workspace_note_links(self) -> None:
         snapshot = self.load_snapshot()
-        active_notes = [
+        active_markdown_records = [
             record
             for record in snapshot.document.sorted_files()
-            if record.status == "active" and record.type == "note"
+            if record.status == "active" and _is_user_context_markdown_record(record)
         ]
         target_by_alias: dict[str, FileRecord] = {}
-        for record in active_notes:
+        for record in active_markdown_records:
             aliases = {
                 record.path,
                 PurePosixPath(record.path).as_posix(),
@@ -4167,7 +4181,7 @@ class DesktopSyncService:
                     target_by_alias.setdefault(normalized, record)
 
         entries: list[dict[str, object]] = []
-        for record in active_notes:
+        for record in active_markdown_records:
             content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
             if not content_path.exists() or not content_path.is_file():
                 continue

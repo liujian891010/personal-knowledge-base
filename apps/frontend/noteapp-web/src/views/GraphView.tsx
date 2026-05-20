@@ -39,7 +39,17 @@ interface RelationshipRow {
 
 function titleFromPath(path: string): string {
   const fileName = path.split(/[\\/]/).pop() || path;
-  return fileName.replace(/\.md$/i, '') || path;
+  return fileName.replace(/\.(md|markdown)$/i, '') || path;
+}
+
+function isGraphMarkdownFile(file: WorkspaceFileEntry): boolean {
+  return (
+    file.status === 'active'
+    && (
+      file.type === 'note'
+      || (file.type === 'attachment' && /\.(md|markdown)$/i.test(file.path))
+    )
+  );
 }
 
 function normalizeUnresolvedId(linkText: string): string {
@@ -226,7 +236,7 @@ export default function GraphView() {
   } = useWorkspaceLinksController();
 
   const notes = useMemo(
-    () => files.filter((file) => file.status === 'active' && file.type === 'note'),
+    () => files.filter(isGraphMarkdownFile),
     [files],
   );
   const fileById = useMemo(

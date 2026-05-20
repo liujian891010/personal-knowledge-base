@@ -759,6 +759,83 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(blob.mime_type, "image/png")
             self.assertEqual(blob.content_base64, "iVBORw0KGgo=")
 
+    def test_markdown_attachment_uses_note_editing_search_and_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+
+            created = service.create_workspace_attachment(
+                "Attachment Note.md",
+                b"# Attachment Note\n\nFindable attachment context. [[Live]]\n",
+                now_ms=1770000032000,
+            )
+            attachment_file_id = created.file.file_id
+
+            self.assertEqual(created.file.type, "attachment")
+            self.assertEqual(created.file.mime_type, "text/markdown")
+            self.assertEqual(
+                service.load_workspace_file_content(attachment_file_id).text,
+                "# Attachment Note\n\nFindable attachment context. [[Live]]\n",
+            )
+            self.assertEqual(service.search_workspace("findable").results[0].file_id, attachment_file_id)
+
+            links = service.load_workspace_note_links(attachment_file_id)
+            self.assertEqual(links.outgoing_count, 1)
+            self.assertEqual(links.outgoing[0].target_file_id, "file-live")
+            self.assertEqual(links.backlink_count, 0)
+
+            renamed = service.rename_workspace_note(
+                attachment_file_id,
+                "Renamed Attachment.md",
+                now_ms=1770000033000,
+            )
+            self.assertEqual(renamed.file.path, "Attachments/Renamed Attachment.md")
+            self.assertFalse((root / "Attachments" / "Attachment Note.md").exists())
+            self.assertTrue((root / "Attachments" / "Renamed Attachment.md").exists())
+
+            moved = service.move_workspace_note(
+                attachment_file_id,
+                "Notes/Renamed Attachment.md",
+                now_ms=1770000034000,
+            )
+            self.assertEqual(moved.file.file_id, attachment_file_id)
+            self.assertEqual(moved.file.path, "Notes/Renamed Attachment.md")
+            self.assertFalse((root / "Attachments" / "Renamed Attachment.md").exists())
+            self.assertTrue((root / "Notes" / "Renamed Attachment.md").exists())
+
+            content = service.write_workspace_file_content(
+                attachment_file_id,
+                "# Renamed Attachment\n\nEdited markdown attachment index token.\n",
+            )
+            self.assertEqual(content.path, "Notes/Renamed Attachment.md")
+            self.assertIn("Edited markdown attachment", content.text)
+            result = service.search_workspace("token")
+            self.assertEqual(result.total_count, 1)
+            self.assertEqual(result.results[0].file_id, attachment_file_id)
+
+    def test_non_markdown_attachment_does_not_enter_note_editing_moves(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            created = service.create_workspace_attachment(
+                "photo.png",
+                b"\x89PNG\r\n\x1a\n",
+                now_ms=1770000032000,
+            )
+
+            with self.assertRaisesRegex(ValueError, "not editable Markdown"):
+                service.rename_workspace_note(created.file.file_id, "photo.md", now_ms=1770000033000)
+            with self.assertRaisesRegex(ValueError, "not movable Markdown"):
+                service.move_workspace_note(created.file.file_id, "Notes/photo.md", now_ms=1770000034000)
+
+            self.assertTrue((root / "Attachments" / "photo.png").exists())
+
     def test_delete_restore_workspace_attachment_preserves_trash_and_tombstone(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -1945,6 +2022,30 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(result.sources[0].path, "Notes/Specs/Plan.md")
             self.assertEqual(result.model_status, "openai-completions:test-model")
             self.assertIn("Folder context content", ai_opener.calls[0][2]["messages"][1]["content"])
+
+    def test_ai_context_task_can_use_markdown_attachments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            created = service.create_workspace_attachment(
+                "Context Attachment.md",
+                b"# Context Attachment\n\nAttachment context source text.\n",
+                now_ms=1770000032000,
+            )
+
+            result = service.run_ai_context_task(
+                context_type="selected_files",
+                file_ids=[created.file.file_id],
+                instruction="Use this attachment",
+            )
+
+            self.assertEqual(result.model_status, "not_configured_context_preview")
+            self.assertEqual(result.source_count, 1)
+            self.assertEqual(result.sources[0].path, "Attachments/Context Attachment.md")
+            self.assertIn("Attachment context source text", result.sources[0].excerpt)
 
     def test_ai_context_task_selected_files_respects_configurable_truncation(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
