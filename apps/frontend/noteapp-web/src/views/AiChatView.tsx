@@ -937,31 +937,25 @@ export default function AiChatView({
                   </div>
                 ))}
               </div>
-            <button
-              onClick={() => onOpenExplorer(context.fileIds)}
-              className="mt-3 flex w-full items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-3 py-2 text-[12px] font-semibold text-[#a9c8fc] hover:text-white"
-            >
-                <Plus size={14} />
-                继续添加文档
-              </button>
             </>
-          ) : (
+          ) : null}
+          <div className="mt-3 grid grid-cols-2 gap-2">
             <button
-              onClick={() => onOpenExplorer([])}
+              onClick={() => uploadInputRef.current?.click()}
+              disabled={isUploading || isRunning || isSessionLoading || isWorkspaceRefreshing}
+              className="flex w-full items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[12px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isUploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+              {isUploading ? '上传中' : '上传文档'}
+            </button>
+            <button
+              onClick={() => onOpenExplorer(context?.fileIds ?? [])}
               className="flex w-full items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#0f3460]/30 px-3 py-2 text-[12px] font-semibold text-[#a9c8fc] hover:text-white"
             >
               <Plus size={14} />
-              去笔记库选择上下文
+              添加文档
             </button>
-          )}
-          <button
-            onClick={() => uploadInputRef.current?.click()}
-            disabled={isUploading || isRunning || isSessionLoading || isWorkspaceRefreshing}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[12px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isUploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-            {isUploading ? '上传中' : '上传文档'}
-          </button>
+          </div>
           {uploadStatus && <p className="mt-2 text-[11px] leading-5 text-slate-500">{uploadStatus}</p>}
         </div>
       </aside>
