@@ -8,6 +8,7 @@ import os
 import re
 import base64
 import binascii
+from io import BytesIO
 from contextlib import closing, suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 from urllib.request import Request, urlopen
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
+import xml.etree.ElementTree as ET
 
 from vault_core import (
     allocate_conflict_copy_path,
@@ -194,6 +196,144 @@ def _decode_workspace_text(payload: bytes, *, file_id: str) -> tuple[str, str]:
     raise ValueError(f"workspace file is not valid UTF-8 or GB18030 text: {file_id}")
 
 
+def _decode_pdf_literal_string(value: str) -> str:
+    body = value[1:-1]
+    decoded: list[str] = []
+    index = 0
+    while index < len(body):
+        char = body[index]
+        if char != "\\":
+            decoded.append(char)
+            index += 1
+            continue
+        index += 1
+        if index >= len(body):
+            break
+        escaped = body[index]
+        index += 1
+        if escaped == "n":
+            decoded.append("\n")
+        elif escaped == "r":
+            decoded.append("\r")
+        elif escaped == "t":
+            decoded.append("\t")
+        elif escaped == "b":
+            decoded.append("\b")
+        elif escaped == "f":
+            decoded.append("\f")
+        elif escaped in {"(", ")", "\\"}:
+            decoded.append(escaped)
+        elif escaped in {"\n", "\r"}:
+            if escaped == "\r" and index < len(body) and body[index] == "\n":
+                index += 1
+        elif escaped in "01234567":
+            octal = escaped
+            while index < len(body) and len(octal) < 3 and body[index] in "01234567":
+                octal += body[index]
+                index += 1
+            decoded.append(chr(int(octal, 8)))
+        else:
+            decoded.append(escaped)
+    return "".join(decoded)
+
+
+def _decode_pdf_hex_string(value: str) -> str:
+    compact = re.sub(r"\s+", "", value)
+    if len(compact) % 2 == 1:
+        compact += "0"
+    payload = bytes.fromhex(compact)
+    if payload.startswith(b"\xfe\xff"):
+        return payload[2:].decode("utf-16-be", errors="ignore")
+    if payload.startswith(b"\xff\xfe"):
+        return payload[2:].decode("utf-16-le", errors="ignore")
+    return payload.decode("latin-1", errors="ignore")
+
+
+def _readable_extracted_text(value: str) -> str:
+    lines = []
+    for line in value.replace("\r\n", "\n").replace("\r", "\n").splitlines():
+        cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]+", " ", line).strip()
+        if cleaned:
+            lines.append(re.sub(r"[ \t]{2,}", " ", cleaned))
+    return "\n".join(lines)
+
+
+def _extract_docx_context_text(payload: bytes, *, file_id: str) -> str:
+    try:
+        with ZipFile(BytesIO(payload)) as archive:
+            document_xml = archive.read("word/document.xml")
+    except (KeyError, OSError) as exc:
+        raise ValueError(f"workspace DOCX text is not extractable: {file_id}") from exc
+    try:
+        root = ET.fromstring(document_xml)
+    except ET.ParseError as exc:
+        raise ValueError(f"workspace DOCX XML is not valid: {file_id}") from exc
+
+    blocks: list[str] = []
+    for paragraph in root.iter():
+        if not paragraph.tag.endswith("}p"):
+            continue
+        fragments: list[str] = []
+        for node in paragraph.iter():
+            local_name = node.tag.rsplit("}", 1)[-1]
+            if local_name == "t" and node.text:
+                fragments.append(node.text)
+            elif local_name == "tab":
+                fragments.append("\t")
+            elif local_name in {"br", "cr"}:
+                fragments.append("\n")
+        text = "".join(fragments).strip()
+        if text:
+            blocks.append(text)
+    return _readable_extracted_text("\n".join(blocks))
+
+
+def _extract_pdf_with_optional_library(payload: bytes) -> str:
+    for module_name in ("pypdf", "PyPDF2"):
+        with suppress(Exception):
+            module = __import__(module_name)
+            reader = module.PdfReader(BytesIO(payload))
+            page_texts = []
+            for page in reader.pages:
+                text = page.extract_text() or ""
+                if text.strip():
+                    page_texts.append(text)
+            if page_texts:
+                return _readable_extracted_text("\n".join(page_texts))
+    return ""
+
+
+def _extract_pdf_context_text(payload: bytes) -> str:
+    library_text = _extract_pdf_with_optional_library(payload)
+    if library_text:
+        return library_text
+
+    decoded = payload.decode("latin-1", errors="ignore")
+    chunks: list[str] = []
+    for match in re.finditer(r"\((?:\\.|[^\\()])*\)\s*Tj", decoded, re.DOTALL):
+        chunks.append(_decode_pdf_literal_string(match.group(0).rsplit(")", 1)[0] + ")"))
+    for match in re.finditer(r"\[(.*?)\]\s*TJ", decoded, re.DOTALL):
+        array_text = match.group(1)
+        parts: list[str] = []
+        for literal in re.finditer(r"\((?:\\.|[^\\()])*\)", array_text, re.DOTALL):
+            parts.append(_decode_pdf_literal_string(literal.group(0)))
+        for hex_match in re.finditer(r"<([0-9A-Fa-f\s]+)>", array_text):
+            with suppress(ValueError):
+                parts.append(_decode_pdf_hex_string(hex_match.group(1)))
+        if parts:
+            chunks.append("".join(parts))
+    for match in re.finditer(r"<([0-9A-Fa-f\s]+)>\s*Tj", decoded):
+        with suppress(ValueError):
+            chunks.append(_decode_pdf_hex_string(match.group(1)))
+
+    readable_chunks = [
+        chunk
+        for chunk in (_readable_extracted_text(item) for item in chunks)
+        if re.search(r"[A-Za-z0-9\u4e00-\u9fff]", chunk)
+    ]
+    return "\n".join(readable_chunks)
+
+
 def _append_jsonl_record(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as handle:
@@ -204,6 +344,12 @@ def _append_jsonl_record(path: Path, payload: dict[str, object]) -> None:
 def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
     _write_bytes_atomic(path, (rendered + "\n").encode("utf-8"))
+
+
+def _safe_ai_context_cache_file_name(file_id: str) -> str:
+    if not file_id or "/" in file_id or "\\" in file_id or ".." in Path(file_id).parts:
+        raise ValueError(f"workspace AI context cache file_id is not safe: {file_id!r}")
+    return f"{file_id}.json"
 
 
 def _safe_draft_file_name(file_id: str) -> str:
@@ -374,6 +520,7 @@ _AI_CONTEXT_DEFAULT_MAX_FILES = 20
 _AI_CONTEXT_DEFAULT_MAX_CHARS_PER_FILE = 4000
 _AI_CONTEXT_DEFAULT_MAX_TOTAL_CHARS = 30000
 _AI_CONTEXT_CHUNK_OVERLAP_CHARS = 240
+_AI_CONTEXT_EXTRACTOR_VERSION = "2026-05-20.v1"
 _AI_WRITEBACK_PREVIEW_TTL_MS = 15 * 60 * 1000
 _WORKSPACE_TRASH_DIRNAME = "trash"
 _WORKSPACE_TRASH_PURGED_META_KEY = "trash_purged_at"
@@ -382,6 +529,46 @@ _MARKDOWN_FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---", re.DOTALL)
 _AI_CONTEXT_HEADING_PATTERN = re.compile(r"^\s{0,3}#{1,6}\s+\S", re.MULTILINE)
 _AI_CONTEXT_ASCII_TERM_PATTERN = re.compile(r"[a-z0-9_]{2,}")
 _AI_CONTEXT_CJK_TERM_PATTERN = re.compile(r"[\u4e00-\u9fff]{2,}")
+_AI_CONTEXT_TEXT_EXTENSIONS = {
+    ".bat",
+    ".c",
+    ".cmd",
+    ".cpp",
+    ".cs",
+    ".css",
+    ".csv",
+    ".go",
+    ".h",
+    ".hpp",
+    ".htm",
+    ".html",
+    ".ini",
+    ".java",
+    ".js",
+    ".json",
+    ".jsx",
+    ".kt",
+    ".kts",
+    ".log",
+    ".lua",
+    ".mjs",
+    ".php",
+    ".ps1",
+    ".py",
+    ".rb",
+    ".rs",
+    ".sh",
+    ".sql",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".vue",
+    ".xml",
+    ".yaml",
+    ".yml",
+}
+_AI_CONTEXT_BINARY_TEXT_EXTENSIONS = {".docx", ".pdf"}
 
 
 def _local_settings_default_ai_provider_api(environ: Optional[Mapping[str, str]] = None) -> str:
@@ -687,6 +874,54 @@ def _is_editable_markdown_record(record: FileRecord) -> bool:
 
 def _is_user_context_markdown_record(record: FileRecord) -> bool:
     return record.type == "note" or (record.type == "attachment" and _is_markdown_workspace_path(record.path))
+
+
+def _record_mime_type(record: FileRecord) -> Optional[str]:
+    meta = record.meta or {}
+    value = meta.get("mime_type")
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _is_ai_context_text_mime_type(mime_type: str) -> bool:
+    normalized = mime_type.lower()
+    return (
+        normalized.startswith("text/")
+        or normalized == "application/json"
+        or normalized.endswith("+json")
+        or normalized == "application/xml"
+        or normalized == "text/xml"
+        or normalized.endswith("+xml")
+        or normalized in {
+            "application/javascript",
+            "application/typescript",
+            "application/x-yaml",
+            "application/yaml",
+            "application/toml",
+        }
+    )
+
+
+def _is_ai_context_extractable_record(record: FileRecord) -> bool:
+    if _is_user_context_markdown_record(record):
+        return True
+    suffix = PurePosixPath(record.path).suffix.lower()
+    if suffix in _AI_CONTEXT_TEXT_EXTENSIONS or suffix in _AI_CONTEXT_BINARY_TEXT_EXTENSIONS:
+        return True
+    mime_type = (_record_mime_type(record) or _infer_imported_workspace_mime_type(record.path) or "").lower()
+    return _is_ai_context_text_mime_type(mime_type)
+
+
+def _extract_ai_context_text_from_payload(record: FileRecord, payload: bytes) -> str:
+    suffix = PurePosixPath(record.path).suffix.lower()
+    mime_type = (_record_mime_type(record) or _infer_imported_workspace_mime_type(record.path) or "").lower()
+    if _is_user_context_markdown_record(record) or suffix in _AI_CONTEXT_TEXT_EXTENSIONS or _is_ai_context_text_mime_type(mime_type):
+        text, _ = _decode_workspace_text(payload, file_id=record.file_id)
+        return text
+    if suffix == ".docx" or "wordprocessingml.document" in mime_type:
+        return _extract_docx_context_text(payload, file_id=record.file_id)
+    if suffix == ".pdf" or mime_type == "application/pdf":
+        return _extract_pdf_context_text(payload)
+    raise ValueError(f"workspace file is not extractable for AI context: {record.file_id}")
 
 
 def _normalize_wiki_link_target(value: str) -> str:
@@ -3152,25 +3387,79 @@ class DesktopSyncService:
         max_files: int,
     ) -> list[FileRecord]:
         snapshot = self.load_snapshot()
-        active_markdown_records = [
+        extractable_records = [
             record
             for record in snapshot.document.sorted_files()
             if record.status == "active"
-            and _is_user_context_markdown_record(record)
+            and _is_ai_context_extractable_record(record)
             and not _is_hidden_workspace_context_path(record.path)
         ]
         if context_type == "selected_files":
             requested_ids = list(dict.fromkeys(file_ids or []))
-            by_id = {record.file_id: record for record in active_markdown_records}
+            by_id = {record.file_id: record for record in extractable_records}
             return [by_id[file_id] for file_id in requested_ids if file_id in by_id][:max_files]
         if context_type == "folder":
             normalized_folder = _normalize_ai_context_folder_path(folder_path or "")
             return [
                 record
-                for record in active_markdown_records
+                for record in extractable_records
                 if _record_belongs_to_ai_context_folder(record.path, normalized_folder, recursive=recursive)
             ][:max_files]
         raise ValueError(f"unsupported AI context type: {context_type}")
+
+    def _ai_context_cache_path(self, file_id: str) -> Path:
+        return (
+            self.workspace.paths.root
+            / NOTEAPP_DIRNAME
+            / "ai-context-cache"
+            / _safe_ai_context_cache_file_name(file_id)
+        )
+
+    def _ai_context_cache_key(self, record: FileRecord, content_path: Path) -> dict[str, object]:
+        stat = content_path.stat()
+        return {
+            "extractor_version": _AI_CONTEXT_EXTRACTOR_VERSION,
+            "file_id": record.file_id,
+            "path": record.path,
+            "type": record.type,
+            "size_bytes": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+
+    def _load_cached_ai_context_text(self, record: FileRecord, cache_key: Mapping[str, object]) -> Optional[str]:
+        cache_path = self._ai_context_cache_path(record.file_id)
+        if not cache_path.exists() or not cache_path.is_file():
+            return None
+        with suppress(OSError, json.JSONDecodeError):
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return None
+            for key, expected_value in cache_key.items():
+                if payload.get(key) != expected_value:
+                    return None
+            text = payload.get("text")
+            return text if isinstance(text, str) else None
+        return None
+
+    def _write_cached_ai_context_text(self, record: FileRecord, cache_key: Mapping[str, object], text: str) -> None:
+        payload = {
+            **cache_key,
+            "text": text,
+        }
+        with suppress(OSError, ValueError):
+            _write_json_atomic(self._ai_context_cache_path(record.file_id), payload)
+
+    def _load_ai_context_text_for_record(self, record: FileRecord, content_path: Path) -> str:
+        cache_key = self._ai_context_cache_key(record, content_path)
+        cached_text = self._load_cached_ai_context_text(record, cache_key)
+        if cached_text is not None:
+            return cached_text
+        payload = content_path.read_bytes()
+        if len(payload) > _WORKSPACE_FILE_BLOB_MAX_BYTES:
+            return ""
+        text = _extract_ai_context_text_from_payload(record, payload)
+        self._write_cached_ai_context_text(record, cache_key, text)
+        return text
 
     def _load_ai_context_sources(
         self,
@@ -3186,10 +3475,12 @@ class DesktopSyncService:
             content_path = _resolve_workspace_file_path(self.workspace.vault_root, record.path)
             if not content_path.exists() or not content_path.is_file():
                 continue
-            payload = content_path.read_bytes()
-            if len(payload) > _WORKSPACE_FILE_CONTENT_MAX_BYTES:
+            if content_path.stat().st_size > _WORKSPACE_FILE_BLOB_MAX_BYTES:
                 continue
-            text, _ = _decode_workspace_text(payload, file_id=record.file_id)
+            try:
+                text = self._load_ai_context_text_for_record(record, content_path)
+            except (OSError, ValueError, ET.ParseError, UnicodeDecodeError):
+                continue
             normalized_text = _normalize_ai_context_text(text)
             if not normalized_text:
                 continue

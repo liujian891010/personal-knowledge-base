@@ -110,6 +110,48 @@ function isMarkdownPath(path: string): boolean {
   return /\.(md|markdown)$/i.test(path);
 }
 
+const aiContextExtractableExtensions = new Set([
+  '.bat',
+  '.c',
+  '.cmd',
+  '.cpp',
+  '.cs',
+  '.css',
+  '.csv',
+  '.docx',
+  '.go',
+  '.h',
+  '.hpp',
+  '.htm',
+  '.html',
+  '.ini',
+  '.java',
+  '.js',
+  '.json',
+  '.jsx',
+  '.kt',
+  '.kts',
+  '.log',
+  '.lua',
+  '.mjs',
+  '.pdf',
+  '.php',
+  '.ps1',
+  '.py',
+  '.rb',
+  '.rs',
+  '.sh',
+  '.sql',
+  '.toml',
+  '.ts',
+  '.tsx',
+  '.txt',
+  '.vue',
+  '.xml',
+  '.yaml',
+  '.yml',
+]);
+
 function isEditableWorkspaceFile(file: WorkspaceFileEntry | null): boolean {
   if (!file) {
     return false;
@@ -120,8 +162,24 @@ function isEditableWorkspaceFile(file: WorkspaceFileEntry | null): boolean {
   );
 }
 
+function isAiContextExtractableFile(file: WorkspaceFileEntry): boolean {
+  if (isEditableWorkspaceFile(file)) {
+    return true;
+  }
+  const extension = fileExtension(file.path);
+  if (aiContextExtractableExtensions.has(extension)) {
+    return true;
+  }
+  const normalizedMimeType = (file.mime_type ?? inferMimeTypeFromPath(file.path) ?? '').toLowerCase();
+  return (
+    isTextPreviewMimeType(normalizedMimeType)
+    || normalizedMimeType === 'application/pdf'
+    || normalizedMimeType.includes('wordprocessingml.document')
+  );
+}
+
 function isAiContextEligibleFile(file: WorkspaceFileEntry): boolean {
-  return isEditableWorkspaceFile(file) && file.status === 'active' && file.exists_on_disk && !isSystemAiPath(file.path);
+  return isAiContextExtractableFile(file) && file.status === 'active' && file.exists_on_disk && !isSystemAiPath(file.path);
 }
 
 function isVisibleMarkdownFile(file: WorkspaceFileEntry): boolean {

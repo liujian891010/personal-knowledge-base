@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 from contextlib import closing
 from dataclasses import dataclass, replace
+from io import BytesIO
 from pathlib import Path, PurePosixPath
 from typing import Optional
 from urllib.request import Request
@@ -352,6 +353,31 @@ class CustomBlobCryptoProvider:
 
 
 class DesktopSyncServiceTests(unittest.TestCase):
+    @staticmethod
+    def _build_docx_payload(paragraphs: list[str]) -> bytes:
+        document_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            "<w:body>"
+            + "".join(f"<w:p><w:r><w:t>{paragraph}</w:t></w:r></w:p>" for paragraph in paragraphs)
+            + "</w:body></w:document>"
+        )
+        buffer = BytesIO()
+        with ZipFile(buffer, "w") as archive:
+            archive.writestr(
+                "[Content_Types].xml",
+                (
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                    '<Default Extension="xml" ContentType="application/xml"/>'
+                    '<Override PartName="/word/document.xml" '
+                    'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+                    "</Types>"
+                ),
+            )
+            archive.writestr("word/document.xml", document_xml)
+        return buffer.getvalue()
+
     def _build_pull_result(
         self,
         *,
@@ -2046,6 +2072,82 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(result.source_count, 1)
             self.assertEqual(result.sources[0].path, "Attachments/Context Attachment.md")
             self.assertIn("Attachment context source text", result.sources[0].excerpt)
+
+    def test_ai_context_task_extracts_text_docx_and_pdf_attachments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            text_file = service.create_workspace_attachment(
+                "context.txt",
+                b"Plain text context token.\n",
+                now_ms=1770000032000,
+            )
+            json_file = service.create_workspace_attachment(
+                "context.json",
+                b'{"message": "JSON context token"}\n',
+                now_ms=1770000032100,
+            )
+            docx_file = service.create_workspace_attachment(
+                "context.docx",
+                self._build_docx_payload(["DOCX context token."]),
+                now_ms=1770000032200,
+            )
+            pdf_file = service.create_workspace_attachment(
+                "context.pdf",
+                b"%PDF-1.4\n1 0 obj <<>> stream\nBT /F1 12 Tf 72 720 Td (PDF context token.) Tj ET\nendstream\nendobj\n%%EOF",
+                now_ms=1770000032300,
+            )
+
+            result = service.run_ai_context_task(
+                context_type="selected_files",
+                file_ids=[
+                    text_file.file.file_id,
+                    json_file.file.file_id,
+                    docx_file.file.file_id,
+                    pdf_file.file.file_id,
+                ],
+                instruction="Find context tokens",
+                max_total_chars=20000,
+            )
+
+            excerpts = "\n".join(source.excerpt for source in result.sources)
+            self.assertEqual(result.source_count, 4)
+            self.assertIn("Plain text context token", excerpts)
+            self.assertIn("JSON context token", excerpts)
+            self.assertIn("DOCX context token", excerpts)
+            self.assertIn("PDF context token", excerpts)
+
+    def test_ai_context_task_uses_cached_extraction_for_unchanged_attachment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service, _, _, _, _ = self._seed_workspace(
+                root,
+                file_id_builder=lambda path: "gen-" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:8],
+            )
+            created = service.create_workspace_attachment(
+                "cached.docx",
+                self._build_docx_payload(["Cached DOCX context token."]),
+                now_ms=1770000032000,
+            )
+
+            first = service.run_ai_context_task(
+                context_type="selected_files",
+                file_ids=[created.file.file_id],
+                instruction="Use cache",
+            )
+            second = service.run_ai_context_task(
+                context_type="selected_files",
+                file_ids=[created.file.file_id],
+                instruction="Use cache",
+            )
+
+            cache_path = root / ".noteapp" / "ai-context-cache" / f"{created.file.file_id}.json"
+            self.assertTrue(cache_path.exists())
+            self.assertIn("Cached DOCX context token", first.sources[0].excerpt)
+            self.assertEqual(second.sources[0].excerpt, first.sources[0].excerpt)
 
     def test_ai_context_task_selected_files_respects_configurable_truncation(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
