@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Bot, FileText, Loader2, Plus, Send, Sparkles, Trash2, User, X } from 'lucide-react';
+import { Bot, FileText, Loader2, Plus, Send, Sparkles, Trash2, Upload, User, X } from 'lucide-react';
 
 import type { AiContextDraft } from '../aiContext';
 import {
@@ -186,6 +186,50 @@ interface PreviewState {
   text: string;
 }
 
+const aiContextUploadAccept = [
+  '.md',
+  '.markdown',
+  '.txt',
+  '.docx',
+  '.pdf',
+  '.csv',
+  '.json',
+  '.log',
+  '.html',
+  '.htm',
+  '.xml',
+  '.yaml',
+  '.yml',
+  '.toml',
+  '.ini',
+  '.js',
+  '.jsx',
+  '.ts',
+  '.tsx',
+  '.vue',
+  '.py',
+  '.java',
+  '.go',
+  '.rs',
+  '.sql',
+].join(',');
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => {
+      const result = reader.result;
+      if (typeof result !== 'string') {
+        reject(new Error('文件读取结果不可用'));
+        return;
+      }
+      resolve(result.split(',', 2)[1] ?? '');
+    });
+    reader.addEventListener('error', () => reject(reader.error ?? new Error('文件读取失败')));
+    reader.readAsDataURL(file);
+  });
+}
+
 function mergeContext(current: AiContextDraft | null, incoming: AiContextDraft): AiContextDraft {
   if (!current) {
     return incoming;
@@ -334,7 +378,7 @@ export default function AiChatView({
   onOpenExplorer: (fileIds: string[]) => void;
   onClearInitialContext: () => void;
 }) {
-  const { files } = useWorkspaceFilesController();
+  const { files, createAttachment, isRefreshing: isWorkspaceRefreshing } = useWorkspaceFilesController();
   const [sessions, setSessions] = useState<AiChatSessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState('新的 AI 文档会话');
@@ -348,6 +392,9 @@ export default function AiChatView({
   const [sessionToDelete, setSessionToDelete] = useState<AiChatSessionSummary | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const uploadInputRef = React.useRef<HTMLInputElement | null>(null);
   const skipNextAutoSaveRef = React.useRef(false);
   const messageListRef = React.useRef<HTMLDivElement | null>(null);
   const messageListBottomRef = React.useRef<HTMLDivElement | null>(null);
@@ -551,6 +598,53 @@ export default function AiChatView({
     });
   }
 
+  async function handleUploadInputChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const selectedFiles: File[] = [];
+    const selectedFileList = event.currentTarget.files;
+    if (selectedFileList) {
+      for (let index = 0; index < selectedFileList.length; index += 1) {
+        const selectedFile = selectedFileList.item(index);
+        if (selectedFile) {
+          selectedFiles.push(selectedFile);
+        }
+      }
+    }
+    event.currentTarget.value = '';
+    if (selectedFiles.length === 0) {
+      return;
+    }
+    setIsUploading(true);
+    setUploadStatus(null);
+    setError(null);
+    const uploadedFileIds: string[] = [];
+    try {
+      for (const selectedFile of selectedFiles) {
+        const contentBase64 = await readFileAsBase64(selectedFile);
+        const created = await createAttachment(selectedFile.name, contentBase64);
+        uploadedFileIds.push(created.file_id);
+      }
+      setContext((current) => mergeContext(current, {
+        type: 'selected_files',
+        title: `已上传 ${uploadedFileIds.length} 个文档`,
+        fileIds: uploadedFileIds,
+      }));
+      setUploadStatus(`已上传 ${uploadedFileIds.length} 个文档并加入 AI 上下文`);
+    } catch (nextError) {
+      const summary = nextError instanceof Error ? nextError.message : String(nextError);
+      if (uploadedFileIds.length > 0) {
+        setContext((current) => mergeContext(current, {
+          type: 'selected_files',
+          title: `已上传 ${uploadedFileIds.length} 个文档`,
+          fileIds: uploadedFileIds,
+        }));
+        setUploadStatus(`已上传 ${uploadedFileIds.length} 个文档并加入 AI 上下文，部分文件失败`);
+      }
+      setError(summary);
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
   async function openPreview(fileId: string, title: string, path: string) {
     setPreview({
       fileId,
@@ -739,6 +833,14 @@ export default function AiChatView({
   return (
     <div className="grid h-full min-h-0 grid-cols-1 overflow-hidden bg-[#1a1a2e] lg:grid-cols-[320px_1fr]">
       <aside className="min-h-0 border-r border-[#0f3460] bg-[#16213e] p-4">
+        <input
+          ref={uploadInputRef}
+          type="file"
+          multiple
+          accept={aiContextUploadAccept}
+          className="hidden"
+          onChange={(event) => void handleUploadInputChange(event)}
+        />
         <div className="flex items-center gap-2 text-[#a9c8fc]">
           <Sparkles size={18} />
           <h2 className="text-lg font-bold text-[#e3e2e6]">AI 文档上下文</h2>
@@ -852,6 +954,15 @@ export default function AiChatView({
               去笔记库选择上下文
             </button>
           )}
+          <button
+            onClick={() => uploadInputRef.current?.click()}
+            disabled={isUploading || isRunning || isSessionLoading || isWorkspaceRefreshing}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded border border-[#0f3460] bg-[#121316] px-3 py-2 text-[12px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isUploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+            {isUploading ? '上传中' : '上传文档'}
+          </button>
+          {uploadStatus && <p className="mt-2 text-[11px] leading-5 text-slate-500">{uploadStatus}</p>}
         </div>
       </aside>
 
