@@ -624,7 +624,7 @@ export default function AiChatView({
   }
 
   async function sendMessageWithContext(
-    activeContext: AiContextDraft,
+    activeContext: AiContextDraft | null,
     rawInstruction: string,
     options: { forceNewSession?: boolean } = {},
   ) {
@@ -668,7 +668,7 @@ export default function AiChatView({
         resolvedSessionId = session.id;
         setActiveSessionId(session.id);
         setSessionTitle(session.title);
-        setContext(session.context ?? activeContext);
+        setContext(session.context ?? activeContext ?? null);
         setMessages([...(session.messages ?? [userMessage]), pendingAssistantMessage]);
         setSessions((current) => [sessionSummaryFromSession(session), ...current.filter((item) => item.id !== session.id)]);
       } else {
@@ -681,16 +681,20 @@ export default function AiChatView({
           'X-Noteapp-Request-Id': requestId,
         },
         body: JSON.stringify({
-          context: activeContext.type === 'folder'
+          context: !activeContext
             ? {
-              type: 'folder',
-              folder_path: activeContext.folderPath,
-              recursive: true,
+              type: 'auto',
             }
-            : {
-              type: 'selected_files',
-              file_ids: activeContext.fileIds,
-            },
+            : activeContext.type === 'folder'
+              ? {
+                type: 'folder',
+                folder_path: activeContext.folderPath,
+                recursive: true,
+              }
+              : {
+                type: 'selected_files',
+                file_ids: activeContext.fileIds,
+              },
           instruction,
           output: {
             mode: 'preview',
@@ -729,10 +733,6 @@ export default function AiChatView({
   }
 
   async function sendMessage() {
-    if (!context) {
-      setError('请先从笔记库选择文件夹或文档加入 AI 上下文。');
-      return;
-    }
     await sendMessageWithContext(context, input);
   }
 
@@ -960,11 +960,11 @@ export default function AiChatView({
               className="h-20 min-w-0 flex-1 resize-none rounded-xl border border-[#0f3460] bg-[#121316] p-3 text-[13px] leading-5 text-[#e3e2e6] outline-none placeholder:text-slate-600 focus:border-[#a9c8fc]/60 disabled:opacity-60"
               placeholder={context
                 ? '请输入问题或指令，例如：写报告、提炼风险、生成行动项、改写为汇报口径...'
-                : '请输入问题；如需基于文档回答，请先从笔记库选择文件夹或文档加入 AI 上下文'}
+                : '请输入问题；将优先检索本地知识库，本地无命中时再联网检索'}
             />
             <button
               onClick={() => void sendMessage()}
-              disabled={isRunning || isSessionLoading || !context}
+              disabled={isRunning || isSessionLoading}
               className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#0f3460] bg-[#0f3460]/40 text-[13px] font-semibold text-[#a9c8fc] hover:text-white disabled:cursor-not-allowed disabled:opacity-50 sm:h-auto sm:w-28 sm:flex-shrink-0"
             >
               <Send size={15} />

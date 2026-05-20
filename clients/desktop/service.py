@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping, Optional
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -521,6 +522,9 @@ _AI_CONTEXT_DEFAULT_MAX_CHARS_PER_FILE = 4000
 _AI_CONTEXT_DEFAULT_MAX_TOTAL_CHARS = 30000
 _AI_CONTEXT_CHUNK_OVERLAP_CHARS = 240
 _AI_CONTEXT_EXTRACTOR_VERSION = "2026-05-20.v1"
+_AI_CONTEXT_AUTO_SCAN_MAX_FILES = 200
+_WEB_SEARCH_DEFAULT_TIMEOUT_SECONDS = 10.0
+_WEB_SEARCH_DEFAULT_LIMIT = 5
 _AI_WRITEBACK_PREVIEW_TTL_MS = 15 * 60 * 1000
 _WORKSPACE_TRASH_DIRNAME = "trash"
 _WORKSPACE_TRASH_PURGED_META_KEY = "trash_purged_at"
@@ -922,6 +926,122 @@ def _extract_ai_context_text_from_payload(record: FileRecord, payload: bytes) ->
     if suffix == ".pdf" or mime_type == "application/pdf":
         return _extract_pdf_context_text(payload)
     raise ValueError(f"workspace file is not extractable for AI context: {record.file_id}")
+
+
+def _web_search_enabled(environ: Optional[Mapping[str, str]] = None) -> bool:
+    env = os.environ if environ is None else environ
+    value = env.get("NOTEAPP_WEB_SEARCH_ENABLED", "true").strip().lower()
+    return value not in {"0", "false", "no", "off", "disabled"}
+
+
+def _build_web_search_request(query: str, *, limit: int, environ: Optional[Mapping[str, str]] = None) -> Request:
+    env = os.environ if environ is None else environ
+    endpoint = env.get("NOTEAPP_WEB_SEARCH_ENDPOINT", "").strip()
+    if endpoint:
+        separator = "&" if "?" in endpoint else "?"
+        url = f"{endpoint}{separator}{urlencode({'q': query, 'limit': limit})}"
+        headers = {"Accept": "application/json"}
+        api_key = env.get("NOTEAPP_WEB_SEARCH_API_KEY", "").strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return Request(url, headers=headers)
+    url = "https://api.duckduckgo.com/?" + urlencode(
+        {
+            "q": query,
+            "format": "json",
+            "no_html": "1",
+            "skip_disambig": "1",
+        }
+    )
+    return Request(url, headers={"Accept": "application/json"})
+
+
+def _first_string(payload: Mapping[str, Any], keys: Iterable[str]) -> str:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _append_web_search_result(results: list[DesktopWebSearchResult], *, title: str, url: str, snippet: str, limit: int) -> None:
+    if len(results) >= limit:
+        return
+    normalized_url = url.strip()
+    normalized_snippet = _readable_extracted_text(snippet)
+    normalized_title = _readable_extracted_text(title) or normalized_url
+    if not normalized_url and not normalized_snippet:
+        return
+    if normalized_url and any(item.url == normalized_url for item in results):
+        return
+    results.append(
+        DesktopWebSearchResult(
+            title=normalized_title[:200],
+            url=normalized_url or f"web-search:{len(results) + 1}",
+            snippet=normalized_snippet[:4000],
+        )
+    )
+
+
+def _collect_duckduckgo_related_topics(value: Any, results: list[DesktopWebSearchResult], *, limit: int) -> None:
+    if len(results) >= limit or not isinstance(value, list):
+        return
+    for item in value:
+        if len(results) >= limit:
+            return
+        if not isinstance(item, dict):
+            continue
+        nested_topics = item.get("Topics")
+        if isinstance(nested_topics, list):
+            _collect_duckduckgo_related_topics(nested_topics, results, limit=limit)
+            continue
+        text = _first_string(item, ("Text", "text", "snippet", "description"))
+        url = _first_string(item, ("FirstURL", "url", "link"))
+        title = text.split(" - ", 1)[0] if text else url
+        _append_web_search_result(results, title=title, url=url, snippet=text, limit=limit)
+
+
+def _parse_web_search_results(payload: Mapping[str, Any], *, limit: int) -> list[DesktopWebSearchResult]:
+    results: list[DesktopWebSearchResult] = []
+    candidate_lists: list[Any] = [
+        payload.get("results"),
+        payload.get("items"),
+    ]
+    web_pages = payload.get("webPages")
+    if isinstance(web_pages, dict):
+        candidate_lists.append(web_pages.get("value"))
+
+    for candidate_list in candidate_lists:
+        if len(results) >= limit:
+            break
+        if not isinstance(candidate_list, list):
+            continue
+        for item in candidate_list:
+            if len(results) >= limit:
+                break
+            if not isinstance(item, dict):
+                continue
+            _append_web_search_result(
+                results,
+                title=_first_string(item, ("title", "name", "label")),
+                url=_first_string(item, ("url", "link", "href")),
+                snippet=_first_string(item, ("snippet", "description", "content", "summary")),
+                limit=limit,
+            )
+
+    abstract_text = _first_string(payload, ("AbstractText", "Abstract", "answer"))
+    abstract_url = _first_string(payload, ("AbstractURL", "AbstractSource"))
+    abstract_title = _first_string(payload, ("Heading", "AbstractSource"))
+    if abstract_text:
+        _append_web_search_result(
+            results,
+            title=abstract_title or "Web result",
+            url=abstract_url,
+            snippet=abstract_text,
+            limit=limit,
+        )
+    _collect_duckduckgo_related_topics(payload.get("RelatedTopics"), results, limit=limit)
+    return results[:limit]
 
 
 def _normalize_wiki_link_target(value: str) -> str:
@@ -1864,6 +1984,13 @@ class DesktopAiContextTaskSource:
 
 
 @dataclass(frozen=True)
+class DesktopWebSearchResult:
+    title: str
+    url: str
+    snippet: str
+
+
+@dataclass(frozen=True)
 class DesktopAiContextTaskTruncation:
     max_files: int
     max_chars_per_file: int
@@ -2217,6 +2344,7 @@ class DesktopSyncService:
     file_id_builder: Callable[[str], str]
     detected_submit_plan_hook: Optional[Callable[[DesktopTrackedChangeCommitPlan], None]] = None
     ai_opener: Optional[UrlopenLike] = None
+    web_search_opener: Optional[UrlopenLike] = None
 
     @property
     def config(self) -> DesktopSyncHttpConfig:
@@ -2785,6 +2913,7 @@ class DesktopSyncService:
         )
         source_records = self._resolve_ai_context_records(
             context_type=context_type,
+            instruction=normalized_instruction,
             file_ids=file_ids,
             folder_path=folder_path,
             recursive=recursive,
@@ -2793,9 +2922,22 @@ class DesktopSyncService:
         sources, skipped_count, included_chars, selection_truncated = self._load_ai_context_sources(
             source_records,
             instruction=normalized_instruction,
+            require_term_match=context_type == "auto",
+            max_included_files=limits["max_files"],
             max_chars_per_file=limits["max_chars_per_file"],
             max_total_chars=limits["max_total_chars"],
         )
+        used_web_search = False
+        if context_type == "auto" and not sources:
+            sources = self._load_web_context_sources(
+                normalized_instruction,
+                max_files=min(limits["max_files"], _WEB_SEARCH_DEFAULT_LIMIT),
+                max_total_chars=limits["max_total_chars"],
+            )
+            skipped_count = 0
+            included_chars = sum(source.included_chars for source in sources)
+            selection_truncated = any(source.truncated for source in sources)
+            used_web_search = bool(sources)
         included_file_count = len({source.file_id for source in sources})
         truncated = skipped_count > 0 or selection_truncated
         truncation = DesktopAiContextTaskTruncation(
@@ -2812,8 +2954,12 @@ class DesktopSyncService:
             ),
         )
         if not sources:
-            model_status = "no_context_sources"
-            answer_text = "No eligible Markdown documents were added to the AI context."
+            if context_type == "auto":
+                model_status = "auto:no_local_or_web_sources"
+                answer_text = "No local knowledge base matches were found, and web search did not return usable results."
+            else:
+                model_status = "no_context_sources"
+                answer_text = "No eligible documents were added to the AI context."
         else:
             provider_config = self._load_configured_ai_provider()
             citations = [
@@ -2827,7 +2973,7 @@ class DesktopSyncService:
                 for index, source in enumerate(sources, start=1)
             ]
             if provider_config is None:
-                model_status = "not_configured_context_preview"
+                model_status = "web_search_context_preview" if used_web_search else "not_configured_context_preview"
                 answer_text = self._local_ai_context_fallback_answer(normalized_instruction, sources)
             else:
                 answer_text = self._answer_ai_wiki_with_provider(
@@ -2835,7 +2981,11 @@ class DesktopSyncService:
                     question=normalized_instruction,
                     citations=citations,
                 )
-                model_status = f"{provider_config.provider_api}:{provider_config.model}"
+                model_status = (
+                    f"web_search:{provider_config.provider_api}:{provider_config.model}"
+                    if used_web_search
+                    else f"{provider_config.provider_api}:{provider_config.model}"
+                )
         return DesktopAiContextTaskResult(
             schema_version="v1",
             vault_id=self.vault_id,
@@ -3382,6 +3532,7 @@ class DesktopSyncService:
         self,
         *,
         context_type: str,
+        instruction: str,
         file_ids: Optional[Iterable[str]],
         folder_path: Optional[str],
         recursive: bool,
@@ -3406,6 +3557,8 @@ class DesktopSyncService:
                 for record in extractable_records
                 if _record_belongs_to_ai_context_folder(record.path, normalized_folder, recursive=recursive)
             ][:max_files]
+        if context_type == "auto":
+            return extractable_records[: max(max_files, _AI_CONTEXT_AUTO_SCAN_MAX_FILES)]
         raise ValueError(f"unsupported AI context type: {context_type}")
 
     def _ai_context_cache_path(self, file_id: str) -> Path:
@@ -3462,11 +3615,63 @@ class DesktopSyncService:
         self._write_cached_ai_context_text(record, cache_key, text)
         return text
 
+    def _load_web_context_sources(
+        self,
+        query: str,
+        *,
+        max_files: int,
+        max_total_chars: int,
+    ) -> list[DesktopAiContextTaskSource]:
+        if max_files <= 0 or max_total_chars <= 0 or not _web_search_enabled():
+            return []
+        request = _build_web_search_request(query, limit=max_files)
+        opener = self.web_search_opener if self.web_search_opener is not None else _default_ai_urlopen
+        try:
+            with closing(opener(request, timeout=_WEB_SEARCH_DEFAULT_TIMEOUT_SECONDS)) as response:
+                if response.getcode() < 200 or response.getcode() >= 300:
+                    return []
+                raw_payload = response.read()
+        except Exception:
+            return []
+        try:
+            payload = json.loads(raw_payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return []
+        if not isinstance(payload, dict):
+            return []
+        results = _parse_web_search_results(payload, limit=max_files)
+        sources: list[DesktopAiContextTaskSource] = []
+        included_chars = 0
+        for index, result in enumerate(results, start=1):
+            if included_chars >= max_total_chars:
+                break
+            text = result.snippet.strip()
+            if not text:
+                continue
+            remaining_chars = max_total_chars - included_chars
+            excerpt = text[:remaining_chars]
+            included_chars += len(excerpt)
+            file_id = "web:" + hashlib.sha1(result.url.encode("utf-8")).hexdigest()[:16]
+            sources.append(
+                DesktopAiContextTaskSource(
+                    file_id=file_id,
+                    path=result.url,
+                    title=result.title or f"Web result {index}",
+                    excerpt=excerpt,
+                    included_chars=len(excerpt),
+                    original_chars=len(text),
+                    truncated=len(excerpt) < len(text),
+                )
+            )
+        return sources
+
     def _load_ai_context_sources(
         self,
         records: list[FileRecord],
         *,
         instruction: str,
+        require_term_match: bool = False,
+        max_included_files: Optional[int] = None,
         max_chars_per_file: int,
         max_total_chars: int,
     ) -> tuple[list[DesktopAiContextTaskSource], int, int, bool]:
@@ -3503,10 +3708,22 @@ class DesktopSyncService:
                     )
                 )
         instruction_terms = _extract_ai_context_search_terms(instruction)
-        ranked_chunks = sorted(
-            chunks,
-            key=lambda chunk: self._ai_context_chunk_sort_key(chunk, instruction_terms=instruction_terms),
-        )
+        scored_chunks = [
+            (
+                chunk,
+                self._ai_context_chunk_relevance(chunk, instruction_terms=instruction_terms),
+            )
+            for chunk in chunks
+        ]
+        if require_term_match and instruction_terms:
+            scored_chunks = [(chunk, score) for chunk, score in scored_chunks if score[0] > 0]
+        ranked_chunks = [
+            chunk
+            for chunk, _ in sorted(
+                scored_chunks,
+                key=lambda item: self._ai_context_chunk_sort_key(item[0], relevance=item[1]),
+            )
+        ]
         sources: list[DesktopAiContextTaskSource] = []
         included_chars = 0
         included_file_ids: set[str] = set()
@@ -3515,6 +3732,13 @@ class DesktopSyncService:
         for chunk in ranked_chunks:
             if included_chars >= max_total_chars:
                 break
+            if (
+                max_included_files is not None
+                and chunk.file_id not in included_file_ids
+                and len(included_file_ids) >= max_included_files
+            ):
+                selection_truncated = True
+                continue
             remaining_chars = max_total_chars - included_chars
             excerpt = chunk.text[:remaining_chars]
             if not excerpt.strip():
@@ -3549,8 +3773,19 @@ class DesktopSyncService:
         self,
         chunk: _DesktopAiContextChunk,
         *,
-        instruction_terms: list[str],
+        relevance: tuple[int, int],
     ) -> tuple[int, int, int, int, str]:
+        score, hits = relevance
+        if chunk.chunk_index == 0:
+            score += 1
+        return (-score, -hits, chunk.chunk_index, chunk.file_order, chunk.path)
+
+    def _ai_context_chunk_relevance(
+        self,
+        chunk: _DesktopAiContextChunk,
+        *,
+        instruction_terms: list[str],
+    ) -> tuple[int, int]:
         body_text = chunk.text
         body_text_lower = body_text.lower()
         title_text = chunk.title
@@ -3576,9 +3811,7 @@ class DesktopSyncService:
                 score += max(4, term_weight)
             if term in heading_haystack:
                 score += max(4, term_weight)
-        if chunk.chunk_index == 0:
-            score += 1
-        return (-score, -hits, chunk.chunk_index, chunk.file_order, chunk.path)
+        return score, hits
 
     @staticmethod
     def _local_ai_context_fallback_answer(
@@ -7453,6 +7686,7 @@ def build_desktop_sync_service(
     api_opener: Optional[UrlopenLike] = None,
     blob_opener: Optional[UrlopenLike] = None,
     ai_opener: Optional[UrlopenLike] = None,
+    web_search_opener: Optional[UrlopenLike] = None,
     blob_crypto_provider: Optional[DesktopBlobCryptoProvider] = None,
     file_id_builder: Optional[Callable[[str], str]] = None,
     allow_placeholder_crypto: bool = False,
@@ -7479,4 +7713,5 @@ def build_desktop_sync_service(
         blob_crypto_provider=resolved_blob_crypto_provider,
         file_id_builder=build_generated_file_id if file_id_builder is None else file_id_builder,
         ai_opener=ai_opener,
+        web_search_opener=web_search_opener,
     )

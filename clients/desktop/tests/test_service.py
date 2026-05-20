@@ -310,6 +310,28 @@ class RecordingAiOpener:
         )
 
 
+class RecordingWebSearchOpener:
+    def __init__(self, *, payload: Optional[dict[str, object]] = None, status_code: int = 200) -> None:
+        self.payload = payload or {
+            "results": [
+                {
+                    "title": "Web fallback result",
+                    "url": "https://example.com/web-fallback",
+                    "snippet": "Web fallback context token.",
+                }
+            ]
+        }
+        self.status_code = status_code
+        self.calls: list[tuple[str, str, float]] = []
+
+    def __call__(self, request: Request, timeout: float) -> FakeHttpResponse:
+        self.calls.append((request.get_method(), request.full_url, timeout))
+        return FakeHttpResponse(
+            self.status_code,
+            json.dumps(self.payload, ensure_ascii=False).encode("utf-8"),
+        )
+
+
 class RecordingBlobOpener:
     def __init__(self, *, downloaded_blobs: Optional[dict[str, bytes]] = None) -> None:
         self.calls: list[tuple[str, str, bytes | None, dict[str, str], float]] = []
@@ -2073,6 +2095,47 @@ class DesktopSyncServiceTests(unittest.TestCase):
             self.assertEqual(result.source_count, 1)
             self.assertEqual(result.sources[0].path, "Attachments/Context Attachment.md")
             self.assertIn("Attachment context source text", result.sources[0].excerpt)
+
+    def test_ai_context_task_auto_uses_local_matches_before_web_search(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            web_opener = RecordingWebSearchOpener()
+            service, _, _, _, _ = self._seed_workspace(root)
+            service = replace(service, web_search_opener=web_opener)
+            (root / "Notes" / "Live.md").write_text(
+                "# Local First\n\nLocal priority context token.\n",
+                encoding="utf-8",
+            )
+
+            result = service.run_ai_context_task(
+                context_type="auto",
+                instruction="local priority",
+            )
+
+            self.assertEqual(result.model_status, "not_configured_context_preview")
+            self.assertEqual(result.source_count, 1)
+            self.assertEqual(result.sources[0].path, "Notes/Live.md")
+            self.assertIn("Local priority context token", result.sources[0].excerpt)
+            self.assertEqual(web_opener.calls, [])
+
+    def test_ai_context_task_auto_falls_back_to_web_search_when_local_has_no_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            web_opener = RecordingWebSearchOpener()
+            service, _, _, _, _ = self._seed_workspace(root)
+            service = replace(service, web_search_opener=web_opener)
+
+            result = service.run_ai_context_task(
+                context_type="auto",
+                instruction="unmatched external topic",
+            )
+
+            self.assertEqual(result.model_status, "web_search_context_preview")
+            self.assertEqual(result.source_count, 1)
+            self.assertTrue(result.sources[0].file_id.startswith("web:"))
+            self.assertEqual(result.sources[0].path, "https://example.com/web-fallback")
+            self.assertIn("Web fallback context token", result.sources[0].excerpt)
+            self.assertEqual(len(web_opener.calls), 1)
 
     def test_ai_context_task_extracts_text_docx_and_pdf_attachments(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
